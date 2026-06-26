@@ -1,0 +1,54 @@
+# Xcode
+build/
+DerivedData/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcworkspace/xcuserdata/
+*.pbxuser
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+!default.pbxuser
+!default.mode1v3
+!default.mode2v3
+!default.perspectivev3
+xcuserdata/
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Packages/*/Package.resolved
+
+# macOS
+.DS_Store
+*.swp
+*~.nib
+Thumbs.db
+
+# App packaging
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Playgrounds
+timeline.xctimeline
+playground.xcworkspace
+
+# Archives
+*.xcarchive
+
+# CocoPods (not used, but just in case)
+Pods/
+
+# Carthage (not used, but just in case)
+Carthage/Build/
+
+# llama.cpp build artifacts
+*.o
+*.a
+*.dylib
+*.so
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
