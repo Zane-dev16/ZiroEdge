@@ -1,44 +1,78 @@
 # ZiroEdge
 
-Privacy-first local AI assistant for iOS.
+**Privacy-first local AI assistant for iOS.**
 
-Runs multimodal models entirely on-device. No data ever leaves your phone.
+Everything runs on your device. No data ever leaves your phone.
 
 ## Features
 
-- **Chat + Vision** — send images for analysis via camera or photo library
-- **Conversation History** — all conversations persisted locally via Core Data
-- **Multiple Models** — curated catalog of small, fast models (500M–3B params)
-- **Conversation Branching** — fork conversations from any point
-- **System Prompts** — customize the AI's behavior per conversation
-- **Sampling Controls** — temperature, top-p, top-k for power users
-- **Streaming** — real-time token-by-token output with haptic feedback
-- **Offline** — works without network after initial model download
+- **On-device AI** — runs multimodal models via llama.cpp, fully offline
+- **ChatGPT-style UI** — conversation sidebar, message bubbles, streaming
+- **Vision support** (Phase 2) — camera + photo library input
+- **Core Data persistence** — conversations survive cold restarts
+- **Conversation branching** — fork from any message
+- **Markdown rendering** — bold, italic, code blocks, lists
 
 ## Architecture
 
-- **Engine**: Upstream `ggml-org/llama.cpp` via SPM (pinned, no fork)
-- **Persistence**: Core Data with background writer context
-- **UI**: SwiftUI, ChatGPT-style conversation interface
-- **Memory**: mmap loading, f16_kv, MemoryBudgeter pre-load checks
-- **Platform**: iOS 18.0+
+```
+┌─────────────────────────────────────────┐
+│  Views (SwiftUI)                        │
+│  ChatView · SidebarView · SettingsView  │
+├─────────────────────────────────────────┤
+│  ViewModels                             │
+│  ChatViewModel · ConversationListVM     │
+├─────────────────────────────────────────┤
+│  Services (no llama types leak above)   │
+│  InferenceService · ModelLifecycleMgr   │
+│  MemoryBudgeter · ChatSessionActor      │
+│  MarkdownRenderer · ModelManagerService │
+├─────────────────────────────────────────┤
+│  Persistence (Core Data)                │
+│  Conversation · ChatMessage             │
+├─────────────────────────────────────────┤
+│  Packages                               │
+│  swift-llama-cpp (upstream b9821)       │
+└─────────────────────────────────────────┘
+```
 
 ## Models
 
-| Model | Type | Size | Notes |
-|-------|------|------|-------|
-| SmolVLM 500M | Vision | ~550 MB | Starter. Runs on all iOS 18 devices. |
-| Qwen 2.5-VL 3B | Vision | ~2.2 GB | Device-gated. Requires 6 GB+ RAM. |
-| Llama 3.2 3B | Text | ~2 GB | Fast text-only chat. |
+| Model | Type | Quant | Size | RAM Floor |
+|-------|------|-------|------|-----------|
+| Llama 3.2 3B | Text | Q4_K_M | ~2 GB | 3.5 GB |
 
-## Building
+Vision models (Phase 2): SmolVLM 500M, Qwen 2.5-VL 3B.
+
+## Setup
 
 ```bash
-xcodebuild -scheme ZiroEdge -destination 'platform=iOS Simulator,name=iPhone 16' build
+git clone https://github.com/Zane-dev16/ZiroEdge.git
+cd ZiroEdge
+chmod +x setup.sh
+./setup.sh
+open ZiroEdge.xcodeproj
 ```
+
+The setup script downloads the llama.cpp xcframework binary (upstream release b9821).
+
+## Build
+
+```bash
+xcodebuild -scheme ZiroEdge -destination 'generic/platform=iOS' build
+```
+
+## Requirements
+
+- Xcode 15.0+
+- iOS 18.0+
+- Swift 5.9+
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT — Copyright 2026 Irell Zane. See [LICENSE](LICENSE).
 
-Model weights are subject to their own licenses. See Settings → Licenses in-app.
+## Third-Party Notices
+
+- [llama.cpp](https://github.com/ggml-org/llama.cpp) — MIT License
+- Model licenses: see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
