@@ -13,6 +13,7 @@ DerivedData/
 !default.mode2v3
 !default.perspectivev3
 xcuserdata/
+*.xcodeproj.bak/
 
 # Swift Package Manager
 .build/
@@ -52,3 +53,6 @@ CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake
 Makefile
+
+# xcframework binary (download via setup script)
+Packages/swift-llama-cpp/llama.xcframework/

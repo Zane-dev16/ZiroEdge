@@ -1,0 +1,458 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		01B67FB4568E9B8D8AD1B18E /* MemoryBudgeter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E1242FAB9B786C2167B03D5 /* MemoryBudgeter.swift */; };
+		1507609D093100805E69B6B6 /* ModelLifecycleManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F42848498CF819E78EED45AB /* ModelLifecycleManager.swift */; };
+		15557FE21A9C5AA0E6C0D7F4 /* ChatViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 131AF1296FE8159E5BB62C66 /* ChatViewModel.swift */; };
+		1C77718F3B72419B8A52CF4F /* ModelConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7044843F74D3DFA5866FAE2A /* ModelConfiguration.swift */; };
+		2719DC8CC5A35303DEBCE087 /* MarkdownRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = F03FA017D9AEE4B5C0E767AB /* MarkdownRenderer.swift */; };
+		46DCCA8DB4F98237136EF9F2 /* CDChatMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6095A8B796761917100D204 /* CDChatMessage.swift */; };
+		55ECB21E11A53ED61566ABBD /* PersistenceController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B819FB39EB71743F91968C40 /* PersistenceController.swift */; };
+		5C30ECFDE6AE8832A9D5A4FF /* InferenceService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9334EC3A1F208FD70B485C18 /* InferenceService.swift */; };
+		60C967DB6554E4D13427C941 /* SidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 758DF316AD8A2A2D5AFED339 /* SidebarView.swift */; };
+		686630E424CFE805D2DFF0DD /* AIModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32A1B26312450DA02CEE7FAB /* AIModel.swift */; };
+		7567C2C0CD09466D8BC141F4 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6ADBDBAD091EDC6CCD412E3 /* ChatView.swift */; };
+		9DA86DA602EDEF6C8157190F /* MessageBubble.swift in Sources */ = {isa = PBXBuildFile; fileRef = 055D135A1B4377C36387DB65 /* MessageBubble.swift */; };
+		B25A0D83A6CFF39DF71B44F2 /* ChatSessionActor.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDF516DA8E914C3C75B458A5 /* ChatSessionActor.swift */; };
+		B298DF37B1DEC3EAC1F7A6F4 /* ZiroEdgeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8DCD7FFE76AE246F76E8AB1D /* ZiroEdgeApp.swift */; };
+		D26F8126CA19402867419108 /* SwiftLlama in Frameworks */ = {isa = PBXBuildFile; productRef = 274CD038517DAD0AD555717B /* SwiftLlama */; };
+		D9D786618CFC80762E436914 /* CDConversation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BEC15C6D7B950F3212F5EDE /* CDConversation.swift */; };
+		F308DB4C6A26B32606DFBBDF /* ConversationListViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7AEBED57984673F2549AD67F /* ConversationListViewModel.swift */; };
+		FAFB727A010ED8FB1963778B /* DownloadState.swift in Sources */ = {isa = PBXBuildFile; fileRef = C09C23838F2034257261C411 /* DownloadState.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		055D135A1B4377C36387DB65 /* MessageBubble.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageBubble.swift; sourceTree = "<group>"; };
+		131AF1296FE8159E5BB62C66 /* ChatViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatViewModel.swift; sourceTree = "<group>"; };
+		161D5CDD092CE900F86A4FBB /* swift-llama-cpp */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "swift-llama-cpp"; path = "Packages/swift-llama-cpp"; sourceTree = SOURCE_ROOT; };
+		32A1B26312450DA02CEE7FAB /* AIModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIModel.swift; sourceTree = "<group>"; };
+		406F483B047FB94538D31E52 /* ZiroEdge.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = ZiroEdge.entitlements; sourceTree = "<group>"; };
+		472FEE1B64876173883AD88A /* ZiroEdge.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = ZiroEdge.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		6E1242FAB9B786C2167B03D5 /* MemoryBudgeter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryBudgeter.swift; sourceTree = "<group>"; };
+		7044843F74D3DFA5866FAE2A /* ModelConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelConfiguration.swift; sourceTree = "<group>"; };
+		758DF316AD8A2A2D5AFED339 /* SidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarView.swift; sourceTree = "<group>"; };
+		7AEBED57984673F2549AD67F /* ConversationListViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationListViewModel.swift; sourceTree = "<group>"; };
+		7BEC15C6D7B950F3212F5EDE /* CDConversation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CDConversation.swift; sourceTree = "<group>"; };
+		8DCD7FFE76AE246F76E8AB1D /* ZiroEdgeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZiroEdgeApp.swift; sourceTree = "<group>"; };
+		9334EC3A1F208FD70B485C18 /* InferenceService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InferenceService.swift; sourceTree = "<group>"; };
+		A6095A8B796761917100D204 /* CDChatMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CDChatMessage.swift; sourceTree = "<group>"; };
+		B819FB39EB71743F91968C40 /* PersistenceController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceController.swift; sourceTree = "<group>"; };
+		C09C23838F2034257261C411 /* DownloadState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadState.swift; sourceTree = "<group>"; };
+		C6ADBDBAD091EDC6CCD412E3 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
+		CDF516DA8E914C3C75B458A5 /* ChatSessionActor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatSessionActor.swift; sourceTree = "<group>"; };
+		F03FA017D9AEE4B5C0E767AB /* MarkdownRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownRenderer.swift; sourceTree = "<group>"; };
+		F42848498CF819E78EED45AB /* ModelLifecycleManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelLifecycleManager.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		7B712092A0A7AE08DBF4FE7B /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D26F8126CA19402867419108 /* SwiftLlama in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		05234D03621C92115B58CD0E /* ZiroEdge */ = {
+			isa = PBXGroup;
+			children = (
+				FD2CD8E9A6637F51D093A5A0 /* Models */,
+				63895AFB2B3C5FE56FE50798 /* Persistence */,
+				2AAD3A7E7D651F74B40ABC04 /* Services */,
+				AC5ECDBC2DD2136EA69395E4 /* Utilities */,
+				AD85A1EABA98584E57C547EB /* ViewModels */,
+				0DDB84CC205545A45651187D /* Views */,
+				406F483B047FB94538D31E52 /* ZiroEdge.entitlements */,
+				8DCD7FFE76AE246F76E8AB1D /* ZiroEdgeApp.swift */,
+			);
+			path = ZiroEdge;
+			sourceTree = "<group>";
+		};
+		0DDB84CC205545A45651187D /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				C6ADBDBAD091EDC6CCD412E3 /* ChatView.swift */,
+				055D135A1B4377C36387DB65 /* MessageBubble.swift */,
+				758DF316AD8A2A2D5AFED339 /* SidebarView.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		162A2C0EF64A3B41BAE39B94 = {
+			isa = PBXGroup;
+			children = (
+				8E232AECAA092AE63191455E /* Packages */,
+				05234D03621C92115B58CD0E /* ZiroEdge */,
+				ED908A9AC4E696516EE34BA4 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		2AAD3A7E7D651F74B40ABC04 /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				CDF516DA8E914C3C75B458A5 /* ChatSessionActor.swift */,
+				9334EC3A1F208FD70B485C18 /* InferenceService.swift */,
+				F03FA017D9AEE4B5C0E767AB /* MarkdownRenderer.swift */,
+				6E1242FAB9B786C2167B03D5 /* MemoryBudgeter.swift */,
+				F42848498CF819E78EED45AB /* ModelLifecycleManager.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+		63895AFB2B3C5FE56FE50798 /* Persistence */ = {
+			isa = PBXGroup;
+			children = (
+				A6095A8B796761917100D204 /* CDChatMessage.swift */,
+				7BEC15C6D7B950F3212F5EDE /* CDConversation.swift */,
+				B819FB39EB71743F91968C40 /* PersistenceController.swift */,
+			);
+			path = Persistence;
+			sourceTree = "<group>";
+		};
+		8E232AECAA092AE63191455E /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				161D5CDD092CE900F86A4FBB /* swift-llama-cpp */,
+			);
+			path = Packages;
+			sourceTree = "<group>";
+		};
+		AC5ECDBC2DD2136EA69395E4 /* Utilities */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = Utilities;
+			sourceTree = "<group>";
+		};
+		AD85A1EABA98584E57C547EB /* ViewModels */ = {
+			isa = PBXGroup;
+			children = (
+				131AF1296FE8159E5BB62C66 /* ChatViewModel.swift */,
+				7AEBED57984673F2549AD67F /* ConversationListViewModel.swift */,
+			);
+			path = ViewModels;
+			sourceTree = "<group>";
+		};
+		ED908A9AC4E696516EE34BA4 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				472FEE1B64876173883AD88A /* ZiroEdge.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		FD2CD8E9A6637F51D093A5A0 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				32A1B26312450DA02CEE7FAB /* AIModel.swift */,
+				C09C23838F2034257261C411 /* DownloadState.swift */,
+				7044843F74D3DFA5866FAE2A /* ModelConfiguration.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		6315492185783158E4B6C0C4 /* ZiroEdge */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 95A404107ED8F959D0732DDB /* Build configuration list for PBXNativeTarget "ZiroEdge" */;
+			buildPhases = (
+				BB63D51504E3FE5AACBD919D /* Sources */,
+				7B712092A0A7AE08DBF4FE7B /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = ZiroEdge;
+			packageProductDependencies = (
+				274CD038517DAD0AD555717B /* SwiftLlama */,
+			);
+			productName = ZiroEdge;
+			productReference = 472FEE1B64876173883AD88A /* ZiroEdge.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		ADD137574DAEB33A2ED86DC4 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1500;
+				TargetAttributes = {
+					6315492185783158E4B6C0C4 = {
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = A16EEF52FE3100AD40811484 /* Build configuration list for PBXProject "ZiroEdge" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 162A2C0EF64A3B41BAE39B94;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				411C05A9ACA1BFE3EB6DCDB1 /* XCLocalSwiftPackageReference "Packages/swift-llama-cpp" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = ED908A9AC4E696516EE34BA4 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				6315492185783158E4B6C0C4 /* ZiroEdge */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		BB63D51504E3FE5AACBD919D /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				686630E424CFE805D2DFF0DD /* AIModel.swift in Sources */,
+				46DCCA8DB4F98237136EF9F2 /* CDChatMessage.swift in Sources */,
+				D9D786618CFC80762E436914 /* CDConversation.swift in Sources */,
+				B25A0D83A6CFF39DF71B44F2 /* ChatSessionActor.swift in Sources */,
+				7567C2C0CD09466D8BC141F4 /* ChatView.swift in Sources */,
+				15557FE21A9C5AA0E6C0D7F4 /* ChatViewModel.swift in Sources */,
+				F308DB4C6A26B32606DFBBDF /* ConversationListViewModel.swift in Sources */,
+				FAFB727A010ED8FB1963778B /* DownloadState.swift in Sources */,
+				5C30ECFDE6AE8832A9D5A4FF /* InferenceService.swift in Sources */,
+				2719DC8CC5A35303DEBCE087 /* MarkdownRenderer.swift in Sources */,
+				01B67FB4568E9B8D8AD1B18E /* MemoryBudgeter.swift in Sources */,
+				9DA86DA602EDEF6C8157190F /* MessageBubble.swift in Sources */,
+				1C77718F3B72419B8A52CF4F /* ModelConfiguration.swift in Sources */,
+				1507609D093100805E69B6B6 /* ModelLifecycleManager.swift in Sources */,
+				55ECB21E11A53ED61566ABBD /* PersistenceController.swift in Sources */,
+				60C967DB6554E4D13427C941 /* SidebarView.swift in Sources */,
+				B298DF37B1DEC3EAC1F7A6F4 /* ZiroEdgeApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		00DD343D3F04A41337CCA368 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = ZiroEdge/ZiroEdge.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_GENERATION_MODE = GeneratedFile;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.zanish-labs.ziroedge";
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		063AF439181377895AF66B0C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = ZiroEdge/ZiroEdge.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_GENERATION_MODE = GeneratedFile;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.zanish-labs.ziroedge";
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		8147FAD617F4A65DC7B2DA77 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		C967AC30ECE194A4AB214351 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		95A404107ED8F959D0732DDB /* Build configuration list for PBXNativeTarget "ZiroEdge" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				063AF439181377895AF66B0C /* Debug */,
+				00DD343D3F04A41337CCA368 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		A16EEF52FE3100AD40811484 /* Build configuration list for PBXProject "ZiroEdge" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C967AC30ECE194A4AB214351 /* Debug */,
+				8147FAD617F4A65DC7B2DA77 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		411C05A9ACA1BFE3EB6DCDB1 /* XCLocalSwiftPackageReference "Packages/swift-llama-cpp" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "Packages/swift-llama-cpp";
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		274CD038517DAD0AD555717B /* SwiftLlama */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = SwiftLlama;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = ADD137574DAEB33A2ED86DC4 /* Project object */;
+}
