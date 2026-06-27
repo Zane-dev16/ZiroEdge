@@ -44,7 +44,17 @@ actor PersistenceController {
     // MARK: - Initialization
 
     init(inMemory: Bool = false) {
-        container = NSPersistentContainer(name: "ZiroEdge")
+        // Try to load from bundle first. If not found (e.g. in test targets),
+        // create the model programmatically.
+        if let modelURL = Bundle.main.url(forResource: "ZiroEdge", withExtension: "momd")
+            ?? Bundle.main.url(forResource: "ZiroEdge", withExtension: "mom"),
+           let model = NSManagedObjectModel(contentsOf: modelURL) {
+            container = NSPersistentContainer(name: "ZiroEdge", managedObjectModel: model)
+        } else {
+            // Programmatic model creation for test targets.
+            let model = Self.createManagedModel()
+            container = NSPersistentContainer(name: "ZiroEdge", managedObjectModel: model)
+        }
 
         if inMemory {
             let description = NSPersistentStoreDescription()
@@ -510,6 +520,151 @@ actor PersistenceController {
         }
 
         return newConversationID
+    }
+
+    // MARK: - Programmatic Model Creation
+
+    /// Creates the Core Data model programmatically.
+    /// Used when the .xcdatamodeld isn't available (e.g. test targets).
+    private static func createManagedModel() -> NSManagedObjectModel {
+        let model = NSManagedObjectModel()
+
+        // CDConversation entity.
+        let conversationEntity = NSEntityDescription()
+        conversationEntity.name = "CDConversation"
+        conversationEntity.managedObjectClassName = "CDConversation"
+
+        let convID = NSAttributeDescription()
+        convID.name = "id"
+        convID.attributeType = .UUIDAttributeType
+        convID.isOptional = true
+
+        let convTitle = NSAttributeDescription()
+        convTitle.name = "title"
+        convTitle.attributeType = .stringAttributeType
+        convTitle.isOptional = true
+        convTitle.defaultValue = "New Conversation"
+
+        let convSystemPrompt = NSAttributeDescription()
+        convSystemPrompt.name = "systemPrompt"
+        convSystemPrompt.attributeType = .stringAttributeType
+        convSystemPrompt.isOptional = true
+
+        let convModelID = NSAttributeDescription()
+        convModelID.name = "modelID"
+        convModelID.attributeType = .stringAttributeType
+        convModelID.isOptional = true
+
+        let convTemp = NSAttributeDescription()
+        convTemp.name = "temperature"
+        convTemp.attributeType = .doubleAttributeType
+        convTemp.defaultValue = 0.7
+
+        let convTopP = NSAttributeDescription()
+        convTopP.name = "topP"
+        convTopP.attributeType = .doubleAttributeType
+        convTopP.defaultValue = 0.9
+
+        let convTopK = NSAttributeDescription()
+        convTopK.name = "topK"
+        convTopK.attributeType = .integer32AttributeType
+        convTopK.defaultValue = 40
+
+        let convCreated = NSAttributeDescription()
+        convCreated.name = "createdAt"
+        convCreated.attributeType = .dateAttributeType
+        convCreated.isOptional = true
+
+        let convUpdated = NSAttributeDescription()
+        convUpdated.name = "updatedAt"
+        convUpdated.attributeType = .dateAttributeType
+        convUpdated.isOptional = true
+
+        let convParentBranch = NSAttributeDescription()
+        convParentBranch.name = "parentBranchID"
+        convParentBranch.attributeType = .UUIDAttributeType
+        convParentBranch.isOptional = true
+
+        let convBranchPoint = NSAttributeDescription()
+        convBranchPoint.name = "branchPointMessageID"
+        convBranchPoint.attributeType = .UUIDAttributeType
+        convBranchPoint.isOptional = true
+
+        conversationEntity.properties = [
+            convID, convTitle, convSystemPrompt, convModelID,
+            convTemp, convTopP, convTopK, convCreated, convUpdated,
+            convParentBranch, convBranchPoint
+        ]
+
+        // CDChatMessage entity.
+        let messageEntity = NSEntityDescription()
+        messageEntity.name = "CDChatMessage"
+        messageEntity.managedObjectClassName = "CDChatMessage"
+
+        let msgID = NSAttributeDescription()
+        msgID.name = "id"
+        msgID.attributeType = .UUIDAttributeType
+        msgID.isOptional = true
+
+        let msgRole = NSAttributeDescription()
+        msgRole.name = "role"
+        msgRole.attributeType = .stringAttributeType
+        msgRole.isOptional = true
+
+        let msgContent = NSAttributeDescription()
+        msgContent.name = "content"
+        msgContent.attributeType = .stringAttributeType
+        msgContent.isOptional = true
+        msgContent.defaultValue = ""
+
+        let msgImageData = NSAttributeDescription()
+        msgImageData.name = "imageData"
+        msgImageData.attributeType = .binaryDataAttributeType
+        msgImageData.isOptional = true
+
+        let msgSeqIndex = NSAttributeDescription()
+        msgSeqIndex.name = "sequenceIndex"
+        msgSeqIndex.attributeType = .integer32AttributeType
+        msgSeqIndex.defaultValue = 0
+
+        let msgIsStreaming = NSAttributeDescription()
+        msgIsStreaming.name = "isStreaming"
+        msgIsStreaming.attributeType = .booleanAttributeType
+        msgIsStreaming.defaultValue = false
+
+        let msgCreated = NSAttributeDescription()
+        msgCreated.name = "createdAt"
+        msgCreated.attributeType = .dateAttributeType
+        msgCreated.isOptional = true
+
+        messageEntity.properties = [
+            msgID, msgRole, msgContent, msgImageData,
+            msgSeqIndex, msgIsStreaming, msgCreated
+        ]
+
+        // Relationships.
+        let messagesRelationship = NSRelationshipDescription()
+        messagesRelationship.name = "messages"
+        messagesRelationship.destinationEntity = messageEntity
+        messagesRelationship.isOptional = true
+        messagesRelationship.maxCount = 0  // to-many
+        messagesRelationship.deleteRule = .cascadeDeleteRule
+
+        let conversationRelationship = NSRelationshipDescription()
+        conversationRelationship.name = "conversation"
+        conversationRelationship.destinationEntity = conversationEntity
+        conversationRelationship.isOptional = true
+        conversationRelationship.maxCount = 1  // to-one
+        conversationRelationship.deleteRule = .nullifyDeleteRule
+
+        messagesRelationship.inverseRelationship = conversationRelationship
+        conversationRelationship.inverseRelationship = messagesRelationship
+
+        conversationEntity.properties.append(messagesRelationship)
+        messageEntity.properties.append(conversationRelationship)
+
+        model.entities = [conversationEntity, messageEntity]
+        return model
     }
 
     // MARK: - Helpers

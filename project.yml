@@ -27,6 +27,7 @@ targets:
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: "5.0"
         CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: 36V92GAJBT
         TARGETED_DEVICE_FAMILY: "1,2"
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
@@ -40,3 +41,30 @@ targets:
       path: ZiroEdge/ZiroEdge.entitlements
       properties:
         com.apple.security.app-sandbox: true
+
+  ZiroEdgeTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: ZiroEdgeTests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.zanish-labs.ziroedge.tests
+        SWIFT_VERSION: "5.0"
+        GENERATE_INFOPLIST_FILE: YES
+        DEVELOPMENT_TEAM: 36V92GAJBT
+        CODE_SIGN_STYLE: Automatic
+    dependencies:
+      - target: ZiroEdge
+      - package: SwiftLlama
+        product: SwiftLlama
+
+schemes:
+  ZiroEdge:
+    build:
+      targets:
+        ZiroEdge: all
+        ZiroEdgeTests: [test]
+    test:
+      targets:
+        - ZiroEdgeTests
