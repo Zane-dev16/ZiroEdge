@@ -56,3 +56,6 @@ Makefile
 
 # xcframework binary (download via setup script)
 Packages/swift-llama-cpp/llama.xcframework/
+
+# Companion docs (outside repo scope)
+../ziroedge-docs/

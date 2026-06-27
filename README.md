@@ -7,7 +7,7 @@ Everything runs on your device. No data ever leaves your phone.
 ## Features
 
 - **On-device AI** — runs multimodal models via llama.cpp, fully offline
-- **ChatGPT-style UI** — conversation sidebar, message bubbles, streaming
+- **Conversational AI UI** — message bubbles, streaming responses, markdown rendering
 - **Vision support** (Phase 2) — camera + photo library input
 - **Core Data persistence** — conversations survive cold restarts
 - **Conversation branching** — fork from any message
