@@ -50,14 +50,15 @@ struct ZiroEdgeApp: App {
             inferenceService: inferenceService,
             persistence: persistence
         )
+        let conversationListViewModel = ConversationListViewModel(persistence: persistence)
+        let downloadManager = DownloadManager()
         let chatViewModel = ChatViewModel(
             persistence: persistence,
             inferenceService: inferenceService,
             sessionActor: sessionActor,
-            lifecycleManager: lifecycleManager
+            lifecycleManager: lifecycleManager,
+            downloadStatusProvider: downloadManager
         )
-        let conversationListViewModel = ConversationListViewModel(persistence: persistence)
-        let downloadManager = DownloadManager()
         let modelsViewModel = ModelsViewModel(
             downloadManager: downloadManager,
             lifecycleManager: lifecycleManager
@@ -111,6 +112,7 @@ struct MainView: View {
     let modelsViewModel: ModelsViewModel
 
     @State private var showSettings = false
+    @State private var showModelsFromPicker = false
 
     var body: some View {
         NavigationSplitView {
@@ -118,10 +120,15 @@ struct MainView: View {
                 viewModel: conversationListViewModel,
                 onNewConversation: {
                     Task {
-                        let id = await conversationListViewModel.createConversation(
-                            modelID: ModelRegistry.llama32_3B.id
-                        )
-                        await chatViewModel.loadConversation(id)
+                        chatViewModel.autoSelectModel()
+                        if chatViewModel.needsModelRedirect {
+                            showModelsFromPicker = true
+                        } else if let model = chatViewModel.selectedModel {
+                            let id = await conversationListViewModel.createConversation(
+                                modelID: model.id
+                            )
+                            await chatViewModel.loadConversation(id)
+                        }
                     }
                 },
                 onSelectConversation: { id in
@@ -143,10 +150,15 @@ struct MainView: View {
                 // No conversation selected — show welcome screen.
                 WelcomeView(onNewConversation: {
                     Task {
-                        let id = await conversationListViewModel.createConversation(
-                            modelID: ModelRegistry.llama32_3B.id
-                        )
-                        await chatViewModel.loadConversation(id)
+                        chatViewModel.autoSelectModel()
+                        if chatViewModel.needsModelRedirect {
+                            showModelsFromPicker = true
+                        } else if let model = chatViewModel.selectedModel {
+                            let id = await conversationListViewModel.createConversation(
+                                modelID: model.id
+                            )
+                            await chatViewModel.loadConversation(id)
+                        }
                     }
                 })
             }
@@ -169,6 +181,18 @@ struct MainView: View {
             }
         } message: {
             Text("The model was unloaded due to memory pressure. Tap Reload to continue chatting.")
+        }
+        .sheet(isPresented: $showModelsFromPicker) {
+            NavigationStack {
+                ModelsView(viewModel: modelsViewModel)
+                    .navigationTitle("Download a Model")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .primaryAction) {
+                            Button("Done") { showModelsFromPicker = false }
+                        }
+                    }
+            }
         }
     }
 }
