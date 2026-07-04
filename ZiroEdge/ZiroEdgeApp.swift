@@ -231,9 +231,9 @@ struct WelcomeView: View {
     }
 }
 
-// MARK: - Settings View (Stub for Phase 1)
+// MARK: - Settings View
 
-/// Settings view — Phase 1 stub with model management.
+/// Settings view with storage management, memory info, license attribution, and privacy policy.
 struct SettingsView: View {
     @ObservedObject var lifecycleManager: ModelLifecycleManager
     let inferenceService: InferenceService
@@ -242,6 +242,24 @@ struct SettingsView: View {
     @ObservedObject var modelsViewModel: ModelsViewModel
 
     @Environment(\.dismiss) private var dismiss
+
+    /// Local state to trigger refresh after deletion.
+    @State private var storageRefreshID = UUID()
+
+    /// Confirmation dialog state for model deletion.
+    @State private var modelToDelete: AIModel?
+
+    /// Memory values (loaded async from actor).
+    @State private var availableRAM: String = "Loading..."
+    @State private var totalRAM: String = "Loading..."
+
+    /// Models that are currently downloaded on disk.
+    private var downloadedModels: [AIModel] {
+        ModelRegistry.allModels.filter { model in
+            let status = downloadManager.status(for: model)
+            return status.isReady
+        }
+    }
 
     var body: some View {
         NavigationStack {
@@ -271,44 +289,59 @@ struct SettingsView: View {
                     }
                 }
 
-                // Available models.
-                Section("Available Models") {
-                    ForEach(ModelRegistry.allModels) { model in
-                        HStack {
-                            VStack(alignment: .leading) {
-                                Text(model.displayName)
-                                    .font(.body)
-                                Text(model.description)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-
-                            Spacer()
-
-                            if lifecycleManager.activeModel?.id == model.id {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundStyle(.green)
-                            } else {
-                                Button("Load") {
-                                    Task { await lifecycleManager.loadModel(model) }
+                // Storage management section.
+                Section {
+                    if downloadedModels.isEmpty {
+                        Text("No models downloaded")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(downloadedModels) { model in
+                            HStack {
+                                VStack(alignment: .leading) {
+                                    Text(model.displayName)
+                                        .font(.body)
+                                    Text(formattedModelDiskUsage(model))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
                                 }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
+
+                                Spacer()
+
+                                Button(role: .destructive) {
+                                    modelToDelete = model
+                                } label: {
+                                    Image(systemName: "trash")
+                                }
                             }
                         }
                     }
+
+                    LabeledContent("Total Storage") {
+                        Text(formattedTotalDiskUsage())
+                            .id(storageRefreshID)
+                    }
+                } header: {
+                    Text("Storage")
+                } footer: {
+                    Text("Models are stored locally on your device. Deleting a model frees disk space.")
                 }
 
                 // Memory section.
                 Section("Memory") {
-                    LabeledContent("Available RAM") {
-                        Text("Loading...")
-                            .task {
-                                // This would update in real implementation.
-                            }
+                    LabeledContent("Available RAM", value: availableRAM)
+                    LabeledContent("Total Device RAM", value: totalRAM)
+                }
+
+                // Legal section.
+                Section("Legal") {
+                    NavigationLink {
+                        LicenseView()
+                    } label: {
+                        Label("Licenses", systemImage: "doc.text")
                     }
-                    LabeledContent("Total Device RAM") {
-                        Text("Loading...")
+
+                    Link(destination: URL(string: "https://ziroedge.app/privacy")!) {
+                        Label("Privacy Policy", systemImage: "hand.raised")
                     }
                 }
 
@@ -326,6 +359,52 @@ struct SettingsView: View {
                     Button("Done") { dismiss() }
                 }
             }
+            .task {
+                await refreshMemoryInfo()
+            }
+            .confirmationDialog(
+                "Delete \(modelToDelete?.displayName ?? "Model")?",
+                isPresented: Binding(
+                    get: { modelToDelete != nil },
+                    set: { if !$0 { modelToDelete = nil } }
+                ),
+                presenting: modelToDelete
+            ) { model in
+                Button("Delete \(model.displayName)", role: .destructive) {
+                    deleteModel(model)
+                }
+                Button("Cancel", role: .cancel) {
+                    modelToDelete = nil
+                }
+            } message: { model in
+                Text("This will permanently remove \(model.displayName) from your device. You can re-download it later.")
+            }
         }
+    }
+
+    // MARK: - Helpers
+
+    private func formattedModelDiskUsage(_ model: AIModel) -> String {
+        ModelManagerService.formattedDiskUsage(for: model)
+    }
+
+    private func formattedTotalDiskUsage() -> String {
+        ModelManagerService.formattedDiskUsage()
+    }
+
+    private func deleteModel(_ model: AIModel) {
+        // Unload if currently active.
+        if lifecycleManager.activeModel?.id == model.id {
+            lifecycleManager.unloadCurrentModel()
+        }
+        downloadManager.deleteModel(model)
+        storageRefreshID = UUID()
+        modelToDelete = nil
+    }
+
+    @MainActor
+    private func refreshMemoryInfo() async {
+        availableRAM = await memoryBudgeter.formattedAvailableRAM()
+        totalRAM = await memoryBudgeter.formattedTotalRAM()
     }
 }
