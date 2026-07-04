@@ -10,6 +10,7 @@ struct ChatView: View {
     @ObservedObject var viewModel: ChatViewModel
     @State private var scrollProxy: ScrollViewProxy?
     @FocusState private var isInputFocused: Bool
+    @State private var hasScrolledUp: Bool = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -43,14 +44,60 @@ struct ChatView: View {
                             )
                             .id("streaming")
                         }
+
+                        // Thinking indicator — shown after sending, before first token.
+                        if viewModel.isStreaming && viewModel.streamingText.isEmpty {
+                            ThinkingIndicator()
+                                .id("thinking")
+                        }
+
+                        // Bottom anchor for scroll position detection.
+                        Color.clear
+                            .frame(height: 1)
+                            .id("bottomAnchor")
                     }
                     .padding(.vertical, 12)
+                    .background {
+                        GeometryReader { geometry in
+                            Color.clear.preference(
+                                key: ScrollOffsetKey.self,
+                                value: geometry.frame(in: .named("scrollView")).maxY
+                            )
+                        }
+                    }
+                }
+                .coordinateSpace(name: "scrollView")
+                .onPreferenceChange(ScrollOffsetKey.self) { maxY in
+                    // When the bottom of content is above the bottom of visible area,
+                    // user has scrolled up.
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        hasScrolledUp = maxY < 0
+                    }
+                }
+                .overlay(alignment: .bottom) {
+                    // Jump-to-bottom button — visible when scrolled up during streaming.
+                    if hasScrolledUp && viewModel.isStreaming {
+                        jumpToBottomButton {
+                            scrollToBottom(proxy)
+                        }
+                        .padding(.bottom, 8)
+                        .transition(.opacity.combined(with: .scale))
+                    }
                 }
                 .onChange(of: viewModel.messages.count) { _, _ in
                     scrollToBottom(proxy)
                 }
                 .onChange(of: viewModel.streamingText) { _, _ in
                     scrollToBottom(proxy)
+                }
+                .onChange(of: viewModel.isStreaming) { _, isStreaming in
+                    if isStreaming {
+                        scrollToBottom(proxy)
+                    } else {
+                        withAnimation {
+                            hasScrolledUp = false
+                        }
+                    }
                 }
                 .onAppear {
                     scrollProxy = proxy
@@ -62,6 +109,11 @@ struct ChatView: View {
             // Error banner.
             if viewModel.showError, let error = viewModel.errorMessage {
                 errorBanner(error)
+            }
+
+            // Truncation warning banner.
+            if let warning = viewModel.truncationWarning {
+                truncationBanner(warning)
             }
 
             // Input bar with model picker.
@@ -114,6 +166,7 @@ struct ChatView: View {
             HStack {
                 modelPicker
                 Spacer()
+                tokenCountBadge
             }
             .padding(.horizontal, 16)
             .padding(.top, 6)
@@ -236,6 +289,47 @@ struct ChatView: View {
         .background(Color.red.opacity(0.1))
     }
 
+    // MARK: - Truncation Warning Banner
+
+    private func truncationBanner(_ message: String) -> some View {
+        HStack {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.orange)
+            Spacer()
+            Button("Dismiss") {
+                viewModel.dismissTruncationWarning()
+            }
+            .font(.caption)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(Color.orange.opacity(0.1))
+    }
+
+    // MARK: - Token Count Badge
+
+    private var tokenCountBadge: some View {
+        Text("\(viewModel.tokenCount) / \(viewModel.contextWindowSize)")
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .monospacedDigit()
+    }
+
+    // MARK: - Jump to Bottom Button
+
+    private func jumpToBottomButton(action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: "arrow.down.circle.fill")
+                .font(.system(size: 36))
+                .foregroundStyle(Color.accentColor)
+                .shadow(color: .black.opacity(0.15), radius: 4, x: 0, y: 2)
+        }
+        .buttonStyle(.plain)
+    }
+
     // MARK: - Helpers
 
     private var canSend: Bool {
@@ -245,11 +339,59 @@ struct ChatView: View {
     private func scrollToBottom(_ proxy: ScrollViewProxy) {
         withAnimation(.easeOut(duration: 0.2)) {
             if viewModel.isStreaming {
-                proxy.scrollTo("streaming", anchor: .bottom)
+                if !viewModel.streamingText.isEmpty {
+                    proxy.scrollTo("streaming", anchor: .bottom)
+                } else {
+                    proxy.scrollTo("thinking", anchor: .bottom)
+                }
             } else if let lastID = viewModel.messages.last?.id {
                 proxy.scrollTo(lastID, anchor: .bottom)
             }
         }
+    }
+}
+
+// MARK: - Thinking Indicator
+
+/// Animated "thinking..." indicator shown while waiting for the first token.
+struct ThinkingIndicator: View {
+    @State private var dotCount = 0
+    private let timer = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        HStack {
+            HStack(spacing: 4) {
+                Text("Thinking")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Text(String(repeating: ".", count: dotCount % 4))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 20, alignment: .leading)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(Color(.systemGray5))
+            .clipShape(RoundedRectangle(cornerRadius: 18))
+            .onReceive(timer) { _ in
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    dotCount += 1
+                }
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 4)
+    }
+}
+
+// MARK: - Scroll Offset Preference Key
+
+/// Preference key to track the scroll content's position relative to the scroll view.
+struct ScrollOffsetKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
     }
 }
 
