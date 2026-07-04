@@ -14,6 +14,7 @@
 		1C77718F3B72419B8A52CF4F /* ModelConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7044843F74D3DFA5866FAE2A /* ModelConfiguration.swift */; };
 		2719DC8CC5A35303DEBCE087 /* MarkdownRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = F03FA017D9AEE4B5C0E767AB /* MarkdownRenderer.swift */; };
 		2C878BA3E33E33B0E924C2F6 /* ModelsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E0B9A355538CEEC86556BE7 /* ModelsView.swift */; };
+		440F7439971AAA8FB6656BA9 /* SettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED2E070DA570B0177707CC77 /* SettingsTests.swift */; };
 		46DCCA8DB4F98237136EF9F2 /* CDChatMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6095A8B796761917100D204 /* CDChatMessage.swift */; };
 		55ECB21E11A53ED61566ABBD /* PersistenceController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B819FB39EB71743F91968C40 /* PersistenceController.swift */; };
 		5C30ECFDE6AE8832A9D5A4FF /* InferenceService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9334EC3A1F208FD70B485C18 /* InferenceService.swift */; };
@@ -81,6 +82,7 @@
 		CDF516DA8E914C3C75B458A5 /* ChatSessionActor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatSessionActor.swift; sourceTree = "<group>"; };
 		DDB90E3A144D9EADA2BDCE0F /* ModelRegistryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelRegistryTests.swift; sourceTree = "<group>"; };
 		E1A40DF4E9C684D2C73CBEE7 /* LicenseView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LicenseView.swift; sourceTree = "<group>"; };
+		ED2E070DA570B0177707CC77 /* SettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsTests.swift; sourceTree = "<group>"; };
 		F03FA017D9AEE4B5C0E767AB /* MarkdownRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownRenderer.swift; sourceTree = "<group>"; };
 		F42848498CF819E78EED45AB /* ModelLifecycleManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelLifecycleManager.swift; sourceTree = "<group>"; };
 		FA32FFB006B54EC9A7AA1AE3 /* MemoryBudgeterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryBudgeterTests.swift; sourceTree = "<group>"; };
@@ -202,6 +204,7 @@
 				6A5A18C444159747CDBEDD3D /* ModelPickerTests.swift */,
 				DDB90E3A144D9EADA2BDCE0F /* ModelRegistryTests.swift */,
 				485FDC26529D0AF9B6E09E0B /* PersistenceTests.swift */,
+				ED2E070DA570B0177707CC77 /* SettingsTests.swift */,
 			);
 			path = ZiroEdgeTests;
 			sourceTree = "<group>";
@@ -321,6 +324,7 @@
 				6E284EC7281342E8F5C26AFC /* ModelPickerTests.swift in Sources */,
 				7F679331426B11EBE8B58121 /* ModelRegistryTests.swift in Sources */,
 				6B18737E73095D7D03349865 /* PersistenceTests.swift in Sources */,
+				440F7439971AAA8FB6656BA9 /* SettingsTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
