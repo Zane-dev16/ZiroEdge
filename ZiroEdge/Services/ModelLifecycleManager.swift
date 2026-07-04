@@ -210,6 +210,33 @@ enum ModelManagerService {
         isBaseDownloaded(model) && isMMProjDownloaded(model)
     }
 
+    /// Disk usage in bytes for a specific model (base + mmproj).
+    static func diskUsage(for model: AIModel) -> Int64 {
+        let fm = FileManager.default
+        var total: Int64 = 0
+
+        let basePath = baseModelPath(for: model)
+        if let attrs = try? fm.attributesOfItem(atPath: basePath.path),
+           let size = attrs[.size] as? Int64 {
+            total += size
+        }
+
+        if model.requiresMMProj {
+            let mmprojPath = mmprojModelPath(for: model)
+            if let attrs = try? fm.attributesOfItem(atPath: mmprojPath.path),
+               let size = attrs[.size] as? Int64 {
+                total += size
+            }
+        }
+
+        return total
+    }
+
+    /// Formatted disk usage for a specific model.
+    static func formattedDiskUsage(for model: AIModel) -> String {
+        ByteCountFormatter.string(fromByteCount: diskUsage(for: model), countStyle: .file)
+    }
+
     /// Total disk usage of all downloaded models in bytes.
     static func totalDiskUsage() -> Int64 {
         let fm = FileManager.default
