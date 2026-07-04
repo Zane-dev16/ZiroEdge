@@ -30,6 +30,12 @@ struct ZiroEdgeApp: App {
     @State private var chatViewModel: ChatViewModel
     @State private var conversationListViewModel: ConversationListViewModel
 
+    /// Download manager.
+    @State private var downloadManager: DownloadManager
+
+    /// Models page view model.
+    @State private var modelsViewModel: ModelsViewModel
+
     // MARK: - Init
 
     init() {
@@ -51,6 +57,11 @@ struct ZiroEdgeApp: App {
             lifecycleManager: lifecycleManager
         )
         let conversationListViewModel = ConversationListViewModel(persistence: persistence)
+        let downloadManager = DownloadManager()
+        let modelsViewModel = ModelsViewModel(
+            downloadManager: downloadManager,
+            lifecycleManager: lifecycleManager
+        )
 
         _persistence = State(initialValue: persistence)
         _inferenceService = State(initialValue: inferenceService)
@@ -59,6 +70,8 @@ struct ZiroEdgeApp: App {
         _sessionActor = State(initialValue: sessionActor)
         _chatViewModel = State(initialValue: chatViewModel)
         _conversationListViewModel = State(initialValue: conversationListViewModel)
+        _downloadManager = State(initialValue: downloadManager)
+        _modelsViewModel = State(initialValue: modelsViewModel)
     }
 
     // MARK: - Body
@@ -70,7 +83,9 @@ struct ZiroEdgeApp: App {
                 conversationListViewModel: conversationListViewModel,
                 lifecycleManager: lifecycleManager,
                 inferenceService: inferenceService,
-                memoryBudgeter: memoryBudgeter
+                memoryBudgeter: memoryBudgeter,
+                downloadManager: downloadManager,
+                modelsViewModel: modelsViewModel
             )
             .task {
                 // Recover any incomplete streams from the previous session.
@@ -92,6 +107,8 @@ struct MainView: View {
     @ObservedObject var lifecycleManager: ModelLifecycleManager
     let inferenceService: InferenceService
     let memoryBudgeter: MemoryBudgeter
+    let downloadManager: DownloadManager
+    let modelsViewModel: ModelsViewModel
 
     @State private var showSettings = false
 
@@ -138,7 +155,9 @@ struct MainView: View {
             SettingsView(
                 lifecycleManager: lifecycleManager,
                 inferenceService: inferenceService,
-                memoryBudgeter: memoryBudgeter
+                memoryBudgeter: memoryBudgeter,
+                downloadManager: downloadManager,
+                modelsViewModel: modelsViewModel
             )
         }
         .alert("Memory Warning", isPresented: $lifecycleManager.showMemoryWarning) {
@@ -195,12 +214,23 @@ struct SettingsView: View {
     @ObservedObject var lifecycleManager: ModelLifecycleManager
     let inferenceService: InferenceService
     let memoryBudgeter: MemoryBudgeter
+    let downloadManager: DownloadManager
+    @ObservedObject var modelsViewModel: ModelsViewModel
 
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
             List {
+                // Models section.
+                Section {
+                    NavigationLink {
+                        ModelsView(viewModel: modelsViewModel)
+                    } label: {
+                        Label("Manage Models", systemImage: "arrow.down.circle")
+                    }
+                }
+
                 // Active model section.
                 Section("Active Model") {
                     if let model = lifecycleManager.activeModel {
