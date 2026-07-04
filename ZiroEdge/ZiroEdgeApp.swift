@@ -36,6 +36,9 @@ struct ZiroEdgeApp: App {
     /// Models page view model.
     @State private var modelsViewModel: ModelsViewModel
 
+    /// Onboarding manager.
+    @State private var onboardingManager = OnboardingManager()
+
     // MARK: - Init
 
     init() {
@@ -86,7 +89,8 @@ struct ZiroEdgeApp: App {
                 inferenceService: inferenceService,
                 memoryBudgeter: memoryBudgeter,
                 downloadManager: downloadManager,
-                modelsViewModel: modelsViewModel
+                modelsViewModel: modelsViewModel,
+                onboardingManager: onboardingManager
             )
             .task {
                 // Recover any incomplete streams from the previous session.
@@ -110,9 +114,15 @@ struct MainView: View {
     let memoryBudgeter: MemoryBudgeter
     let downloadManager: DownloadManager
     let modelsViewModel: ModelsViewModel
+    @ObservedObject var onboardingManager: OnboardingManager
 
     @State private var showSettings = false
     @State private var showModelsFromPicker = false
+
+    /// Whether any models are currently downloaded.
+    private var hasModels: Bool {
+        ModelRegistry.allModels.contains { downloadManager.status(for: $0).isReady }
+    }
 
     var body: some View {
         NavigationSplitView {
@@ -160,7 +170,7 @@ struct MainView: View {
                             await chatViewModel.loadConversation(id)
                         }
                     }
-                })
+                }, hasModels: hasModels)
             }
         }
         .sheet(isPresented: $showSettings) {
@@ -194,6 +204,9 @@ struct MainView: View {
                     }
             }
         }
+        .fullScreenCover(isPresented: $onboardingManager.showOnboarding) {
+            OnboardingView(isPresented: $onboardingManager.showOnboarding)
+        }
     }
 }
 
@@ -202,24 +215,27 @@ struct MainView: View {
 /// Shown when no conversation is selected.
 struct WelcomeView: View {
     let onNewConversation: () -> Void
+    let hasModels: Bool
 
     var body: some View {
         VStack(spacing: 24) {
-            Image(systemName: "brain.head.profile")
+            Image(systemName: hasModels ? "brain.head.profile" : "arrow.down.circle.dotted")
                 .font(.system(size: 64))
                 .foregroundStyle(.tertiary)
 
-            Text("Welcome to ZiroEdge")
+            Text(hasModels ? "Welcome to ZiroEdge" : "Download a Model")
                 .font(.largeTitle.bold())
 
-            Text("Your private AI assistant. Everything runs on your device — no data ever leaves your phone.")
+            Text(hasModels
+                ? "Your private AI assistant. Everything runs on your device — no data ever leaves your phone."
+                : "You need a model to start chatting. Download one to get started.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 40)
 
             Button(action: onNewConversation) {
-                Label("Start a Conversation", systemImage: "plus.circle.fill")
+                Label(hasModels ? "Start a Conversation" : "Download a Model", systemImage: hasModels ? "plus.circle.fill" : "arrow.down.circle.fill")
                     .font(.body.weight(.medium))
                     .padding(.horizontal, 24)
                     .padding(.vertical, 12)
