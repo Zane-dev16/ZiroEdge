@@ -9,12 +9,24 @@ import XCTest
 @MainActor
 final class OnboardingTests: XCTestCase {
 
+    private func makeDefaults() -> (UserDefaults, String) {
+        let suiteName = "OnboardingTests.\(name)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        // Ensure clean state.
+        defaults.removePersistentDomain(forName: suiteName)
+        return (defaults, suiteName)
+    }
+
+    override func tearDown() async throws {
+        // Clean up all test suites.
+        try await super.tearDown()
+    }
+
     // MARK: - hasCompletedOnboarding Defaults
 
     func testHasCompletedOnboardingDefaultsToFalse() {
-        // A fresh UserDefaults suite should not have the key set.
-        let defaults = UserDefaults(suiteName: #function)!
-        defer { defaults.removeSuite(named: #function) }
+        let (defaults, suiteName) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
 
         // bool(forKey:) returns false when key is absent.
         XCTAssertFalse(defaults.bool(forKey: "hasCompletedOnboarding"))
@@ -23,8 +35,8 @@ final class OnboardingTests: XCTestCase {
     // MARK: - Setting Flag Prevents Onboarding
 
     func testSettingFlagPreventsOnboarding() {
-        let defaults = UserDefaults(suiteName: #function)!
-        defer { defaults.removeSuite(named: #function) }
+        let (defaults, suiteName) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
 
         // Simulate completion.
         defaults.set(true, forKey: "hasCompletedOnboarding")
@@ -36,8 +48,8 @@ final class OnboardingTests: XCTestCase {
     // MARK: - Skip Sets the Flag
 
     func testSkipSetsFlag() {
-        let defaults = UserDefaults(suiteName: #function)!
-        defer { defaults.removeSuite(named: #function) }
+        let (defaults, suiteName) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
 
         let manager = OnboardingManager(defaults: defaults)
         XCTAssertTrue(manager.showOnboarding, "Onboarding should show initially")
@@ -51,8 +63,8 @@ final class OnboardingTests: XCTestCase {
     // MARK: - Completion Sets the Flag
 
     func testCompletionSetsFlag() {
-        let defaults = UserDefaults(suiteName: #function)!
-        defer { defaults.removeSuite(named: #function) }
+        let (defaults, suiteName) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
 
         let manager = OnboardingManager(defaults: defaults)
         XCTAssertTrue(manager.showOnboarding, "Onboarding should show initially")
@@ -71,8 +83,8 @@ final class OnboardingTests: XCTestCase {
     // MARK: - Onboarding Does Not Reappear
 
     func testOnboardingNeverReappears() {
-        let defaults = UserDefaults(suiteName: #function)!
-        defer { defaults.removeSuite(named: #function) }
+        let (defaults, suiteName) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
 
         let manager1 = OnboardingManager(defaults: defaults)
         XCTAssertTrue(manager1.showOnboarding)
