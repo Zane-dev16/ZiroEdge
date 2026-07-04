@@ -2,7 +2,7 @@
 // ZiroEdge — Privacy-first local AI assistant
 //
 // Main chat interface. Message list with auto-scroll, input bar,
-// streaming display, and stop button.
+// streaming display, stop button, and model picker.
 
 import SwiftUI
 
@@ -64,11 +64,24 @@ struct ChatView: View {
                 errorBanner(error)
             }
 
-            // Input bar.
+            // Input bar with model picker.
             inputBar
         }
         .navigationTitle("ZiroEdge")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                VStack(spacing: 0) {
+                    Text("ZiroEdge")
+                        .font(.headline)
+                    if let model = viewModel.selectedModel {
+                        Text(model.displayName)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
     }
 
     // MARK: - Empty State
@@ -96,41 +109,111 @@ struct ChatView: View {
     // MARK: - Input Bar
 
     private var inputBar: some View {
-        HStack(alignment: .bottom, spacing: 12) {
-            // Text input.
-            TextField("Message ZiroEdge...", text: $viewModel.inputText, axis: .vertical)
-                .textFieldStyle(.plain)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-                .background(Color(.systemGray6))
-                .clipShape(RoundedRectangle(cornerRadius: 20))
-                .lineLimit(1...6)
-                .focused($isInputFocused)
-                .onSubmit {
-                    if !viewModel.isStreaming {
-                        Task { await viewModel.sendMessage() }
-                    }
-                }
-
-            // Send / Stop button.
-            Button(action: {
-                Task {
-                    if viewModel.isStreaming {
-                        await viewModel.cancelStream()
-                    } else {
-                        await viewModel.sendMessage()
-                    }
-                }
-            }) {
-                Image(systemName: viewModel.isStreaming ? "stop.circle.fill" : "arrow.up.circle.fill")
-                    .font(.system(size: 32))
-                    .foregroundStyle(canSend ? Color.accentColor : Color(.systemGray3))
+        VStack(spacing: 0) {
+            // Model picker row.
+            HStack {
+                modelPicker
+                Spacer()
             }
-            .disabled(!canSend && !viewModel.isStreaming)
+            .padding(.horizontal, 16)
+            .padding(.top, 6)
+            .padding(.bottom, 4)
+
+            // Text input + send/stop.
+            HStack(alignment: .bottom, spacing: 12) {
+                // Text input.
+                TextField("Message ZiroEdge...", text: $viewModel.inputText, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(Color(.systemGray6))
+                    .clipShape(RoundedRectangle(cornerRadius: 20))
+                    .lineLimit(1...6)
+                    .focused($isInputFocused)
+                    .onSubmit {
+                        if !viewModel.isStreaming {
+                            Task { await viewModel.sendMessage() }
+                        }
+                    }
+
+                // Send / Stop button.
+                Button(action: {
+                    Task {
+                        if viewModel.isStreaming {
+                            await viewModel.cancelStream()
+                        } else {
+                            await viewModel.sendMessage()
+                        }
+                    }
+                }) {
+                    Image(systemName: viewModel.isStreaming ? "stop.circle.fill" : "arrow.up.circle.fill")
+                        .font(.system(size: 32))
+                        .foregroundStyle(canSend ? Color.accentColor : Color(.systemGray3))
+                }
+                .disabled(!canSend && !viewModel.isStreaming)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
         .background(.bar)
+    }
+
+    // MARK: - Model Picker
+
+    private var modelPicker: some View {
+        Menu {
+            if viewModel.availableModels.isEmpty {
+                Button {
+                    viewModel.needsModelRedirect = true
+                } label: {
+                    Label("Download a Model...", systemImage: "arrow.down.circle")
+                }
+            } else {
+                ForEach(viewModel.availableModels) { model in
+                    Button {
+                        Task { await viewModel.selectModel(model) }
+                    } label: {
+                        HStack {
+                            Text(model.displayName)
+                            if viewModel.selectedModel?.id == model.id {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                if viewModel.isSwitchingModel {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Image(systemName: "cpu")
+                        .font(.caption)
+                }
+                Text(modelPickerLabel)
+                    .font(.caption)
+                    .fontWeight(.medium)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.caption2)
+            }
+            .foregroundStyle(viewModel.selectedModel != nil ? Color.accentColor : Color.secondary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Color(.systemGray6))
+            .clipShape(Capsule())
+        }
+        .disabled(viewModel.isSwitchingModel)
+    }
+
+    private var modelPickerLabel: String {
+        if viewModel.isSwitchingModel {
+            return "Switching..."
+        }
+        if let model = viewModel.selectedModel {
+            return model.displayName
+        }
+        return "No Model"
     }
 
     // MARK: - Error Banner
@@ -184,7 +267,8 @@ struct ChatView: View {
             lifecycleManager: ModelLifecycleManager(
                 inferenceService: InferenceService(),
                 memoryBudgeter: MemoryBudgeter()
-            )
+            ),
+            downloadStatusProvider: DownloadManager()
         )
     )
 }
