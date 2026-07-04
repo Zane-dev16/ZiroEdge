@@ -26,6 +26,17 @@ final class ChatViewModel: ObservableObject {
     @Published var showError: Bool = false
     @Published var streamingText: String = ""
 
+    // MARK: - Chat UX State
+
+    /// Current token count from the session actor (updated during streaming).
+    @Published var tokenCount: Int = 0
+
+    /// Context window size in tokens (default 4096).
+    let contextWindowSize: Int = 4096
+
+    /// Warning message when context window auto-truncates old messages.
+    @Published var truncationWarning: String?
+
     // MARK: - Model Selection
 
     /// The currently selected model for this chat session.
@@ -127,6 +138,8 @@ final class ChatViewModel: ObservableObject {
                 imageData: msg.imageData
             )
         }
+        truncationWarning = nil
+        // Token count reset happens via resetTokenCount() when appropriate
     }
 
     func createNewConversation(modelID: String? = nil) async -> UUID {
@@ -198,6 +211,7 @@ final class ChatViewModel: ObservableObject {
             onToken: { [weak self] token in
                 Task { @MainActor [weak self] in
                     self?.streamingText += token
+                    self?.tokenCount += 1
                 }
             },
             onComplete: { [weak self] in
@@ -245,6 +259,25 @@ final class ChatViewModel: ObservableObject {
         if let newID {
             await loadConversation(newID)
         }
+    }
+
+    // MARK: - Truncation Warning
+
+    /// Called by the persistence layer when context window auto-truncates old messages.
+    func notifyTruncation(messageCount: Int) {
+        truncationWarning = "To stay within the context window, \(messageCount) older message\(messageCount == 1 ? " was" : "s were") removed."
+    }
+
+    /// Dismiss the truncation warning banner.
+    func dismissTruncationWarning() {
+        truncationWarning = nil
+    }
+
+    // MARK: - Token Count
+
+    /// Reset the token count (called on new conversation or model switch).
+    func resetTokenCount() {
+        tokenCount = 0
     }
 
     // MARK: - Message Actions
