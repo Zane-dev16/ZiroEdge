@@ -90,9 +90,51 @@ enum ModelRegistry {
         )
     )
 
-    // MARK: - Phase 2: Vision Models (commented out until Phase 2)
+    // MARK: - Phase 2: Vision Models
 
-    /*
+    static let gemma4_e2b = AIModel(
+        id: "gemma-4-e2b-q4",
+        displayName: "Gemma 4 E2B",
+        description: "Compact vision model. Understands images and text. Runs on most devices.",
+        modelType: .vision,
+        baseURL: URL(string: "https://huggingface.co/zanish-labs/gemma-4-e2b-q4km-gguf/resolve/main/gemma-4-e2b-Q4_K_M.gguf")!,
+        mmprojURL: URL(string: "https://huggingface.co/zanish-labs/gemma-4-e2b-q4km-gguf/resolve/main/mmproj-gemma-4-e2b-f16.gguf")!,
+        baseFileSizeBytes: 1_500_000_000,  // ~1.5 GB
+        mmprojFileSizeBytes: 200_000_000,  // ~200 MB
+        baseSHA256: "",  // TODO: fill after upload
+        mmprojSHA256: "",  // TODO: fill after upload
+        quantization: "Q4_K_M",
+        config: .gemma4,
+        minimumDeviceRAM: 3_000_000_000,  // 3 GB
+        license: LicenseInfo(
+            name: "Gemma Terms of Use",
+            url: URL(string: "https://ai.google.dev/gemma/terms")!,
+            copyright: "Copyright 2024 Google LLC"
+        )
+    )
+
+    static let gemma4_e4b = AIModel(
+        id: "gemma-4-e4b-q4",
+        displayName: "Gemma 4 E4B",
+        description: "Higher-quality vision model. Better accuracy on complex images.",
+        modelType: .vision,
+        baseURL: URL(string: "https://huggingface.co/zanish-labs/gemma-4-e4b-q4km-gguf/resolve/main/gemma-4-e4b-Q4_K_M.gguf")!,
+        mmprojURL: URL(string: "https://huggingface.co/zanish-labs/gemma-4-e4b-q4km-gguf/resolve/main/mmproj-gemma-4-e4b-f16.gguf")!,
+        baseFileSizeBytes: 2_800_000_000,  // ~2.8 GB
+        mmprojFileSizeBytes: 200_000_000,  // ~200 MB
+        baseSHA256: "",  // TODO: fill after upload
+        mmprojSHA256: "",  // TODO: fill after upload
+        quantization: "Q4_K_M",
+        config: .gemma4,
+        minimumDeviceRAM: 5_000_000_000,  // 5 GB
+        license: LicenseInfo(
+            name: "Gemma Terms of Use",
+            url: URL(string: "https://ai.google.dev/gemma/terms")!,
+            copyright: "Copyright 2024 Google LLC"
+        )
+    )
+
+    /* Reference: SmolVLM and Qwen2.5-VL (commented out)
     static let smolVLM_500M = AIModel(
         id: "smolvlm-500m-q4",
         displayName: "SmolVLM 500M",
@@ -142,7 +184,9 @@ enum ModelRegistry {
     static var allModels: [AIModel] {
         [
             llama32_3B,
-            // Phase 2: smolVLM_500M, qwen25VL_3B,
+            gemma4_e2b,
+            gemma4_e4b,
+            // Reference: smolVLM_500M, qwen25VL_3B,
         ]
     }
 
