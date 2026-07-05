@@ -163,7 +163,7 @@ actor InferenceService {
         )
     }
 
-    // MARK: - Vision Chat (Phase 2)
+    // MARK: - Vision Chat
 
     func streamVisionChat(
         messages: [ChatMessagePayload],
@@ -171,7 +171,59 @@ actor InferenceService {
         systemPrompt: String?,
         sampling: SamplingConfig
     ) async throws -> AsyncThrowingStream<String, Error> {
-        throw InferenceError.visionNotSupported
+        guard let eng = engine else {
+            throw InferenceError.modelNotLoaded
+        }
+
+        guard let config = currentConfig else {
+            throw InferenceError.modelNotLoaded
+        }
+
+        // Format prompt with <__media__> markers for each image.
+        let marker = "<__media__>"
+        let imageMarkers = images.map { _ in marker }.joined(separator: "\n")
+
+        // Format user messages, inserting image markers before user text.
+        var parts: [String] = []
+        if let systemPrompt, !systemPrompt.isEmpty {
+            parts.append("System: \(systemPrompt)")
+        }
+
+        for message in messages {
+            let rolePrefix: String
+            switch message.role {
+            case .user: rolePrefix = "User"
+            case .assistant: rolePrefix = "Assistant"
+            case .system: rolePrefix = "System"
+            }
+
+            if message.role == .user && !images.isEmpty {
+                // Insert image markers before the first user message.
+                parts.append("\(rolePrefix): \(imageMarkers)\n\(message.content)")
+            } else {
+                parts.append("\(rolePrefix): \(message.content)")
+            }
+        }
+        parts.append("Assistant:")
+        let visionPrompt = parts.joined(separator: "\n")
+
+        // Convert sampling config to SwiftLlama format.
+        let engineSampling = SamplingConfigSwift(
+            temperature: sampling.temperature,
+            topP: sampling.topP,
+            topK: sampling.topK,
+            maxTokens: sampling.maxTokens,
+            repeatPenalty: sampling.repeatPenalty
+        )
+
+        // Stream from the engine using vision completion.
+        return try await eng.streamVisionCompletion(
+            prompt: visionPrompt,
+            images: images,
+            addBos: config.addBos,
+            stopStrings: config.stopStrings,
+            sampling: engineSampling
+        )
     }
 
     // MARK: - Cancellation

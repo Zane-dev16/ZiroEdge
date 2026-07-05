@@ -129,4 +129,64 @@ final class ModelRegistryTests: XCTestCase {
         XCTAssertFalse(status.isReady)
         XCTAssertTrue(status.isDownloading)
     }
+
+    // MARK: - Vision Model Registry
+
+    func testGemma4E2BInRegistry() throws {
+        let model = ModelRegistry.model(for: "gemma-4-e2b-q4")
+        XCTAssertNotNil(model)
+        XCTAssertEqual(model?.displayName, "Gemma 4 E2B")
+        XCTAssertEqual(model?.modelType, .vision)
+        XCTAssertTrue(model?.requiresMMProj ?? false)
+        XCTAssertNotNil(model?.mmprojURL)
+        XCTAssertEqual(model?.quantization, "Q4_K_M")
+    }
+
+    func testGemma4E4BInRegistry() throws {
+        let model = ModelRegistry.model(for: "gemma-4-e4b-q4")
+        XCTAssertNotNil(model)
+        XCTAssertEqual(model?.displayName, "Gemma 4 E4B")
+        XCTAssertEqual(model?.modelType, .vision)
+        XCTAssertTrue(model?.requiresMMProj ?? false)
+        XCTAssertNotNil(model?.mmprojURL)
+    }
+
+    func testGemma4Config() throws {
+        let config = ModelConfiguration.gemma4
+        XCTAssertTrue(config.addBos == true)
+        XCTAssertTrue(config.stopStrings.contains("<end_of_turn>"))
+        XCTAssertEqual(config.contextLength, 4096)
+        XCTAssertEqual(config.threadCount, 2)
+        XCTAssertTrue(config.useMmap)
+        XCTAssertTrue(config.f16KV)
+        XCTAssertEqual(config.gpuLayers, 0)
+    }
+
+    func testVisionModelDownloadStatusBothNeeded() throws {
+        // Vision model needs both base and mmproj downloaded.
+        let status = ModelDownloadStatus(
+            baseState: .downloaded,
+            mmprojState: .notDownloaded
+        )
+        XCTAssertFalse(status.isReady)
+        XCTAssertFalse(status.isDownloading)
+    }
+
+    func testVisionModelDownloadStatusBothReady() throws {
+        let status = ModelDownloadStatus(
+            baseState: .downloaded,
+            mmprojState: .downloaded
+        )
+        XCTAssertTrue(status.isReady)
+    }
+
+    func testVisionModelsHaveMMProjURL() throws {
+        let visionModels = ModelRegistry.allModels.filter { $0.modelType == .vision }
+        XCTAssertFalse(visionModels.isEmpty)
+        for model in visionModels {
+            XCTAssertNotNil(model.mmprojURL, "\(model.id) should have mmprojURL")
+            XCTAssertTrue(model.requiresMMProj, "\(model.id) should require mmproj")
+            XCTAssertNotNil(model.mmprojFileSizeBytes, "\(model.id) should have mmproj size")
+        }
+    }
 }
