@@ -98,11 +98,11 @@ enum ModelRegistry {
         description: "Compact vision model. Understands images and text. Runs on most devices.",
         modelType: .vision,
         baseURL: URL(string: "https://huggingface.co/zanish-labs/gemma-4-e2b-q4km-gguf/resolve/main/gemma-4-e2b-Q4_K_M.gguf")!,
-        mmprojURL: URL(string: "https://huggingface.co/zanish-labs/gemma-4-e2b-q4km-gguf/resolve/main/mmproj-gemma-4-e2b-f16.gguf")!,
+        mmprojURL: URL(string: "https://huggingface.co/zanish-labs/gemma-4-e2b-q4km-gguf/resolve/main/mmproj-gemma-4-E2B-it-Q8_0.gguf")!,
         baseFileSizeBytes: 1_500_000_000,  // ~1.5 GB
-        mmprojFileSizeBytes: 200_000_000,  // ~200 MB
-        baseSHA256: "",  // TODO: fill after upload
-        mmprojSHA256: "",  // TODO: fill after upload
+        mmprojFileSizeBytes: 557_367_776,  // 532 MB
+        baseSHA256: "",  // TODO: fill after base GGUF upload
+        mmprojSHA256: "8a82e0fd831bb7cb5c8898b86393eb14042986b950a60e1034bf21d061aac8a8",
         quantization: "Q4_K_M",
         config: .gemma4,
         minimumDeviceRAM: 3_000_000_000,  // 3 GB
@@ -119,11 +119,11 @@ enum ModelRegistry {
         description: "Higher-quality vision model. Better accuracy on complex images.",
         modelType: .vision,
         baseURL: URL(string: "https://huggingface.co/zanish-labs/gemma-4-e4b-q4km-gguf/resolve/main/gemma-4-e4b-Q4_K_M.gguf")!,
-        mmprojURL: URL(string: "https://huggingface.co/zanish-labs/gemma-4-e4b-q4km-gguf/resolve/main/mmproj-gemma-4-e4b-f16.gguf")!,
+        mmprojURL: URL(string: "https://huggingface.co/zanish-labs/gemma-4-e4b-q4km-gguf/resolve/main/mmproj-gemma-4-E4B-it-Q8_0.gguf")!,
         baseFileSizeBytes: 2_800_000_000,  // ~2.8 GB
-        mmprojFileSizeBytes: 200_000_000,  // ~200 MB
-        baseSHA256: "",  // TODO: fill after upload
-        mmprojSHA256: "",  // TODO: fill after upload
+        mmprojFileSizeBytes: 559_874_528,  // 534 MB
+        baseSHA256: "",  // TODO: fill after base GGUF upload
+        mmprojSHA256: "51d4b7fd825e4569f746b200fccc5332bf914e8ef7cbe447272ce4fec6df3db6",
         quantization: "Q4_K_M",
         config: .gemma4,
         minimumDeviceRAM: 5_000_000_000,  // 5 GB
