@@ -103,6 +103,19 @@ struct ModelConfiguration: Sendable, Hashable {
         gpuLayers: 0
     )
 
+    /// Gemma 4 — vision model, chat template. Requires BOS token.
+    static let gemma4 = ModelConfiguration(
+        promptPath: .chatTemplate,
+        addBos: true,  // Gemma requires BOS
+        stopStrings: ["<end_of_turn>"],
+        defaultSampling: .default,
+        contextLength: 4096,
+        threadCount: 2,
+        useMmap: true,
+        f16KV: true,
+        gpuLayers: 0
+    )
+
     /// Qwen 2.5-VL — vision model, chat template. (Phase 2)
     static let qwen25VL = ModelConfiguration(
         promptPath: .chatTemplate,
