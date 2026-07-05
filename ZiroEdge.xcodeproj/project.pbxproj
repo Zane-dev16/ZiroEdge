@@ -13,6 +13,7 @@
 		15557FE21A9C5AA0E6C0D7F4 /* ChatViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 131AF1296FE8159E5BB62C66 /* ChatViewModel.swift */; };
 		1C77718F3B72419B8A52CF4F /* ModelConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7044843F74D3DFA5866FAE2A /* ModelConfiguration.swift */; };
 		2719DC8CC5A35303DEBCE087 /* MarkdownRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = F03FA017D9AEE4B5C0E767AB /* MarkdownRenderer.swift */; };
+		29C2A06C84E43429A9F12FE8 /* OnboardingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77A73CB5F7DF9A18FB81AEB7 /* OnboardingTests.swift */; };
 		2C878BA3E33E33B0E924C2F6 /* ModelsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E0B9A355538CEEC86556BE7 /* ModelsView.swift */; };
 		440F7439971AAA8FB6656BA9 /* SettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED2E070DA570B0177707CC77 /* SettingsTests.swift */; };
 		46DCCA8DB4F98237136EF9F2 /* CDChatMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6095A8B796761917100D204 /* CDChatMessage.swift */; };
@@ -37,6 +38,7 @@
 		D26F8126CA19402867419108 /* SwiftLlama in Frameworks */ = {isa = PBXBuildFile; productRef = 274CD038517DAD0AD555717B /* SwiftLlama */; };
 		D8C473BCD87EF3F718E716A2 /* ModelsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A623A7B1E1E06B4160F44CA /* ModelsViewModel.swift */; };
 		D9D786618CFC80762E436914 /* CDConversation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BEC15C6D7B950F3212F5EDE /* CDConversation.swift */; };
+		ED50EBFCC3F26D8C0912AB70 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14951210F8F3234E8EE9ACF8 /* OnboardingView.swift */; };
 		F308DB4C6A26B32606DFBBDF /* ConversationListViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7AEBED57984673F2549AD67F /* ConversationListViewModel.swift */; };
 		FAFB727A010ED8FB1963778B /* DownloadState.swift in Sources */ = {isa = PBXBuildFile; fileRef = C09C23838F2034257261C411 /* DownloadState.swift */; };
 /* End PBXBuildFile section */
@@ -55,6 +57,7 @@
 		055D135A1B4377C36387DB65 /* MessageBubble.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageBubble.swift; sourceTree = "<group>"; };
 		0E0B9A355538CEEC86556BE7 /* ModelsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelsView.swift; sourceTree = "<group>"; };
 		131AF1296FE8159E5BB62C66 /* ChatViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatViewModel.swift; sourceTree = "<group>"; };
+		14951210F8F3234E8EE9ACF8 /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
 		161D5CDD092CE900F86A4FBB /* swift-llama-cpp */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "swift-llama-cpp"; path = "Packages/swift-llama-cpp"; sourceTree = SOURCE_ROOT; };
 		236A2AA96610397D2CDDD6D3 /* DownloadManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadManager.swift; sourceTree = "<group>"; };
 		32A1B26312450DA02CEE7FAB /* AIModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIModel.swift; sourceTree = "<group>"; };
@@ -68,6 +71,7 @@
 		7044843F74D3DFA5866FAE2A /* ModelConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelConfiguration.swift; sourceTree = "<group>"; };
 		758DF316AD8A2A2D5AFED339 /* SidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarView.swift; sourceTree = "<group>"; };
 		77A1DFD8E4FF33431EFA9A36 /* ZiroEdgeTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = ZiroEdgeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		77A73CB5F7DF9A18FB81AEB7 /* OnboardingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingTests.swift; sourceTree = "<group>"; };
 		7AEBED57984673F2549AD67F /* ConversationListViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationListViewModel.swift; sourceTree = "<group>"; };
 		7BEC15C6D7B950F3212F5EDE /* CDConversation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CDConversation.swift; sourceTree = "<group>"; };
 		8DCD7FFE76AE246F76E8AB1D /* ZiroEdgeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZiroEdgeApp.swift; sourceTree = "<group>"; };
@@ -131,6 +135,7 @@
 				055D135A1B4377C36387DB65 /* MessageBubble.swift */,
 				387DC457818126F788BDBB8A /* ModelDetailView.swift */,
 				0E0B9A355538CEEC86556BE7 /* ModelsView.swift */,
+				14951210F8F3234E8EE9ACF8 /* OnboardingView.swift */,
 				758DF316AD8A2A2D5AFED339 /* SidebarView.swift */,
 			);
 			path = Views;
@@ -203,6 +208,7 @@
 				FA32FFB006B54EC9A7AA1AE3 /* MemoryBudgeterTests.swift */,
 				6A5A18C444159747CDBEDD3D /* ModelPickerTests.swift */,
 				DDB90E3A144D9EADA2BDCE0F /* ModelRegistryTests.swift */,
+				77A73CB5F7DF9A18FB81AEB7 /* OnboardingTests.swift */,
 				485FDC26529D0AF9B6E09E0B /* PersistenceTests.swift */,
 				ED2E070DA570B0177707CC77 /* SettingsTests.swift */,
 			);
@@ -323,6 +329,7 @@
 				0AEEB732E41AE9B81B1DA740 /* MemoryBudgeterTests.swift in Sources */,
 				6E284EC7281342E8F5C26AFC /* ModelPickerTests.swift in Sources */,
 				7F679331426B11EBE8B58121 /* ModelRegistryTests.swift in Sources */,
+				29C2A06C84E43429A9F12FE8 /* OnboardingTests.swift in Sources */,
 				6B18737E73095D7D03349865 /* PersistenceTests.swift in Sources */,
 				440F7439971AAA8FB6656BA9 /* SettingsTests.swift in Sources */,
 			);
@@ -351,6 +358,7 @@
 				1507609D093100805E69B6B6 /* ModelLifecycleManager.swift in Sources */,
 				2C878BA3E33E33B0E924C2F6 /* ModelsView.swift in Sources */,
 				D8C473BCD87EF3F718E716A2 /* ModelsViewModel.swift in Sources */,
+				ED50EBFCC3F26D8C0912AB70 /* OnboardingView.swift in Sources */,
 				55ECB21E11A53ED61566ABBD /* PersistenceController.swift in Sources */,
 				60C967DB6554E4D13427C941 /* SidebarView.swift in Sources */,
 				B298DF37B1DEC3EAC1F7A6F4 /* ZiroEdgeApp.swift in Sources */,
