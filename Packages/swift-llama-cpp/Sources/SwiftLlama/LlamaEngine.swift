@@ -21,6 +21,7 @@ public actor LlamaEngine {
     private var model: OpaquePointer?
     private var context: OpaquePointer?
     private var vocabulary: OpaquePointer?
+    private var mtmdCtx: OpaquePointer?
     private let config: LlamaConfigSwift
     private var isCancelled = false
     private var eosTokenID: llama_token = -1
@@ -64,6 +65,19 @@ public actor LlamaEngine {
         }
         context = ctx
 
+        // Initialize multimodal context if mmprojPath is provided.
+        if let mmprojPath = config.mmprojPath {
+            var mtmdParams = mtmd_context_params_default()
+            mtmdParams.n_threads = Int32(config.threadCount)
+            mtmdParams.use_gpu = false  // CPU-only for v1
+            mtmdCtx = mtmd_init_from_file(mmprojPath, loadedModel, mtmdParams)
+            if mtmdCtx != nil {
+                logger.info("Multimodal context initialized: \(mmprojPath, privacy: .public)")
+            } else {
+                logger.warning("Failed to initialize mtmd context for: \(mmprojPath, privacy: .public)")
+            }
+        }
+
         logger.info("Model loaded: \(config.modelPath, privacy: .public) ctx=\(config.contextLength) threads=\(config.threadCount)")
     }
 
@@ -78,6 +92,10 @@ public actor LlamaEngine {
     }
 
     private func unloadSync() {
+        if let m = mtmdCtx {
+            mtmd_free(m)
+            mtmdCtx = nil
+        }
         if let ctx = context {
             llama_free(ctx)
             context = nil
@@ -177,6 +195,158 @@ public actor LlamaEngine {
                         if shouldStop { break }
 
                         // Yield token.
+                        continuation.yield(tokenText)
+
+                        // Evaluate single token.
+                        var evalBatch = llama_batch_init(1, 0, 1)
+                        evalBatch.token[0] = newTokenID
+                        evalBatch.pos[0] = nPos
+                        evalBatch.n_seq_id[0] = 1
+                        evalBatch.seq_id[0] = UnsafeMutablePointer.allocate(capacity: 1)
+                        evalBatch.seq_id[0]!.pointee = 0
+                        evalBatch.logits[0] = 1
+                        evalBatch.n_tokens = 1
+
+                        if llama_decode(ctx, evalBatch) != 0 {
+                            evalBatch.seq_id[0]?.deallocate()
+                            llama_batch_free(evalBatch)
+                            throw LlamaError.decodeFailed
+                        }
+
+                        evalBatch.seq_id[0]?.deallocate()
+                        llama_batch_free(evalBatch)
+                        nPos += 1
+                    }
+
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
+    }
+
+    // MARK: - Streaming Vision Completion
+
+    public func streamVisionCompletion(
+        prompt: String,
+        images: [Data],
+        addBos: Bool?,
+        stopStrings: [String],
+        sampling: SamplingConfigSwift
+    ) throws -> AsyncThrowingStream<String, Error> {
+        guard let ctx = context, let vocab = vocabulary else {
+            throw LlamaError.modelNotLoaded
+        }
+        guard let mCtx = mtmdCtx else {
+            throw LlamaError.visionNotSupported
+        }
+
+        isCancelled = false
+
+        return AsyncThrowingStream<String, Error> { continuation in
+            Task {
+                do {
+                    // Create bitmaps from image data.
+                    var bitmaps: [OpaquePointer?] = []
+                    defer {
+                        for bmp in bitmaps {
+                            if let b = bmp { mtmd_bitmap_free(b) }
+                        }
+                    }
+
+                    for imageData in images {
+                        var wrapper = mtmd_helper_bitmap_wrapper(bitmap: nil, video_ctx: nil)
+                        imageData.withUnsafeBytes { rawPtr in
+                            if let addr = rawPtr.baseAddress {
+                                wrapper = mtmd_helper_bitmap_init_from_buf(
+                                    mCtx,
+                                    addr.assumingMemoryBound(to: UInt8.self),
+                                    imageData.count,
+                                    false
+                                )
+                            }
+                        }
+                        guard let bitmap = wrapper.bitmap else {
+                            throw LlamaError.visionImageLoadFailed
+                        }
+                        bitmaps.append(bitmap)
+                    }
+
+                    // Build input text struct.
+                    var inputText = mtmd_input_text(
+                        text: nil,
+                        add_special: addBos ?? true,
+                        parse_special: true
+                    )
+
+                    // Create input chunks.
+                    guard let chunks = mtmd_input_chunks_init() else {
+                        throw LlamaError.tokenizationFailed
+                    }
+                    defer { mtmd_input_chunks_free(chunks) }
+
+                    // Tokenize prompt with image markers.
+                    var bitmapPtrs = bitmaps
+                    let tokenizeResult = prompt.withCString { cstr in
+                        inputText.text = cstr
+                        return bitmapPtrs.withUnsafeMutableBufferPointer { bufPtr in
+                            mtmd_tokenize(mCtx, chunks, &inputText, bufPtr.baseAddress, images.count)
+                        }
+                    }
+
+                    guard tokenizeResult == 0 else {
+                        throw LlamaError.tokenizationFailed
+                    }
+
+                    // Clear KV memory.
+                    let mem = llama_get_memory(ctx)
+                    llama_memory_clear(mem, true)
+
+                    // Evaluate all chunks (text + image embeddings).
+                    var newNPast: llama_pos = 0
+                    let evalResult = mtmd_helper_eval_chunks(
+                        mCtx,
+                        ctx,
+                        chunks,
+                        0,                           // n_past = 0 (fresh start)
+                        0,                           // seq_id = 0
+                        Int32(config.contextLength),  // n_batch
+                        true,                        // logits_last = true
+                        &newNPast
+                    )
+
+                    guard evalResult == 0 else {
+                        throw LlamaError.decodeFailed
+                    }
+
+                    // Create sampler chain.
+                    let sampler = try createSamplerChain(sampling: sampling, vocab: vocab)
+                    defer { llama_sampler_free(sampler) }
+
+                    // Generate tokens (same autoregressive loop as streamCompletion).
+                    var nPos = newNPast
+                    var generatedText = ""
+
+                    while nPos < Int32(config.contextLength) {
+                        if self.isCancelled || Task.isCancelled { break }
+
+                        let newTokenID = llama_sampler_sample(sampler, ctx, -1)
+
+                        if newTokenID == self.eosTokenID { break }
+
+                        let tokenText = tokenToText(token: newTokenID, vocab: vocab)
+                        generatedText += tokenText
+
+                        var shouldStop = false
+                        for stop in stopStrings {
+                            if generatedText.hasSuffix(stop) {
+                                shouldStop = true
+                                break
+                            }
+                        }
+                        if shouldStop { break }
+
                         continuation.yield(tokenText)
 
                         // Evaluate single token.
@@ -345,6 +515,8 @@ public enum LlamaError: Error, LocalizedError {
     case tokenizationFailed
     case decodeFailed
     case samplerCreationFailed
+    case visionNotSupported
+    case visionImageLoadFailed
 
     public var errorDescription: String? {
         switch self {
@@ -354,6 +526,8 @@ public enum LlamaError: Error, LocalizedError {
         case .tokenizationFailed: return "Failed to tokenize input text."
         case .decodeFailed: return "Token decoding failed."
         case .samplerCreationFailed: return "Failed to create sampler chain."
+        case .visionNotSupported: return "Vision inference is not supported. No multimodal projector loaded."
+        case .visionImageLoadFailed: return "Failed to load image for vision inference."
         }
     }
 }
