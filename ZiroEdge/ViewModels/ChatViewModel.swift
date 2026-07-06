@@ -169,12 +169,6 @@ final class ChatViewModel: ObservableObject {
         // Allow sending with images only (no text) or text only, but not empty both.
         guard !text.isEmpty || hasImages else { return }
 
-        // Graceful degradation: reject images with text-only model.
-        if hasImages && !isVisionModel {
-            visionWarning = "Vision not supported with text-only model. Switch to a vision model."
-            return
-        }
-
         // Auto-select model if none selected.
         if selectedModel == nil {
             autoSelectModel()
@@ -182,6 +176,12 @@ final class ChatViewModel: ObservableObject {
 
         guard selectedModel != nil else {
             needsModelRedirect = true
+            return
+        }
+
+        // Graceful degradation: reject images with text-only model.
+        if hasImages && !isVisionModel {
+            visionWarning = "Vision not supported with text-only model. Switch to a vision model."
             return
         }
 
