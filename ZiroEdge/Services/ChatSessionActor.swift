@@ -128,6 +128,94 @@ actor ChatSessionActor {
         cancelInternal()
     }
 
+    // MARK: - Vision Stream
+
+    /// Start streaming a vision response with images. Cancels any in-progress stream.
+    func startVisionStream(
+        conversationID: UUID,
+        messages: [ChatMessagePayload],
+        images: [Data],
+        systemPrompt: String?,
+        sampling: SamplingConfig,
+        onToken: @Sendable @escaping (String) -> Void,
+        onComplete: @Sendable @escaping () -> Void,
+        onError: @Sendable @escaping (Error) -> Void
+    ) {
+        // Cancel existing stream.
+        cancelInternal()
+
+        isCancelled = false
+        isStreaming = true
+
+        let infService = inferenceService
+        let persist = persistence
+        let selfRef = self
+        let capturedImages = images
+
+        currentStream = Task { [weak self] in
+            guard let self else { return }
+
+            // Create the streaming message.
+            let messageID = await persist.beginStreamingMessage(conversationID: conversationID)
+
+            guard let messageID else {
+                await MainActor.run { onError(ChatSessionError.persistenceFailure) }
+                await selfRef.setStreaming(false)
+                return
+            }
+
+            await selfRef.setActiveMessageID(messageID)
+
+            do {
+                let stream = try await infService.streamVisionChat(
+                    messages: messages,
+                    images: capturedImages,
+                    systemPrompt: systemPrompt,
+                    sampling: sampling
+                )
+
+                for try await token in stream {
+                    // Check cancellation.
+                    let cancelled = await selfRef.getIsCancelled()
+                    if Task.isCancelled || cancelled {
+                        await persist.cancelStreamingMessage(messageID: messageID)
+                        await MainActor.run { onComplete() }
+                        await selfRef.setStreaming(false)
+                        await selfRef.setActiveMessageID(nil)
+                        return
+                    }
+
+                    // Buffer token.
+                    await persist.bufferTokens(messageID: messageID, tokens: token)
+
+                    // Notify UI.
+                    await MainActor.run { onToken(token) }
+
+                    await selfRef.incrementTokenCount()
+                }
+
+                // Stream completed.
+                await persist.endStreamingMessage(messageID: messageID)
+                await selfRef.setActiveMessageID(nil)
+                await selfRef.setStreaming(false)
+                await MainActor.run { onComplete() }
+
+            } catch {
+                let cancelled = await selfRef.getIsCancelled()
+                if Task.isCancelled || cancelled {
+                    await persist.cancelStreamingMessage(messageID: messageID)
+                    await MainActor.run { onComplete() }
+                } else {
+                    self.logger.error("Vision stream error: \(error.localizedDescription, privacy: .public)")
+                    await persist.cancelStreamingMessage(messageID: messageID)
+                    await MainActor.run { onError(error) }
+                }
+                await selfRef.setActiveMessageID(nil)
+                await selfRef.setStreaming(false)
+            }
+        }
+    }
+
     // MARK: - Actor-isolated helpers
 
     private func cancelInternal() {
