@@ -128,23 +128,6 @@ struct ChatView: View {
         }
         .navigationTitle("ZiroEdge")
         .navigationBarTitleDisplayMode(.inline)
-        .onPasteCommand(of: [.image]) { providers in
-            guard viewModel.isVisionModel else {
-                viewModel.visionWarning = "Vision not supported with text-only model. Switch to a vision model."
-                return
-            }
-            for provider in providers {
-                if provider.hasItemConformingToTypeIdentifier("public.image") {
-                    provider.loadDataRepresentation(forTypeIdentifier: "public.image") { data, _ in
-                        if let data {
-                            Task { @MainActor in
-                                viewModel.addImage(data)
-                            }
-                        }
-                    }
-                }
-            }
-        }
         .toolbar {
             ToolbarItem(placement: .principal) {
                 VStack(spacing: 0) {
@@ -239,6 +222,16 @@ struct ChatView: View {
                             selectedPhotos.removeAll()
                         }
                     }
+
+                    // Paste button — paste image from clipboard.
+                    Button {
+                        viewModel.pasteImage()
+                    } label: {
+                        Image(systemName: "doc.on.clipboard")
+                            .font(.system(size: 22))
+                            .foregroundStyle(Color.accentColor)
+                    }
+                    .disabled(!UIPasteboard.general.hasImages)
                 }
 
                 // Send / Stop button.
