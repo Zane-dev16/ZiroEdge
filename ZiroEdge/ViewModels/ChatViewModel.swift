@@ -31,6 +31,14 @@ final class ChatViewModel: ObservableObject {
     /// Current token count from the session actor (updated during streaming).
     @Published var tokenCount: Int = 0
 
+    // MARK: - Image Attachment State
+
+    /// Pending images attached to the current input. Cleared after sending.
+    @Published var pendingImages: [Data] = []
+
+    /// Warning shown when user tries to send images with a text-only model.
+    @Published var visionWarning: String?
+
     /// Context window size in tokens (default 4096).
     let contextWindowSize: Int = 4096
 
@@ -156,7 +164,10 @@ final class ChatViewModel: ObservableObject {
 
     func sendMessage() async {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
+        let hasImages = !pendingImages.isEmpty
+
+        // Allow sending with images only (no text) or text only, but not empty both.
+        guard !text.isEmpty || hasImages else { return }
 
         // Auto-select model if none selected.
         if selectedModel == nil {
@@ -165,6 +176,12 @@ final class ChatViewModel: ObservableObject {
 
         guard selectedModel != nil else {
             needsModelRedirect = true
+            return
+        }
+
+        // Graceful degradation: reject images with text-only model.
+        if hasImages && !isVisionModel {
+            visionWarning = "Vision not supported with text-only model. Switch to a vision model."
             return
         }
 
@@ -182,17 +199,21 @@ final class ChatViewModel: ObservableObject {
 
         inputText = ""
 
+        // Capture images before clearing; store first image for persistence (v1 single-image field).
+        let imagesToSend = hasImages ? pendingImages : []
+
         guard await persistence.insertMessage(
             conversationID: conversationID,
             role: .user,
-            content: text
+            content: text,
+            imageData: hasImages ? pendingImages.first : nil
         ) != nil else {
             errorMessage = "Failed to save message."
             showError = true
             return
         }
 
-        let userPayload = ChatMessagePayload(role: .user, content: text)
+        let userPayload = ChatMessagePayload(role: .user, content: text, imageData: hasImages ? pendingImages.first : nil)
         messages.append(userPayload)
 
         let history = messages.map { msg in
@@ -202,41 +223,61 @@ final class ChatViewModel: ObservableObject {
         isStreaming = true
         streamingText = ""
         errorMessage = nil
+        visionWarning = nil
 
-        await sessionActor.startStream(
-            conversationID: conversationID,
-            messages: history,
-            systemPrompt: nil,
-            sampling: .default,
-            onToken: { [weak self] token in
-                Task { @MainActor [weak self] in
-                    self?.streamingText += token
-                    self?.tokenCount += 1
-                }
-            },
-            onComplete: { [weak self] in
-                Task { @MainActor [weak self] in
-                    guard let self else { return }
-                    self.isStreaming = false
-                    if !self.streamingText.isEmpty {
-                        let assistantPayload = ChatMessagePayload(role: .assistant, content: self.streamingText)
-                        self.messages.append(assistantPayload)
-                    }
-                    self.streamingText = ""
-                    await self.loadConversation(conversationID)
-                }
-            },
-            onError: { [weak self] error in
-                Task { @MainActor [weak self] in
-                    guard let self else { return }
-                    self.isStreaming = false
-                    self.streamingText = ""
-                    self.errorMessage = error.localizedDescription
-                    self.showError = true
-                    await self.loadConversation(conversationID)
-                }
+        // Token/completion callbacks shared by both paths.
+        let onToken: @Sendable (String) -> Void = { [weak self] token in
+            Task { @MainActor [weak self] in
+                self?.streamingText += token
+                self?.tokenCount += 1
             }
-        )
+        }
+        let onComplete: @Sendable () -> Void = { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.isStreaming = false
+                if !self.streamingText.isEmpty {
+                    let assistantPayload = ChatMessagePayload(role: .assistant, content: self.streamingText)
+                    self.messages.append(assistantPayload)
+                }
+                self.streamingText = ""
+                await self.loadConversation(conversationID)
+            }
+        }
+        let onError: @Sendable (Error) -> Void = { [weak self] error in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.isStreaming = false
+                self.streamingText = ""
+                self.errorMessage = error.localizedDescription
+                self.showError = true
+                await self.loadConversation(conversationID)
+            }
+        }
+
+        if hasImages {
+            await sessionActor.startVisionStream(
+                conversationID: conversationID,
+                messages: history,
+                images: imagesToSend,
+                systemPrompt: nil,
+                sampling: .default,
+                onToken: onToken,
+                onComplete: onComplete,
+                onError: onError
+            )
+        } else {
+            await sessionActor.startStream(
+                conversationID: conversationID,
+                messages: history,
+                systemPrompt: nil,
+                sampling: .default,
+                onToken: onToken,
+                onComplete: onComplete,
+                onError: onError
+            )
+        }
+        clearImages()
     }
 
     func cancelStream() async {
@@ -284,5 +325,43 @@ final class ChatViewModel: ObservableObject {
 
     func copyMessage(_ message: ChatMessagePayload) {
         UIPasteboard.general.string = message.content
+    }
+
+    // MARK: - Image Attachment
+
+    /// Add an image to the pending attachments.
+    func addImage(_ data: Data) {
+        pendingImages.append(data)
+        visionWarning = nil
+    }
+
+    /// Remove an image at the specified index.
+    func removeImage(at index: Int) {
+        guard pendingImages.indices.contains(index) else { return }
+        pendingImages.remove(at: index)
+    }
+
+    /// Clear all pending images.
+    func clearImages() {
+        pendingImages.removeAll()
+        visionWarning = nil
+    }
+
+    /// Attempt to paste an image from the clipboard.
+    /// Returns true if an image was found and added.
+    @discardableResult
+    func pasteImage() -> Bool {
+        guard UIPasteboard.general.hasImages,
+              let image = UIPasteboard.general.image,
+              let data = image.pngData() else {
+            return false
+        }
+        addImage(data)
+        return true
+    }
+
+    /// Whether the currently selected model supports vision.
+    var isVisionModel: Bool {
+        selectedModel?.modelType == .vision
     }
 }

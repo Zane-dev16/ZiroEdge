@@ -5,12 +5,14 @@
 // streaming display, stop button, and model picker.
 
 import SwiftUI
+import PhotosUI
 
 struct ChatView: View {
     @ObservedObject var viewModel: ChatViewModel
     @State private var scrollProxy: ScrollViewProxy?
     @FocusState private var isInputFocused: Bool
     @State private var hasScrolledUp: Bool = false
+    @State private var selectedPhotos: [PhotosPickerItem] = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -116,6 +118,11 @@ struct ChatView: View {
                 truncationBanner(warning)
             }
 
+            // Vision warning banner.
+            if let warning = viewModel.visionWarning {
+                visionWarningBanner(warning)
+            }
+
             // Input bar with model picker.
             inputBar
         }
@@ -172,7 +179,12 @@ struct ChatView: View {
             .padding(.top, 6)
             .padding(.bottom, 4)
 
-            // Text input + send/stop.
+            // Image preview row (shown when images are attached).
+            if !viewModel.pendingImages.isEmpty {
+                imagePreviewRow
+            }
+
+            // Text input + photo picker + send/stop.
             HStack(alignment: .bottom, spacing: 12) {
                 // Text input.
                 TextField("Message ZiroEdge...", text: $viewModel.inputText, axis: .vertical)
@@ -188,6 +200,39 @@ struct ChatView: View {
                             Task { await viewModel.sendMessage() }
                         }
                     }
+
+                // Photo picker button (vision models only).
+                if viewModel.isVisionModel {
+                    PhotosPicker(
+                        selection: $selectedPhotos,
+                        maxSelectionCount: 10,
+                        matching: .images
+                    ) {
+                        Image(systemName: "photo.on.rectangle")
+                            .font(.system(size: 24))
+                            .foregroundStyle(Color.accentColor)
+                    }
+                    .onChange(of: selectedPhotos) { _, newItems in
+                        Task {
+                            for item in newItems {
+                                if let data = try? await item.loadTransferable(type: Data.self) {
+                                    viewModel.addImage(data)
+                                }
+                            }
+                            selectedPhotos.removeAll()
+                        }
+                    }
+
+                    // Paste button — paste image from clipboard.
+                    Button {
+                        viewModel.pasteImage()
+                    } label: {
+                        Image(systemName: "doc.on.clipboard")
+                            .font(.system(size: 22))
+                            .foregroundStyle(Color.accentColor)
+                    }
+                    .disabled(!UIPasteboard.general.hasImages)
+                }
 
                 // Send / Stop button.
                 Button(action: {
@@ -209,6 +254,40 @@ struct ChatView: View {
             .padding(.vertical, 10)
         }
         .background(.bar)
+    }
+
+    // MARK: - Image Preview Row
+
+    /// Horizontal scroll of image thumbnails before sending.
+    private var imagePreviewRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(Array(viewModel.pendingImages.enumerated()), id: \.offset) { index, imageData in
+                    if let uiImage = UIImage(data: imageData) {
+                        ZStack(alignment: .topTrailing) {
+                            Image(uiImage: uiImage)
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: 60, height: 60)
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                            // Remove button.
+                            Button {
+                                viewModel.removeImage(at: index)
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.system(size: 18))
+                                    .foregroundStyle(.white)
+                                    .shadow(color: .black.opacity(0.4), radius: 2)
+                            }
+                            .offset(x: 4, y: -4)
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 6)
+        }
     }
 
     // MARK: - Model Picker
@@ -309,6 +388,26 @@ struct ChatView: View {
         .background(Color.orange.opacity(0.1))
     }
 
+    // MARK: - Vision Warning Banner
+
+    private func visionWarningBanner(_ message: String) -> some View {
+        HStack {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.orange)
+            Spacer()
+            Button("Dismiss") {
+                viewModel.visionWarning = nil
+            }
+            .font(.caption)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(Color.orange.opacity(0.1))
+    }
+
     // MARK: - Token Count Badge
 
     private var tokenCountBadge: some View {
@@ -334,6 +433,7 @@ struct ChatView: View {
 
     private var canSend: Bool {
         !viewModel.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !viewModel.pendingImages.isEmpty
     }
 
     private func scrollToBottom(_ proxy: ScrollViewProxy) {
