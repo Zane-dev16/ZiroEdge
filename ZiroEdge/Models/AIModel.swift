@@ -97,11 +97,11 @@ enum ModelRegistry {
         displayName: "Gemma 4 E2B",
         description: "Compact vision model. Understands images and text. Runs on most devices.",
         modelType: .vision,
-        baseURL: URL(string: "https://huggingface.co/zanish-labs/gemma-4-e2b-q4km-gguf/resolve/main/gemma-4-e2b-Q4_K_M.gguf")!,
+        baseURL: URL(string: "https://huggingface.co/zanish-labs/gemma-4-e2b-q4km-gguf/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf")!,
         mmprojURL: URL(string: "https://huggingface.co/zanish-labs/gemma-4-e2b-q4km-gguf/resolve/main/mmproj-gemma-4-E2B-it-Q8_0.gguf")!,
-        baseFileSizeBytes: 1_500_000_000,  // ~1.5 GB
+        baseFileSizeBytes: 3_427_861_088,  // 3.19 GB
         mmprojFileSizeBytes: 557_367_776,  // 532 MB
-        baseSHA256: "",  // TODO: fill after base GGUF upload
+        baseSHA256: "8580ede90c6a7fdd5bfee2c016b3a7601d471895b192a0fddaf655d577b12e3b",
         mmprojSHA256: "8a82e0fd831bb7cb5c8898b86393eb14042986b950a60e1034bf21d061aac8a8",
         quantization: "Q4_K_M",
         config: .gemma4,
@@ -118,11 +118,11 @@ enum ModelRegistry {
         displayName: "Gemma 4 E4B",
         description: "Higher-quality vision model. Better accuracy on complex images.",
         modelType: .vision,
-        baseURL: URL(string: "https://huggingface.co/zanish-labs/gemma-4-e4b-q4km-gguf/resolve/main/gemma-4-e4b-Q4_K_M.gguf")!,
+        baseURL: URL(string: "https://huggingface.co/zanish-labs/gemma-4-e4b-q4km-gguf/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf")!,
         mmprojURL: URL(string: "https://huggingface.co/zanish-labs/gemma-4-e4b-q4km-gguf/resolve/main/mmproj-gemma-4-E4B-it-Q8_0.gguf")!,
-        baseFileSizeBytes: 2_800_000_000,  // ~2.8 GB
+        baseFileSizeBytes: 5_335_273_056,  // 4.97 GB
         mmprojFileSizeBytes: 559_874_528,  // 534 MB
-        baseSHA256: "",  // TODO: fill after base GGUF upload
+        baseSHA256: "9d23b7b4cd3c6c6c9ffadd7a9b1e16448621005b80a803e85afa3ca2c48714e3",
         mmprojSHA256: "51d4b7fd825e4569f746b200fccc5332bf914e8ef7cbe447272ce4fec6df3db6",
         quantization: "Q4_K_M",
         config: .gemma4,
