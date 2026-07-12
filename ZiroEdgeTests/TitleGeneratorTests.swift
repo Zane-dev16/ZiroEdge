@@ -11,7 +11,9 @@ import XCTest
 
 /// A mock InferenceServiceProtocol that returns a pre-configured stream
 /// or throws an error. Used for testing TitleGenerator without a real model.
-actor MockInferenceServiceForTitle: InferenceServiceProtocol {
+/// Uses @unchecked Sendable (class) instead of actor to avoid actor-conformance
+/// isolation issues with the protocol's synchronous methods.
+final class MockInferenceServiceForTitle: InferenceServiceProtocol, @unchecked Sendable {
 
     var isModelLoaded: Bool = true
     var loadedModelID: String? = "mock-model"
