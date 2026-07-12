@@ -62,6 +62,7 @@ struct ZiroEdgeApp: App {
             lifecycleManager: lifecycleManager,
             downloadStatusProvider: downloadManager
         )
+        chatViewModel.conversationListViewModel = conversationListViewModel
         let modelsViewModel = ModelsViewModel(
             downloadManager: downloadManager,
             lifecycleManager: lifecycleManager

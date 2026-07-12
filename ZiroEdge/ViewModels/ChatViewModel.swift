@@ -63,7 +63,11 @@ final class ChatViewModel: ObservableObject {
     private let sessionActor: ChatSessionActor
     private let lifecycleManager: ModelLifecycleManager
     private let downloadStatusProvider: any ModelDownloadStatusProvider
+    private let titleGenerator: TitleGenerator
     private let logger = Logger(subsystem: "com.zanish-labs.ziroedge", category: "chat-vm")
+
+    /// Weak reference to the conversation list ViewModel for sidebar reloads.
+    weak var conversationListViewModel: ConversationListViewModel?
 
     private(set) var activeConversationID: UUID?
 
@@ -80,13 +84,15 @@ final class ChatViewModel: ObservableObject {
         inferenceService: InferenceService,
         sessionActor: ChatSessionActor,
         lifecycleManager: ModelLifecycleManager,
-        downloadStatusProvider: any ModelDownloadStatusProvider
+        downloadStatusProvider: any ModelDownloadStatusProvider,
+        titleGenerator: TitleGenerator? = nil
     ) {
         self.persistence = persistence
         self.inferenceService = inferenceService
         self.sessionActor = sessionActor
         self.lifecycleManager = lifecycleManager
         self.downloadStatusProvider = downloadStatusProvider
+        self.titleGenerator = titleGenerator ?? TitleGenerator(inferenceService: inferenceService)
     }
 
     // MARK: - Conversation Management
@@ -199,6 +205,10 @@ final class ChatViewModel: ObservableObject {
 
         inputText = ""
 
+        // Capture whether this is the first exchange BEFORE appending the user message.
+        let isFirstExchange = messages.isEmpty
+        let firstUserMessage = text
+
         // Capture images before clearing; store first image for persistence (v1 single-image field).
         let imagesToSend = hasImages ? pendingImages : []
 
@@ -240,8 +250,20 @@ final class ChatViewModel: ObservableObject {
                     let assistantPayload = ChatMessagePayload(role: .assistant, content: self.streamingText)
                     self.messages.append(assistantPayload)
                 }
+                let assistantResponse = self.streamingText
                 self.streamingText = ""
                 await self.loadConversation(conversationID)
+
+                // Auto-generate title after the first exchange.
+                if isFirstExchange && !firstUserMessage.isEmpty {
+                    Task {
+                        await self.generateTitleIfNeeded(
+                            conversationID: conversationID,
+                            userMessage: firstUserMessage,
+                            assistantResponse: assistantResponse
+                        )
+                    }
+                }
             }
         }
         let onError: @Sendable (Error) -> Void = { [weak self] error in
@@ -300,6 +322,38 @@ final class ChatViewModel: ObservableObject {
         if let newID {
             await loadConversation(newID)
         }
+    }
+
+    // MARK: - Title Generation
+
+    /// Generate a title for the conversation after the first exchange.
+    /// Only runs if the conversation title is still the default "New Conversation".
+    private func generateTitleIfNeeded(
+        conversationID: UUID,
+        userMessage: String,
+        assistantResponse: String
+    ) async {
+        // Check if title is still the default.
+        let conversations = await persistence.fetchConversations()
+        guard let conversation = conversations.first(where: { $0.id == conversationID }),
+              conversation.title == "New Conversation" else {
+            logger.debug("Title already set, skipping generation")
+            return
+        }
+
+        logger.info("Generating title for first exchange")
+        let title = await titleGenerator.generateTitle(
+            userMessage: userMessage,
+            assistantResponse: assistantResponse
+        )
+
+        // Update in persistence.
+        await persistence.updateConversationTitle(id: conversationID, title: title)
+
+        // Reload sidebar.
+        await conversationListViewModel?.loadConversations()
+
+        logger.info("Title updated to: \(title, privacy: .public)")
     }
 
     // MARK: - Truncation Warning
