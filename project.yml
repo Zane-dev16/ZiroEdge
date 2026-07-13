@@ -19,6 +19,7 @@ targets:
       - path: ZiroEdge
         excludes:
           - "**/*.xcassets"
+      - path: ZiroEdge/Resources/Assets.xcassets
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.zanish-labs.ziroedge

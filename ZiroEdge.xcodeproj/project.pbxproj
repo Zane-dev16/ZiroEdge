@@ -34,6 +34,7 @@
 		9551A9134A89D315EE2D2B4E /* VisionChatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07DC1FB1D85AF2096C573AD /* VisionChatTests.swift */; };
 		9DA86DA602EDEF6C8157190F /* MessageBubble.swift in Sources */ = {isa = PBXBuildFile; fileRef = 055D135A1B4377C36387DB65 /* MessageBubble.swift */; };
 		9E55E4716493115AFEB5D119 /* ChatUXTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDA3D7504BF8CD7CDA9BE445 /* ChatUXTests.swift */; };
+		9E86CB6E5B7E7EB884728E6F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 6A93B83C6A4BA1B1681D5C34 /* Assets.xcassets */; };
 		A151108BE4702C7F1283104A /* LicenseView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1A40DF4E9C684D2C73CBEE7 /* LicenseView.swift */; };
 		A63E207897851000F9975EDD /* DownloadManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 236A2AA96610397D2CDDD6D3 /* DownloadManager.swift */; };
 		B25A0D83A6CFF39DF71B44F2 /* ChatSessionActor.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDF516DA8E914C3C75B458A5 /* ChatSessionActor.swift */; };
@@ -72,6 +73,7 @@
 		485FDC26529D0AF9B6E09E0B /* PersistenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceTests.swift; sourceTree = "<group>"; };
 		5366D39F754D5F2CBE06ADD3 /* DownloadManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadManagerTests.swift; sourceTree = "<group>"; };
 		6A5A18C444159747CDBEDD3D /* ModelPickerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelPickerTests.swift; sourceTree = "<group>"; };
+		6A93B83C6A4BA1B1681D5C34 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		6E1242FAB9B786C2167B03D5 /* MemoryBudgeter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryBudgeter.swift; sourceTree = "<group>"; };
 		7044843F74D3DFA5866FAE2A /* ModelConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelConfiguration.swift; sourceTree = "<group>"; };
 		73CCEAF91C4035C58F6F517A /* OfflineVerificationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OfflineVerificationTests.swift; sourceTree = "<group>"; };
@@ -125,6 +127,7 @@
 			children = (
 				FD2CD8E9A6637F51D093A5A0 /* Models */,
 				63895AFB2B3C5FE56FE50798 /* Persistence */,
+				D1BB1DF0C9CC39954A24580E /* Resources */,
 				2AAD3A7E7D651F74B40ABC04 /* Services */,
 				AC5ECDBC2DD2136EA69395E4 /* Utilities */,
 				AD85A1EABA98584E57C547EB /* ViewModels */,
@@ -227,6 +230,14 @@
 			path = ZiroEdgeTests;
 			sourceTree = "<group>";
 		};
+		D1BB1DF0C9CC39954A24580E /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				6A93B83C6A4BA1B1681D5C34 /* Assets.xcassets */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
 		ED908A9AC4E696516EE34BA4 /* Products */ = {
 			isa = PBXGroup;
 			children = (
@@ -274,6 +285,7 @@
 			buildConfigurationList = 95A404107ED8F959D0732DDB /* Build configuration list for PBXNativeTarget "ZiroEdge" */;
 			buildPhases = (
 				BB63D51504E3FE5AACBD919D /* Sources */,
+				4CF2CD468446728D30DD6FB5 /* Resources */,
 				7B712092A0A7AE08DBF4FE7B /* Frameworks */,
 			);
 			buildRules = (
@@ -329,6 +341,17 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		4CF2CD468446728D30DD6FB5 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				9E86CB6E5B7E7EB884728E6F /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		1B04936073F06303C065B0A4 /* Sources */ = {
