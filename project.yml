@@ -60,6 +60,21 @@ targets:
       - package: SwiftLlama
         product: SwiftLlama
 
+  ZiroEdgeUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: ZiroEdgeUITests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.zanish-labs.ziroedge.uitests
+        SWIFT_VERSION: "5.0"
+        GENERATE_INFOPLIST_FILE: YES
+        DEVELOPMENT_TEAM: 36V92GAJBT
+        CODE_SIGN_STYLE: Automatic
+    dependencies:
+      - target: ZiroEdge
+
 schemes:
   ZiroEdge:
     build:
@@ -69,3 +84,11 @@ schemes:
     test:
       targets:
         - ZiroEdgeTests
+  ZiroEdgeUITests:
+    build:
+      targets:
+        ZiroEdge: all
+        ZiroEdgeUITests: [test]
+    test:
+      targets:
+        - ZiroEdgeUITests
