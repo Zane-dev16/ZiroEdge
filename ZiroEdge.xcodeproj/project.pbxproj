@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		01B67FB4568E9B8D8AD1B18E /* MemoryBudgeter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E1242FAB9B786C2167B03D5 /* MemoryBudgeter.swift */; };
 		0AEEB732E41AE9B81B1DA740 /* MemoryBudgeterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA32FFB006B54EC9A7AA1AE3 /* MemoryBudgeterTests.swift */; };
+		0BE81C9F26FCB05EE59DB97F /* FeatureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FCCF0D82DDD2F2FBD620E4D /* FeatureTests.swift */; };
 		1507609D093100805E69B6B6 /* ModelLifecycleManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F42848498CF819E78EED45AB /* ModelLifecycleManager.swift */; };
 		15557FE21A9C5AA0E6C0D7F4 /* ChatViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 131AF1296FE8159E5BB62C66 /* ChatViewModel.swift */; };
 		1C77718F3B72419B8A52CF4F /* ModelConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7044843F74D3DFA5866FAE2A /* ModelConfiguration.swift */; };
@@ -22,6 +23,7 @@
 		5C30ECFDE6AE8832A9D5A4FF /* InferenceService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9334EC3A1F208FD70B485C18 /* InferenceService.swift */; };
 		60C967DB6554E4D13427C941 /* SidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 758DF316AD8A2A2D5AFED339 /* SidebarView.swift */; };
 		61EA4F7A284273D18A1B4DFD /* TitleGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 262A76C9592C6D8819EBA905 /* TitleGenerator.swift */; };
+		66F76D92B9DB37CED1C2AA59 /* SmokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7DDE172A4D2ECAC5AA71B1A5 /* SmokeTests.swift */; };
 		686630E424CFE805D2DFF0DD /* AIModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32A1B26312450DA02CEE7FAB /* AIModel.swift */; };
 		6B18737E73095D7D03349865 /* PersistenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 485FDC26529D0AF9B6E09E0B /* PersistenceTests.swift */; };
 		6E284EC7281342E8F5C26AFC /* ModelPickerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A5A18C444159747CDBEDD3D /* ModelPickerTests.swift */; };
@@ -39,9 +41,11 @@
 		A63E207897851000F9975EDD /* DownloadManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 236A2AA96610397D2CDDD6D3 /* DownloadManager.swift */; };
 		B25A0D83A6CFF39DF71B44F2 /* ChatSessionActor.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDF516DA8E914C3C75B458A5 /* ChatSessionActor.swift */; };
 		B298DF37B1DEC3EAC1F7A6F4 /* ZiroEdgeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8DCD7FFE76AE246F76E8AB1D /* ZiroEdgeApp.swift */; };
+		B7F90E369C5CF5C206A89482 /* UITestBase.swift in Sources */ = {isa = PBXBuildFile; fileRef = 837D4E9D79793ABF9EBE0FAE /* UITestBase.swift */; };
 		D26F8126CA19402867419108 /* SwiftLlama in Frameworks */ = {isa = PBXBuildFile; productRef = 274CD038517DAD0AD555717B /* SwiftLlama */; };
 		D8C473BCD87EF3F718E716A2 /* ModelsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A623A7B1E1E06B4160F44CA /* ModelsViewModel.swift */; };
 		D9D786618CFC80762E436914 /* CDConversation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BEC15C6D7B950F3212F5EDE /* CDConversation.swift */; };
+		DD947A76ABB4A3627EA85CBF /* ModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8D94313D2D76FE77C664F93 /* ModelTests.swift */; };
 		ED50EBFCC3F26D8C0912AB70 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14951210F8F3234E8EE9ACF8 /* OnboardingView.swift */; };
 		F308DB4C6A26B32606DFBBDF /* ConversationListViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7AEBED57984673F2549AD67F /* ConversationListViewModel.swift */; };
 		FAFB727A010ED8FB1963778B /* DownloadState.swift in Sources */ = {isa = PBXBuildFile; fileRef = C09C23838F2034257261C411 /* DownloadState.swift */; };
@@ -50,6 +54,13 @@
 
 /* Begin PBXContainerItemProxy section */
 		1BC50877E8530BEA369B8F00 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = ADD137574DAEB33A2ED86DC4 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 6315492185783158E4B6C0C4;
+			remoteInfo = ZiroEdge;
+		};
+		7C174ADBD9D25CFC165DD3F5 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = ADD137574DAEB33A2ED86DC4 /* Project object */;
 			proxyType = 1;
@@ -71,6 +82,7 @@
 		406F483B047FB94538D31E52 /* ZiroEdge.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = ZiroEdge.entitlements; sourceTree = "<group>"; };
 		472FEE1B64876173883AD88A /* ZiroEdge.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = ZiroEdge.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		485FDC26529D0AF9B6E09E0B /* PersistenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceTests.swift; sourceTree = "<group>"; };
+		4FCCF0D82DDD2F2FBD620E4D /* FeatureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeatureTests.swift; sourceTree = "<group>"; };
 		5366D39F754D5F2CBE06ADD3 /* DownloadManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadManagerTests.swift; sourceTree = "<group>"; };
 		6A5A18C444159747CDBEDD3D /* ModelPickerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelPickerTests.swift; sourceTree = "<group>"; };
 		6A93B83C6A4BA1B1681D5C34 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -82,13 +94,17 @@
 		77A73CB5F7DF9A18FB81AEB7 /* OnboardingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingTests.swift; sourceTree = "<group>"; };
 		7AEBED57984673F2549AD67F /* ConversationListViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationListViewModel.swift; sourceTree = "<group>"; };
 		7BEC15C6D7B950F3212F5EDE /* CDConversation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CDConversation.swift; sourceTree = "<group>"; };
+		7DDE172A4D2ECAC5AA71B1A5 /* SmokeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmokeTests.swift; sourceTree = "<group>"; };
 		7F52B00138CB2DC2FC76F4FB /* TitleGeneratorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TitleGeneratorTests.swift; sourceTree = "<group>"; };
+		837D4E9D79793ABF9EBE0FAE /* UITestBase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UITestBase.swift; sourceTree = "<group>"; };
 		8DCD7FFE76AE246F76E8AB1D /* ZiroEdgeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZiroEdgeApp.swift; sourceTree = "<group>"; };
 		9334EC3A1F208FD70B485C18 /* InferenceService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InferenceService.swift; sourceTree = "<group>"; };
 		9A623A7B1E1E06B4160F44CA /* ModelsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelsViewModel.swift; sourceTree = "<group>"; };
 		A2802F283B93429E948CFE33 /* MarkdownRendererTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownRendererTests.swift; sourceTree = "<group>"; };
 		A6095A8B796761917100D204 /* CDChatMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CDChatMessage.swift; sourceTree = "<group>"; };
+		A8D94313D2D76FE77C664F93 /* ModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelTests.swift; sourceTree = "<group>"; };
 		B07DC1FB1D85AF2096C573AD /* VisionChatTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisionChatTests.swift; sourceTree = "<group>"; };
+		B4FEB7430BDC96364F3C9190 /* ZiroEdgeUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = ZiroEdgeUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		B819FB39EB71743F91968C40 /* PersistenceController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceController.swift; sourceTree = "<group>"; };
 		C09C23838F2034257261C411 /* DownloadState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadState.swift; sourceTree = "<group>"; };
 		C6ADBDBAD091EDC6CCD412E3 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
@@ -138,6 +154,17 @@
 			path = ZiroEdge;
 			sourceTree = "<group>";
 		};
+		07304BDCFD56E00B1D948962 /* ZiroEdgeUITests */ = {
+			isa = PBXGroup;
+			children = (
+				B948298C75EB7AC00BCA4B17 /* Helpers */,
+				4FCCF0D82DDD2F2FBD620E4D /* FeatureTests.swift */,
+				A8D94313D2D76FE77C664F93 /* ModelTests.swift */,
+				7DDE172A4D2ECAC5AA71B1A5 /* SmokeTests.swift */,
+			);
+			path = ZiroEdgeUITests;
+			sourceTree = "<group>";
+		};
 		0DDB84CC205545A45651187D /* Views */ = {
 			isa = PBXGroup;
 			children = (
@@ -158,6 +185,7 @@
 				8E232AECAA092AE63191455E /* Packages */,
 				05234D03621C92115B58CD0E /* ZiroEdge */,
 				C20136C5D41F45448409DFB0 /* ZiroEdgeTests */,
+				07304BDCFD56E00B1D948962 /* ZiroEdgeUITests */,
 				ED908A9AC4E696516EE34BA4 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -211,6 +239,14 @@
 			path = ViewModels;
 			sourceTree = "<group>";
 		};
+		B948298C75EB7AC00BCA4B17 /* Helpers */ = {
+			isa = PBXGroup;
+			children = (
+				837D4E9D79793ABF9EBE0FAE /* UITestBase.swift */,
+			);
+			path = Helpers;
+			sourceTree = "<group>";
+		};
 		C20136C5D41F45448409DFB0 /* ZiroEdgeTests */ = {
 			isa = PBXGroup;
 			children = (
@@ -243,6 +279,7 @@
 			children = (
 				472FEE1B64876173883AD88A /* ZiroEdge.app */,
 				77A1DFD8E4FF33431EFA9A36 /* ZiroEdgeTests.xctest */,
+				B4FEB7430BDC96364F3C9190 /* ZiroEdgeUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -260,6 +297,24 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		0E79B2F28EDEBAC826436FE7 /* ZiroEdgeUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 2ED937E450E7CADECD19C6B7 /* Build configuration list for PBXNativeTarget "ZiroEdgeUITests" */;
+			buildPhases = (
+				32611582F38B538CC2CC5D9E /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				9B87C643C731EF6BF7FA1A36 /* PBXTargetDependency */,
+			);
+			name = ZiroEdgeUITests;
+			packageProductDependencies = (
+			);
+			productName = ZiroEdgeUITests;
+			productReference = B4FEB7430BDC96364F3C9190 /* ZiroEdgeUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 		20DC304883052F4006FB48D5 /* ZiroEdgeTests */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = EA37FF84C1BA18EA22D93D84 /* Build configuration list for PBXNativeTarget "ZiroEdgeTests" */;
@@ -309,6 +364,11 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1500;
 				TargetAttributes = {
+					0E79B2F28EDEBAC826436FE7 = {
+						DevelopmentTeam = 36V92GAJBT;
+						ProvisioningStyle = Automatic;
+						TestTargetID = 6315492185783158E4B6C0C4;
+					};
 					20DC304883052F4006FB48D5 = {
 						DevelopmentTeam = 36V92GAJBT;
 						ProvisioningStyle = Automatic;
@@ -338,6 +398,7 @@
 			targets = (
 				6315492185783158E4B6C0C4 /* ZiroEdge */,
 				20DC304883052F4006FB48D5 /* ZiroEdgeTests */,
+				0E79B2F28EDEBAC826436FE7 /* ZiroEdgeUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -370,6 +431,17 @@
 				440F7439971AAA8FB6656BA9 /* SettingsTests.swift in Sources */,
 				563392DB434F5B2D0C862F52 /* TitleGeneratorTests.swift in Sources */,
 				9551A9134A89D315EE2D2B4E /* VisionChatTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		32611582F38B538CC2CC5D9E /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0BE81C9F26FCB05EE59DB97F /* FeatureTests.swift in Sources */,
+				DD947A76ABB4A3627EA85CBF /* ModelTests.swift in Sources */,
+				66F76D92B9DB37CED1C2AA59 /* SmokeTests.swift in Sources */,
+				B7F90E369C5CF5C206A89482 /* UITestBase.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -407,6 +479,11 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		9B87C643C731EF6BF7FA1A36 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 6315492185783158E4B6C0C4 /* ZiroEdge */;
+			targetProxy = 7C174ADBD9D25CFC165DD3F5 /* PBXContainerItemProxy */;
+		};
 		ADB4B49985AB313846753925 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 6315492185783158E4B6C0C4 /* ZiroEdge */;
@@ -489,6 +566,26 @@
 			};
 			name = Debug;
 		};
+		780CBDA0CECD5044E1B7FE79 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 36V92GAJBT;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "com.zanish-labs.ziroedge.uitests";
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = ZiroEdge;
+			};
+			name = Release;
+		};
 		8147FAD617F4A65DC7B2DA77 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -544,6 +641,26 @@
 				SWIFT_VERSION = 5.0;
 			};
 			name = Release;
+		};
+		AA3BC82AB006F99586885EFC /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 36V92GAJBT;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "com.zanish-labs.ziroedge.uitests";
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = ZiroEdge;
+			};
+			name = Debug;
 		};
 		C967AC30ECE194A4AB214351 /* Debug */ = {
 			isa = XCBuildConfiguration;
@@ -631,6 +748,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		2ED937E450E7CADECD19C6B7 /* Build configuration list for PBXNativeTarget "ZiroEdgeUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA3BC82AB006F99586885EFC /* Debug */,
+				780CBDA0CECD5044E1B7FE79 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
 		95A404107ED8F959D0732DDB /* Build configuration list for PBXNativeTarget "ZiroEdge" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
