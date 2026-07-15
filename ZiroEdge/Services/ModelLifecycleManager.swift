@@ -168,6 +168,17 @@ final class ModelLifecycleManager: ObservableObject {
         showMemoryWarning = false
         await loadModel(model)
     }
+
+    /// Load the first fully downloaded model. Used for UI testing.
+    func autoLoadFirstModel() async {
+        guard activeModel == nil else { return }
+        guard let model = ModelRegistry.allModels.first(where: { ModelManagerService.isFullyDownloaded($0) }) else {
+            logger.warning("autoLoadFirstModel: no downloaded models found")
+            return
+        }
+        logger.info("autoLoadFirstModel: loading \(model.id, privacy: .public)")
+        await loadModel(model)
+    }
 }
 
 // MARK: - Model Manager Service (Download + Verify)

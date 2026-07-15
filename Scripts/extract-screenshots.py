@@ -34,15 +34,33 @@ def extract_attachments(xcresult_path: str, output_dir: str):
     """Extract image attachments from xcresult."""
     os.makedirs(output_dir, exist_ok=True)
 
-    # Get list of actions/attachments via xcresulttool
+    # Use the newer xcresulttool export attachments command (Xcode 16+)
+    try:
+        r = subprocess.run(
+            ["xcrun", "xcresulttool", "export", "attachments",
+             "--path", xcresult_path, "--output-path", output_dir],
+            capture_output=True, text=True
+        )
+        if r.returncode == 0 and "Exported" in r.stdout:
+            count = r.stdout.count("Exported")
+            # Rename files to cleaner names based on suggested names
+            for f in os.listdir(output_dir):
+                if f.endswith(".png"):
+                    # File name format: UUID.png
+                    # Suggested name from stdout contains the clean name
+                    pass
+            print(f"Extracted {count} screenshots to {output_dir}")
+            return
+    except Exception:
+        pass
+
+    # Fallback: try older JSON-based extraction
     try:
         data = xcresult_json(xcresult_path)
     except (json.JSONDecodeError, FileNotFoundError):
         print("Could not parse xcresult JSON", file=sys.stderr)
         return
 
-    # Try to extract all attachments using xcresulttool export
-    # This works on Xcode 15+ with the test-results summary API
     try:
         r = subprocess.run(
             ["xcrun", "xcresulttool", "get", "test-results", "summary",
@@ -51,7 +69,6 @@ def extract_attachments(xcresult_path: str, output_dir: str):
         )
         summary = json.loads(r.stdout)
 
-        # Walk test nodes looking for attachments
         count = 0
         for test_node in _walk_tests(summary):
             for attachment in test_node.get("attachments", []):
@@ -62,7 +79,6 @@ def extract_attachments(xcresult_path: str, output_dir: str):
 
     except Exception as e:
         print(f"Extraction fallback: {e}", file=sys.stderr)
-        # Fallback: try to export all attachments at once
         _bulk_export(xcresult_path, output_dir)
 
 

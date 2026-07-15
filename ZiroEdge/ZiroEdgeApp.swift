@@ -99,6 +99,11 @@ struct ZiroEdgeApp: App {
 
                 // Ensure models directory exists.
                 ModelManagerService.ensureModelsDirectory()
+
+                // UI testing: auto-load the first available model.
+                if CommandLine.arguments.contains("--uitesting") {
+                    await lifecycleManager.autoLoadFirstModel()
+                }
             }
         }
     }

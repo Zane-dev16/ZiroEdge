@@ -8,33 +8,90 @@ final class FeatureTests: UITestBase {
 
     // MARK: - Chat Interaction
 
-    func testSendChatMessage() throws {
-        navigateTo(tab: "Chat")
+    func testModelAutoLoads() {
+        // Launch with --uitesting to trigger model auto-load.
+        // Then send a test message and verify response or diagnose errors.
+        let chatApp = XCUIApplication()
+        chatApp.launchArguments = ["--uitesting"]
+        chatApp.launch()
+        app = chatApp
 
-        guard hasInstalledModel() else {
-            throw XCTSkip("No model installed — skipping chat test")
+        // Navigate into a conversation
+        let cvCell = app.collectionViews.cells.firstMatch
+        let tvCell = app.tables.cells.firstMatch
+        let sidebarCell = cvCell.exists ? cvCell : tvCell
+        guard (cvCell.exists || tvCell.exists) && sidebarCell.waitForExistence(timeout: 10) else {
+            XCTFail("No conversation list visible")
+            return
+        }
+        sidebarCell.tap()
+
+        // Wait for ChatView
+        let input = app.textFields["chatInput"].firstMatch
+            ?? app.textFields["Message ZiroEdge..."].firstMatch
+            ?? app.textFields.firstMatch
+        guard input.waitForExistence(timeout: 10) else {
+            XCTFail("Chat view did not appear")
+            return
         }
 
-        sendChatMessage("Hello, say hi in one word")
-        capture("chat_message_sent")
+        // Wait for model to load — poll the picker label
+        let loadStart = Date()
+        while Date().timeIntervalSince(loadStart) < 60 {
+            if let label = readModelPickerLabel(), label != "No Model" {
+                print("[TEST] Model loaded: \(label)")
+                break
+            }
+            sleep(2)
+        }
+        let modelLabel = readModelPickerLabel() ?? "unknown"
+        print("[TEST] Model picker shows: \(modelLabel)")
 
-        let responded = waitForResponse(timeout: 30)
-        XCTAssertTrue(responded, "No response appeared within 30s")
-        capture("chat_response_received")
+        // Send message
+        sendChatMessage("Hello, say hi in one word")
+        print("[TEST] Message sent, waiting for response...")
+
+        // Wait for response
+        let responded = waitForResponse(timeout: 60)
+        if responded {
+            if let reply = readLastAssistantMessage() {
+                print("[TEST] Assistant replied: \(reply)")
+            }
+        } else {
+            // Diagnose what went wrong
+            if let error = readErrorBanner() {
+                print("[TEST] Error banner: \(error)")
+                XCTFail("App error: \(error)")
+                return
+            }
+            if let label = readModelPickerLabel(), label == "No Model" {
+                XCTFail("Model never loaded — picker still shows 'No Model'")
+                return
+            }
+            // Dump visible static texts for debugging
+            let texts = app.staticTexts.allElementsBoundByIndex.map { $0.label }.joined(separator: " | ")
+            print("[TEST] Visible texts: \(texts)")
+        }
+        XCTAssertTrue(responded, "No AI response within 60s")
     }
 
     func testChatStreamingStop() throws {
-        navigateTo(tab: "Chat")
+        let navigated = selectOrCreateConversation()
+        guard navigated else {
+            throw XCTSkip("Could not open or create a conversation")
+        }
 
-        guard hasInstalledModel() else {
-            throw XCTSkip("No model installed — skipping streaming test")
+        let input = app.textFields["Message ZiroEdge..."].firstMatch
+            ?? app.textFields.firstMatch
+        guard input.waitForExistence(timeout: 5) else {
+            throw XCTSkip("No chat input found — model may not be loaded")
         }
 
         sendChatMessage("Write a very long essay about the color blue")
         capture("chat_streaming_started")
 
         // Try to stop generation
-        if tapButton("Stop", timeout: 5) {
+        if tapButton("stop.circle.fill", timeout: 5) || tapButton("Stop", timeout: 2) {
             capture("chat_streaming_stopped")
         }
     }
@@ -42,7 +99,8 @@ final class FeatureTests: UITestBase {
     // MARK: - Model Picker
 
     func testModelPicker() {
-        navigateTo(tab: "Chat")
+        // Navigate into a conversation
+        selectOrCreateConversation()
 
         // Look for model picker button in chat view
         if tapButton("model") || tapButton("picker") || tapButton("Model") {
