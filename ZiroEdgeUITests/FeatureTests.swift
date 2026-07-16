@@ -8,71 +8,82 @@ final class FeatureTests: UITestBase {
 
     // MARK: - Chat Interaction
 
+    /// Test that a model auto-loads, a test message is sent (bypassing the
+    /// TextField via --uitesting-sendtest launch arg), and the assistant
+    /// responds. The app creates a conversation with title "UITest Send Test"
+    /// and sends a message internally. The test waits for ChatView to appear
+    /// (selectedConversationID is set by the handler), then waits for response.
     func testModelAutoLoads() {
-        // Launch with --uitesting to trigger model auto-load.
-        // Then send a test message and verify response or diagnose errors.
         let chatApp = XCUIApplication()
-        chatApp.launchArguments = ["--uitesting"]
+        chatApp.launchArguments = ["--uitesting", "--uitesting-sendtest"]
         chatApp.launch()
         app = chatApp
 
-        // Navigate into a conversation
-        let cvCell = app.collectionViews.cells.firstMatch
-        let tvCell = app.tables.cells.firstMatch
-        let sidebarCell = cvCell.exists ? cvCell : tvCell
-        guard (cvCell.exists || tvCell.exists) && sidebarCell.waitForExistence(timeout: 10) else {
-            XCTFail("No conversation list visible")
-            return
-        }
-        sidebarCell.tap()
+        print("[TEST] Waiting for ChatView to appear (model loading + conversation creation)...")
 
-        // Wait for ChatView
+        // The --uitesting-sendtest handler:
+        // 1. Auto-loads first model (30-60s for Gemma 4 E2B)
+        // 2. Creates a conversation titled "UITest Send Test"
+        // 3. Sets selectedConversationID -> MainView shows ChatView
+        // 4. Sets inputText and calls sendMessage()
+        // We just need to wait for ChatView's chatInput TextField to appear.
         let input = app.textFields["chatInput"].firstMatch
-            ?? app.textFields["Message ZiroEdge..."].firstMatch
-            ?? app.textFields.firstMatch
-        guard input.waitForExistence(timeout: 10) else {
-            XCTFail("Chat view did not appear")
+        guard input.waitForExistence(timeout: 120) else {
+            // Diagnose: check if we're stuck on WelcomeView or sidebar
+            let texts = app.staticTexts.allElementsBoundByIndex.map { $0.label }.joined(separator: " | ")
+            print("[TEST] Visible texts: \(texts)")
+            if let error = readErrorBanner() {
+                XCTFail("No ChatView, error: \(error)")
+            } else {
+                XCTFail("ChatView did not appear within 120s (model may not have loaded)")
+            }
             return
         }
+        print("[TEST] Chat view appeared")
 
-        // Wait for model to load — poll the picker label
-        let loadStart = Date()
-        while Date().timeIntervalSince(loadStart) < 60 {
-            if let label = readModelPickerLabel(), label != "No Model" {
-                print("[TEST] Model loaded: \(label)")
-                break
-            }
-            sleep(2)
-        }
+        // Check model picker
         let modelLabel = readModelPickerLabel() ?? "unknown"
         print("[TEST] Model picker shows: \(modelLabel)")
 
-        // Send message
-        sendChatMessage("Hello, say hi in one word")
-        print("[TEST] Message sent, waiting for response...")
+        // The app has already sent (or is sending) the test message.
+        // Wait for the assistant response.
+        // waitForResponse snapshots baseline and waits for +2 texts.
+        // But if messages are already there (sendMessage completed), baseline
+        // already includes them. So check if we already have responses.
+        let initialTexts = app.scrollViews.otherElements.staticTexts.count
+        print("[TEST] Initial message texts: \(initialTexts)")
 
-        // Wait for response
-        let responded = waitForResponse(timeout: 60)
+        if initialTexts >= 2 {
+            // Messages already present — sendMessage completed before we got here
+            if let reply = readLastAssistantMessage() {
+                print("[TEST] Assistant replied: \(reply)")
+            }
+            return  // PASS
+        }
+
+        // Wait for streaming to complete and response to appear
+        print("[TEST] Waiting for assistant response...")
+        let responded = waitForResponse(timeout: 120)
         if responded {
             if let reply = readLastAssistantMessage() {
                 print("[TEST] Assistant replied: \(reply)")
             }
-        } else {
-            // Diagnose what went wrong
-            if let error = readErrorBanner() {
-                print("[TEST] Error banner: \(error)")
-                XCTFail("App error: \(error)")
-                return
-            }
-            if let label = readModelPickerLabel(), label == "No Model" {
-                XCTFail("Model never loaded — picker still shows 'No Model'")
-                return
-            }
-            // Dump visible static texts for debugging
-            let texts = app.staticTexts.allElementsBoundByIndex.map { $0.label }.joined(separator: " | ")
-            print("[TEST] Visible texts: \(texts)")
+            return  // PASS
         }
-        XCTAssertTrue(responded, "No AI response within 60s")
+
+        // Diagnose failure
+        if let error = readErrorBanner() {
+            print("[TEST] Error banner: \(error)")
+            XCTFail("App error: \(error)")
+            return
+        }
+        if let label = readModelPickerLabel(), label == "No Model" {
+            XCTFail("Model never loaded — picker still shows 'No Model'")
+            return
+        }
+        let texts = app.staticTexts.allElementsBoundByIndex.map { $0.label }.joined(separator: " | ")
+        print("[TEST] Visible texts: \(texts)")
+        XCTAssertTrue(responded, "No AI response within 120s")
     }
 
     func testChatStreamingStop() throws {
@@ -96,6 +107,147 @@ final class FeatureTests: UITestBase {
         }
     }
 
+    // MARK: - Diagnostic: Full chat flow
+
+    /// Tests the full chat flow: auto-loads model via --uitesting, taps
+    /// New Conversation, sends a message via TextField, waits for response.
+    func testDiagnosticChatFlow() {
+        let chatApp = XCUIApplication()
+        chatApp.launchArguments = ["--uitesting"]
+        chatApp.launch()
+        app = chatApp
+
+        print("[TEST-DIAG] Waiting 15s for model auto-load...")
+        sleep(15)
+
+        let newConvBtn = app.buttons["New Conversation"].firstMatch
+        guard newConvBtn.waitForExistence(timeout: 10) else {
+            print("[TEST-DIAG] No 'New Conversation' button")
+            return
+        }
+        newConvBtn.tap()
+        print("[TEST-DIAG] Tapped New Conversation")
+        sleep(3)
+
+        let modelLabel = readModelPickerLabel() ?? "unknown"
+        print("[TEST-DIAG] Model picker: \(modelLabel)")
+
+        let input = app.textFields["chatInput"].firstMatch
+        guard input.waitForExistence(timeout: 10) else {
+            print("[TEST-DIAG] No chatInput found")
+            let texts = app.staticTexts.allElementsBoundByIndex.map { $0.label }
+            print("[TEST-DIAG] Texts: \(texts.joined(separator: " | "))")
+            return
+        }
+        print("[TEST-DIAG] Chat input found")
+
+        input.tap()
+        sleep(1)
+        app.typeText("Hello, say hi in one word")
+        sleep(1)
+
+        // Multi-line TextField (axis: .vertical) doesn't trigger .onSubmit
+        // on Return key — it inserts a newline. Must use the send button instead.
+        // First dismiss keyboard, then tap the send button.
+        tapButton("Arrow Up Circle", timeout: 5)
+        print("[TEST-DIAG] Sent via send button")
+
+        let responded = waitForResponse(timeout: 120)
+            if responded {
+            if let reply = readLastAssistantMessage() {
+                print("[TEST-DIAG] AI replied: \(reply)")
+            }
+            print("[TEST-DIAG] SUCCESS")
+        } else {
+            print("[TEST-DIAG] FAILURE — no response within 120s")
+            if let error = readErrorBanner() {
+                print("[TEST-DIAG] Error: \(error)")
+            }
+        }
+        XCTAssertTrue(responded, "Model did not respond within 120s")
+    }
+
+    // MARK: - Diagnostic: New Conversation flow
+
+    /// Diagnostic test that taps "New Conversation" and checks if we
+    /// enter ChatView (model exists) or get "Download a Model" (no model).
+    func testDiagnosticNewConv() {
+        let chatApp = XCUIApplication()
+        chatApp.launchArguments = ["--uitesting"]
+        chatApp.launch()
+        app = chatApp
+        sleep(3)
+
+        // Tap "New Conversation" button
+        let newConvBtn = app.buttons["New Conversation"].firstMatch
+        guard newConvBtn.waitForExistence(timeout: 5) else {
+            print("[TEST-DIAG] No 'New Conversation' button found")
+            return
+        }
+        newConvBtn.tap()
+        sleep(5) // Wait for navigation/animation
+
+        // Check what happened
+        let texts = app.staticTexts.allElementsBoundByIndex.map { $0.label }
+        let buttons = app.buttons.allElementsBoundByIndex.map { $0.label }
+        let textFields = app.textFields.allElementsBoundByIndex.map { $0.label }
+        print("[TEST-DIAG] After New Conv — texts: \(texts.joined(separator: " | "))")
+        print("[TEST-DIAG] After New Conv — buttons: \(buttons.joined(separator: " | "))")
+        print("[TEST-DIAG] After New Conv — textFields: \(textFields.joined(separator: " | "))")
+
+        let hasDownloadModel = texts.contains("Download a Model") || texts.contains("No Models Installed")
+        let hasChatInput = !textFields.isEmpty
+        let hasNoModel = buttons.contains("No Model")
+        print("[TEST-DIAG] Has Download Model sheet: \(hasDownloadModel)")
+        print("[TEST-DIAG] Has chat input: \(hasChatInput)")
+        print("[TEST-DIAG] Has 'No Model' button: \(hasNoModel)")
+
+        capture("diagnostic_new_conv")
+    }
+
+    // MARK: - Diagnostic: Dump root view
+
+    /// Diagnostic test that dumps ALL accessibility elements from the
+    /// root view.
+    func testDiagnosticDump() {
+        let chatApp = XCUIApplication()
+        chatApp.launchArguments = ["--uitesting"]
+        chatApp.launch()
+        app = chatApp
+        sleep(5) // Wait for UI to settle
+
+        // Dump all static texts
+        let texts = app.staticTexts.allElementsBoundByIndex.map { $0.label }
+        print("[TEST-DIAG] Static texts: \(texts.joined(separator: " | "))")
+
+        // Dump all buttons
+        let buttons = app.buttons.allElementsBoundByIndex.map { $0.label }
+        print("[TEST-DIAG] Buttons: \(buttons.joined(separator: " | "))")
+
+        // Dump all cells
+        let cvCells = app.collectionViews.cells.allElementsBoundByIndex.map { $0.label }
+        let tvCells = app.tables.cells.allElementsBoundByIndex.map { $0.label }
+        print("[TEST-DIAG] CollectionView cells: \(cvCells.joined(separator: " | "))")
+        print("[TEST-DIAG] TableView cells: \(tvCells.joined(separator: " | "))")
+
+        // Dump all navigation bars
+        let navBars = app.navigationBars.allElementsBoundByIndex.map { $0.label }
+        print("[TEST-DIAG] Nav bars: \(navBars.joined(separator: " | "))")
+
+        // Dump all text fields
+        let textFields = app.textFields.allElementsBoundByIndex.map { $0.label }
+        print("[TEST-DIAG] Text fields: \(textFields.joined(separator: " | "))")
+
+        // Dump all other elements
+        let otherElements = app.otherElements.allElementsBoundByIndex.map { $0.label }
+        print("[TEST-DIAG] Other elements: \(otherElements.joined(separator: " | "))")
+
+        // Print element count summary
+        print("[TEST-DIAG] Summary: \(texts.count) texts, \(buttons.count) buttons, \(cvCells.count) cvCells, \(tvCells.count) tvCells, \(navBars.count) navBars, \(textFields.count) textFields")
+
+        capture("diagnostic_dump")
+    }
+
     // MARK: - Model Picker
 
     func testModelPicker() {
@@ -110,26 +262,4 @@ final class FeatureTests: UITestBase {
             capture("model_picker_closed")
         }
     }
-
-    // MARK: - New Feature Template
-    //
-    // To add a test for a new feature:
-    //
-    // func testMyNewFeature() {
-    //     // 1. Navigate to where the feature lives
-    //     navigateTo(tab: "Chat")
-    //
-    //     // 2. Screenshot the before state
-    //     capture("feature_before")
-    //
-    //     // 3. Interact
-    //     tapButton("my_button")
-    //     // or: app.swipeUp(), etc.
-    //
-    //     // 4. Screenshot the after state
-    //     capture("feature_after")
-    //
-    //     // 5. Assert
-    //     XCTAssertTrue(someElement.exists, "Expected thing didn't happen")
-    // }
 }

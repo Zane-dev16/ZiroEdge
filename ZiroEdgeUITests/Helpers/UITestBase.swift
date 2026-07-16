@@ -70,7 +70,7 @@ class UITestBase: XCTestCase {
         return false
     }
 
-    /// Open the Models screen: Settings sheet → "Manage Models" NavigationLink.
+    /// Open the Models screen: Settings sheet -> "Manage Models" NavigationLink.
     @discardableResult
     func openModels(timeout: TimeInterval = 10) -> Bool {
         guard openSettings(timeout: timeout) else { return false }
@@ -245,6 +245,40 @@ class UITestBase: XCTestCase {
         XCTAssertTrue(element.waitForExistence(timeout: 5), "Expected screen element not found", file: file, line: line)
     }
 
+    // MARK: - UI Test Send Helper
+
+    /// Wait for a UITest-sendtest message response. Used with the
+    /// --uitesting-sendtest launch arg where the app creates a conversation
+    /// and sends a message internally. Polls until messages appear or error.
+    func waitForUITestMessage(timeout: TimeInterval = 90) -> Bool {
+        return waitForResponse(timeout: timeout)
+    }
+
+    /// Wait for the "UITest Send Test" conversation to appear in the sidebar.
+    /// The --uitesting-sendtest handler creates a conversation with this
+    /// specific title after the model loads, which can take 30-60s.
+    func waitForSidebarCell(timeout: TimeInterval = 120) -> XCUIElement? {
+        let start = Date()
+        while Date().timeIntervalSince(start) < timeout {
+            // Look for the "UITest Send Test" cell in collectionViews or tables.
+            let cvCell = app.collectionViews.cells["UITest Send Test"].firstMatch
+            if cvCell.waitForExistence(timeout: 2) {
+                return cvCell
+            }
+            let tvCell = app.tables.cells["UITest Send Test"].firstMatch
+            if tvCell.waitForExistence(timeout: 2) {
+                return tvCell
+            }
+            // Also try staticTexts (sometimes cells are identified by text)
+            let text = app.staticTexts["UITest Send Test"].firstMatch
+            if text.waitForExistence(timeout: 2) {
+                return text
+            }
+            sleep(3)
+        }
+        return nil
+    }
+
     // MARK: - Diagnostics (accessibility-tree based, no screenshots)
 
     /// Read the current error banner text, if visible. Returns nil if no error.
@@ -259,7 +293,7 @@ class UITestBase: XCTestCase {
             if label == "ZiroEdge" || label.contains("Gemma") || label == "Dismiss"
                || label.contains("Message Ziro") || label.contains("messages")
                || label == "Conversations" || label.contains("min ago")
-               || label == "·" || label == "New Conversation" { return nil }
+               || label == "\u{00B7}" || label == "New Conversation" { return nil }
             return label
         }
         return texts.last
@@ -283,7 +317,7 @@ class UITestBase: XCTestCase {
             if label == "ZiroEdge" || label.contains("Gemma") || label.contains("No Model")
                || label.contains("Message Ziro") || label.contains("messages")
                || label == "Conversations" || label.contains("min ago")
-               || label == "·" || label == "New Conversation" { return nil }
+               || label == "\u{00B7}" || label == "New Conversation" { return nil }
             return label
         }
         return texts.last
