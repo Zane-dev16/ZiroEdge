@@ -68,13 +68,16 @@ actor InferenceService {
     // MARK: - Model Loading
 
     func loadModel(_ model: AIModel, baseURL: URL, mmprojURL: URL?) async throws {
+        print("[INFERENCE-LOAD] loadModel(\(model.id)) from \(baseURL.path)")
         // Unload any existing model first.
         unloadInternal()
 
         logger.info("Loading model: \(model.id, privacy: .public) from \(baseURL.path, privacy: .public)")
 
         // Validate file exists.
-        guard FileManager.default.fileExists(atPath: baseURL.path) else {
+        let baseExists = FileManager.default.fileExists(atPath: baseURL.path)
+        print("[INFERENCE-LOAD] base file exists: \(baseExists), size: \(baseExists ? (try? FileManager.default.attributesOfItem(atPath: baseURL.path)[.size] as? Int64) ?? 0 : 0)")
+        guard baseExists else {
             throw InferenceError.modelFileNotFound(path: baseURL.path)
         }
 
@@ -97,12 +100,17 @@ actor InferenceService {
         )
 
         // Create the engine.
+        print("[INFERENCE-LOAD] Creating LlamaEngine...")
+        let startTime = Date()
         let newEngine = try await LlamaEngine(config: engineConfig)
+        let elapsed = Date().timeIntervalSince(startTime)
+        print("[INFERENCE-LOAD] Engine created in \(String(format: "%.1f", elapsed))s")
         engine = newEngine
         _loadedModelID = model.id
         currentConfig = config
         currentModel = model
 
+        print("[INFERENCE-LOAD] SUCCESS — engine set, modelID=\(model.id)")
         logger.info("Model loaded successfully: \(model.id, privacy: .public)")
     }
 
@@ -121,6 +129,34 @@ actor InferenceService {
         currentConfig = nil
         currentModel = nil
         logger.info("Model unloaded")
+    }
+
+    // MARK: - Raw Text Completion (bypasses chat template)
+
+    /// Stream a raw completion with a pre-formatted prompt string.
+    /// Bypasses the chat template — used for testing and debugging.
+    func streamRawCompletion(
+        prompt: String,
+        sampling: SamplingConfig,
+        stopStrings: [String],
+        addBos: Bool?
+    ) async throws -> AsyncThrowingStream<String, Error> {
+        guard let eng = engine else {
+            throw InferenceError.modelNotLoaded
+        }
+        let engineSampling = SamplingConfigSwift(
+            temperature: sampling.temperature,
+            topP: sampling.topP,
+            topK: sampling.topK,
+            maxTokens: sampling.maxTokens,
+            repeatPenalty: sampling.repeatPenalty
+        )
+        return try await eng.streamCompletion(
+            prompt: prompt,
+            addBos: addBos,
+            stopStrings: stopStrings,
+            sampling: engineSampling
+        )
     }
 
     // MARK: - Text Chat
@@ -234,34 +270,46 @@ actor InferenceService {
                 await eng.cancel()
             }
         }
-    }
-
-    // MARK: - Prompt Formatting
+    }    // MARK: - Prompt Formatting
 
     /// Format messages into a prompt string for the model.
+    /// Handles chat template and raw format paths.
     private func formatChatPrompt(
         messages: [ChatMessagePayload],
         systemPrompt: String?,
         config: ModelConfiguration
     ) -> String {
-        var parts: [String] = []
-
-        if let systemPrompt, !systemPrompt.isEmpty {
-            parts.append("System: \(systemPrompt)")
-        }
-
-        for message in messages {
-            let rolePrefix: String
-            switch message.role {
-            case .user: rolePrefix = "User"
-            case .assistant: rolePrefix = "Assistant"
-            case .system: rolePrefix = "System"
+        switch config.promptPath {
+        case .chatTemplate:
+            // Gemma chat format: <start_of_turn>ROLE\nCONTENT<end_of_turn>\n
+            var parts: [String] = []
+            if let systemPrompt, !systemPrompt.isEmpty {
+                parts.append("<start_of_turn>system\n\(systemPrompt)<end_of_turn>")
             }
-            parts.append("\(rolePrefix): \(message.content)")
-        }
+            for message in messages {
+                let role = message.role.rawValue
+                parts.append("<start_of_turn>\(role)\n\(message.content)<end_of_turn>")
+            }
+            parts.append("<start_of_turn>model\n")
+            return parts.joined(separator: "\n")
 
-        parts.append("Assistant:")
-        return parts.joined(separator: "\n")
+        case .raw:
+            var parts: [String] = []
+            if let systemPrompt, !systemPrompt.isEmpty {
+                parts.append("System: \(systemPrompt)")
+            }
+            for message in messages {
+                let rolePrefix: String
+                switch message.role {
+                case .user: rolePrefix = "User"
+                case .assistant: rolePrefix = "Assistant"
+                case .system: rolePrefix = "System"
+                }
+                parts.append("\(rolePrefix): \(message.content)")
+            }
+            parts.append("Assistant:")
+            return parts.joined(separator: "\n")
+        }
     }
 }
 
