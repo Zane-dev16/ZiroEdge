@@ -172,8 +172,20 @@ final class ChatViewModel: ObservableObject {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         let hasImages = !pendingImages.isEmpty
 
+        if CommandLine.arguments.contains("--uitesting-sendtest") {
+            print("[UITEST] sendMessage: text='\(text)', hasImages=\(hasImages)")
+            print("[UITEST] sendMessage: selectedModel=\(selectedModel?.id ?? "nil")")
+            print("[UITEST] sendMessage: isModelLoaded=\(lifecycleManager.isModelLoaded)")
+            print("[UITEST] sendMessage: activeConversationID=\(String(describing: activeConversationID))")
+        }
+
         // Allow sending with images only (no text) or text only, but not empty both.
-        guard !text.isEmpty || hasImages else { return }
+        guard !text.isEmpty || hasImages else {
+            if CommandLine.arguments.contains("--uitesting-sendtest") {
+                print("[UITEST] sendMessage: GUARD FAILED - empty text and no images")
+            }
+            return
+        }
 
         // Auto-select model if none selected.
         if selectedModel == nil {
@@ -198,7 +210,10 @@ final class ChatViewModel: ObservableObject {
         }
 
         guard lifecycleManager.isModelLoaded else {
-            errorMessage = "No model loaded. Please download and load a model from Settings."
+            let state = lifecycleManager.currentState
+            let activeID = lifecycleManager.activeModel?.id ?? "nil"
+            errorMessage = "No model loaded. (state=\(state), active=\(activeID))"
+            print("[SEND] GUARD FAILED: \(errorMessage)")
             showError = true
             return
         }
