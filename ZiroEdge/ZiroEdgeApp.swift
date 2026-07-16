@@ -97,12 +97,38 @@ struct ZiroEdgeApp: App {
                 // Recover any incomplete streams from the previous session.
                 await persistence.recoverIncompleteStreams()
 
+                // Purge stale empty conversations from the sidebar.
+                await persistence.purgeEmptyConversations()
+
                 // Ensure models directory exists.
                 ModelManagerService.ensureModelsDirectory()
 
                 // UI testing: auto-load the first available model.
                 if CommandLine.arguments.contains("--uitesting") {
                     await lifecycleManager.autoLoadFirstModel()
+                }
+
+                // UI testing: send a test message bypassing the TextField.
+                // Works around @FocusState preventing XCUITest typeText from
+                // registering in SwiftUI TextFields.
+                if CommandLine.arguments.contains("--uitesting-sendtest"),
+                   lifecycleManager.isModelLoaded,
+                   let model = lifecycleManager.activeModel {
+                    print("[UITEST] sendtest: starting — model=\(model.id)")
+                    chatViewModel.selectedModel = model
+                    let convID = await conversationListViewModel.createConversation(
+                        modelID: model.id,
+                        title: "UITest Send Test"
+                    )
+                    print("[UITEST] sendtest: created conversation \(convID)")
+                    await chatViewModel.loadConversation(convID)
+                    print("[UITEST] sendtest: loaded conversation, activeID=\(String(describing: chatViewModel.activeConversationID))")
+                    chatViewModel.inputText = "Hello, say hi in one word"
+                    print("[UITEST] sendtest: inputText set, calling sendMessage...")
+                    await chatViewModel.sendMessage()
+                    print("[UITEST] sendtest: sendMessage completed")
+                } else if CommandLine.arguments.contains("--uitesting-sendtest") {
+                    print("[UITEST] sendtest: model not loaded, skipping — isLoaded=\(lifecycleManager.isModelLoaded)")
                 }
             }
         }
@@ -136,6 +162,11 @@ struct MainView: View {
                 viewModel: conversationListViewModel,
                 onNewConversation: {
                     Task {
+                        // Load the model before creating conversation.
+                        print("[NEWCONV] Loading model...")
+                        await lifecycleManager.autoLoadFirstModel()
+                        print("[NEWCONV] After autoLoad: isLoaded=\(lifecycleManager.isModelLoaded), state=\(lifecycleManager.currentState)")
+                        
                         chatViewModel.autoSelectModel()
                         if chatViewModel.needsModelRedirect {
                             showModelsFromPicker = true
@@ -144,6 +175,7 @@ struct MainView: View {
                                 modelID: model.id
                             )
                             await chatViewModel.loadConversation(id)
+                            print("[NEWCONV] Conversation \(id) created")
                         }
                     }
                 },

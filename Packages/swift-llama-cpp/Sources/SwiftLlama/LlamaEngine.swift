@@ -108,6 +108,67 @@ public actor LlamaEngine {
         logger.info("Model unloaded")
     }
 
+    // MARK: - Chat Template Formatting
+
+    /// Apply the model's built-in chat template to format messages.
+    /// Uses llama_chat_apply_template which auto-detects the template from the model.
+    /// Pass nil as tmpl to use the model's own template.
+    public func applyChatTemplate(
+        messages: [(role: String, content: String)],
+        model: OpaquePointer?,
+        addAssistant: Bool = true
+    ) -> String {
+        // Build llama_chat_message array.
+        let chatMessages = messages.map { msg in
+            llama_chat_message(role: msg.role, content: msg.content)
+        }
+
+        // Calculate buffer size: 2x total characters of all messages.
+        let totalChars = messages.reduce(0) { $0 + $1.content.count + $1.role.count + 10 }
+        let bufferSize = max(totalChars * 2, 1024)
+
+        let formatted = chatMessages.withUnsafeBufferPointer { ptr -> String in
+            var buffer = [CChar](repeating: 0, count: bufferSize)
+            // Pass nil for tmpl to use the model's built-in template.
+            let nBytes = llama_chat_apply_template(nil, ptr.baseAddress, chatMessages.count, addAssistant, &buffer, Int32(bufferSize))
+            if nBytes > 0 && nBytes <= Int32(bufferSize) {
+                return String(cString: buffer.prefix(Int(nBytes)).withUnsafeBufferPointer { $0.baseAddress! })
+            }
+            // If buffer too small, retry with larger buffer.
+            if nBytes > Int32(bufferSize) {
+                let largerSize = Int(nBytes) + 1
+                var largerBuffer = [CChar](repeating: 0, count: largerSize)
+                let nBytes2 = llama_chat_apply_template(nil, ptr.baseAddress, chatMessages.count, addAssistant, &largerBuffer, Int32(largerSize))
+                if nBytes2 > 0 {
+                    return String(cString: largerBuffer.prefix(Int(nBytes2)).withUnsafeBufferPointer { $0.baseAddress! })
+                }
+            }
+            // Fallback: empty string (will cause tokenization to fail).
+            return ""
+        }
+
+        return formatted
+    }
+
+    // MARK: - Streaming Chat Completion (with template)
+
+    /// Stream a chat completion, applying the model's built-in chat template.
+    /// Takes raw messages (role + content) instead of a pre-formatted prompt.
+    public func streamChatCompletion(
+        messages: [(role: String, content: String)],
+        addBos: Bool?,
+        stopStrings: [String],
+        sampling: SamplingConfigSwift
+    ) throws -> AsyncThrowingStream<String, Error> {
+        // Apply the model's chat template to format the prompt.
+        let prompt = applyChatTemplate(messages: messages, model: model, addAssistant: true)
+        guard !prompt.isEmpty else {
+            throw LlamaError.tokenizationFailed
+        }
+        logger.info("Chat template applied, prompt length: \(prompt.count, privacy: .public)")
+        return try streamCompletion(prompt: prompt, addBos: addBos, stopStrings: stopStrings, sampling: sampling)
+    }
+
     // MARK: - Streaming Completion
 
     public func streamCompletion(
@@ -142,25 +203,17 @@ public actor LlamaEngine {
                         batch.token[i] = token
                         batch.pos[i] = Int32(i)
                         batch.n_seq_id[i] = 1
-                        batch.seq_id[i] = UnsafeMutablePointer.allocate(capacity: 1)
-                        batch.seq_id[i]!.pointee = 0
+                        // Use pre-allocated seq_id from llama_batch_init (no manual alloc).
+                        batch.seq_id[i]![0] = 0
                         batch.logits[i] = (i == tokens.count - 1) ? 1 : 0
                     }
                     batch.n_tokens = Int32(tokens.count)
 
                     if llama_decode(ctx, batch) != 0 {
-                        // Free seq_id pointers.
-                        for i in 0..<Int(batch.n_tokens) {
-                            batch.seq_id[i]?.deallocate()
-                        }
                         llama_batch_free(batch)
                         throw LlamaError.decodeFailed
                     }
 
-                    // Free seq_id pointers from prompt batch.
-                    for i in 0..<Int(batch.n_tokens) {
-                        batch.seq_id[i]?.deallocate()
-                    }
                     llama_batch_free(batch)
 
                     // Create sampler chain.
@@ -170,8 +223,11 @@ public actor LlamaEngine {
                     // Generate tokens.
                     var nPos = Int32(tokens.count)
                     var generatedText = ""
+                    var pendingBuffer = ""  // Buffer to prevent stop-token leaks
+                    var nGenerated = 0
+                    let maxTokens = sampling.maxTokens > 0 ? sampling.maxTokens : 2048
 
-                    while nPos < Int32(config.contextLength) {
+                    while nPos < Int32(config.contextLength) && nGenerated < maxTokens {
                         if self.isCancelled || Task.isCancelled { break }
 
                         // Sample next token.
@@ -183,39 +239,63 @@ public actor LlamaEngine {
                         // Decode token to text.
                         let tokenText = tokenToText(token: newTokenID, vocab: vocab)
                         generatedText += tokenText
+                        pendingBuffer += tokenText
 
-                        // Check stop strings.
+                        // Check if buffer ends with a stop string.
                         var shouldStop = false
-                        for stop in stopStrings {
-                            if generatedText.hasSuffix(stop) {
+                        for stop in stopStrings where !stop.isEmpty {
+                            if pendingBuffer.hasSuffix(stop) {
+                                // Strip the stop string and yield the clean remainder.
+                                let clean = String(pendingBuffer.dropLast(stop.count))
+                                if !clean.isEmpty {
+                                    continuation.yield(clean)
+                                }
+                                pendingBuffer = ""  // Clear buffer — stop consumed.
                                 shouldStop = true
                                 break
                             }
                         }
                         if shouldStop { break }
 
-                        // Yield token.
-                        continuation.yield(tokenText)
+                        // Check if buffer could be the start of a stop string.
+                        // If not, it's safe to flush to preserve streaming responsiveness.
+                        var mightBeStop = false
+                        for stop in stopStrings where !stop.isEmpty {
+                            if stop.hasPrefix(pendingBuffer) {
+                                mightBeStop = true
+                                break
+                            }
+                        }
+
+                        if !mightBeStop {
+                            // Safe to flush — this text is not part of any stop string.
+                            continuation.yield(pendingBuffer)
+                            pendingBuffer = ""
+                        }
 
                         // Evaluate single token.
                         var evalBatch = llama_batch_init(1, 0, 1)
                         evalBatch.token[0] = newTokenID
                         evalBatch.pos[0] = nPos
                         evalBatch.n_seq_id[0] = 1
-                        evalBatch.seq_id[0] = UnsafeMutablePointer.allocate(capacity: 1)
-                        evalBatch.seq_id[0]!.pointee = 0
+                        // Use pre-allocated seq_id from llama_batch_init.
+                        evalBatch.seq_id[0]![0] = 0
                         evalBatch.logits[0] = 1
                         evalBatch.n_tokens = 1
 
                         if llama_decode(ctx, evalBatch) != 0 {
-                            evalBatch.seq_id[0]?.deallocate()
                             llama_batch_free(evalBatch)
                             throw LlamaError.decodeFailed
                         }
 
-                        evalBatch.seq_id[0]?.deallocate()
                         llama_batch_free(evalBatch)
                         nPos += 1
+                        nGenerated += 1
+                    }
+
+                    // Flush any remaining buffered tokens (EOS, maxTokens, or cancellation).
+                    if !pendingBuffer.isEmpty {
+                        continuation.yield(pendingBuffer)
                     }
 
                     continuation.finish()
@@ -327,8 +407,11 @@ public actor LlamaEngine {
                     // Generate tokens (same autoregressive loop as streamCompletion).
                     var nPos = newNPast
                     var generatedText = ""
+                    var pendingBuffer = ""  // Buffer to prevent stop-token leaks
+                    var nGenerated = 0
+                    let maxTokens = sampling.maxTokens > 0 ? sampling.maxTokens : 2048
 
-                    while nPos < Int32(config.contextLength) {
+                    while nPos < Int32(config.contextLength) && nGenerated < maxTokens {
                         if self.isCancelled || Task.isCancelled { break }
 
                         let newTokenID = llama_sampler_sample(sampler, ctx, -1)
@@ -337,37 +420,59 @@ public actor LlamaEngine {
 
                         let tokenText = tokenToText(token: newTokenID, vocab: vocab)
                         generatedText += tokenText
+                        pendingBuffer += tokenText
 
                         var shouldStop = false
-                        for stop in stopStrings {
-                            if generatedText.hasSuffix(stop) {
+                        for stop in stopStrings where !stop.isEmpty {
+                            if pendingBuffer.hasSuffix(stop) {
+                                let clean = String(pendingBuffer.dropLast(stop.count))
+                                if !clean.isEmpty {
+                                    continuation.yield(clean)
+                                }
+                                pendingBuffer = ""  // Clear buffer — stop consumed.
                                 shouldStop = true
                                 break
                             }
                         }
                         if shouldStop { break }
 
-                        continuation.yield(tokenText)
+                        // Check if buffer could be the start of a stop string.
+                        var mightBeStop = false
+                        for stop in stopStrings where !stop.isEmpty {
+                            if stop.hasPrefix(pendingBuffer) {
+                                mightBeStop = true
+                                break
+                            }
+                        }
+
+                        if !mightBeStop {
+                            continuation.yield(pendingBuffer)
+                            pendingBuffer = ""
+                        }
 
                         // Evaluate single token.
                         var evalBatch = llama_batch_init(1, 0, 1)
                         evalBatch.token[0] = newTokenID
                         evalBatch.pos[0] = nPos
                         evalBatch.n_seq_id[0] = 1
-                        evalBatch.seq_id[0] = UnsafeMutablePointer.allocate(capacity: 1)
-                        evalBatch.seq_id[0]!.pointee = 0
+                        // Use pre-allocated seq_id from llama_batch_init.
+                        evalBatch.seq_id[0]![0] = 0
                         evalBatch.logits[0] = 1
                         evalBatch.n_tokens = 1
 
                         if llama_decode(ctx, evalBatch) != 0 {
-                            evalBatch.seq_id[0]?.deallocate()
                             llama_batch_free(evalBatch)
                             throw LlamaError.decodeFailed
                         }
 
-                        evalBatch.seq_id[0]?.deallocate()
                         llama_batch_free(evalBatch)
                         nPos += 1
+                        nGenerated += 1
+                    }
+
+                    // Flush any remaining buffered tokens.
+                    if !pendingBuffer.isEmpty {
+                        continuation.yield(pendingBuffer)
                     }
 
                     continuation.finish()
