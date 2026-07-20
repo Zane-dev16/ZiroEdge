@@ -131,15 +131,17 @@ final class OfflineModelLoadingTests: XCTestCase {
         }
     }
 
-    func testModelPathsAreInDocumentsDirectory() {
-        // Model paths must be in the app's Documents directory (not a network URL).
-        let documentsDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].path
+    func testModelPathsAreInManagedApplicationSupportDirectory() {
+        // Managed model paths must be outside Documents so they are excluded
+        // from user-facing document storage and device/cloud backups.
+        let applicationSupportDir = FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].path
 
         for model in ModelRegistry.allModels {
             let baseURL = ModelManagerService.baseModelPath(for: model)
             XCTAssertTrue(
-                baseURL.path.hasPrefix(documentsDir),
-                "Model base path must be in Documents: \(baseURL.path)"
+                baseURL.path.hasPrefix(applicationSupportDir),
+                "Model base path must be in Application Support: \(baseURL.path)"
             )
         }
     }
@@ -178,7 +180,7 @@ final class OfflineModelLoadingTests: XCTestCase {
 
     func testIsBaseDownloadedUsesLocalFileManager() {
         // ModelManagerService.isBaseDownloaded uses FileManager — no network.
-        let model = ModelRegistry.llama32_3B
+        let model = ModelRegistry.llama32ThreeB
         ModelManagerService.ensureModelsDirectory()
 
         // Create a fake model file.
@@ -186,7 +188,7 @@ final class OfflineModelLoadingTests: XCTestCase {
         FileManager.default.createFile(atPath: path.path, contents: Data("fake".utf8))
         defer { try? FileManager.default.removeItem(at: path) }
 
-        XCTAssertTrue(ModelManagerService.isBaseDownloaded(model))
+        XCTAssertFalse(ModelManagerService.isBaseDownloaded(model), "A fake artifact must fail verified availability")
 
         // Remove and verify.
         try? FileManager.default.removeItem(at: path)
@@ -227,9 +229,9 @@ final class OfflineModelLoadingTests: XCTestCase {
         FileManager.default.createFile(atPath: basePath.path, contents: Data("base".utf8))
         XCTAssertFalse(ModelManagerService.isFullyDownloaded(visionModel))
 
-        // Both downloaded.
+        // Both files exist, but neither is a verified GGUF artifact.
         FileManager.default.createFile(atPath: mmprojPath.path, contents: Data("mmproj".utf8))
-        XCTAssertTrue(ModelManagerService.isFullyDownloaded(visionModel))
+        XCTAssertFalse(ModelManagerService.isFullyDownloaded(visionModel))
     }
 }
 
@@ -354,9 +356,9 @@ final class OfflineConversationPersistenceTests: XCTestCase {
 
     func testMultipleConversationsOffline() async throws {
         // Create multiple conversations — all local.
-        for i in 0..<5 {
-            let _ = await persistence.createConversation(
-                title: "Conversation \(i)",
+        for index in 0..<5 {
+            _ = await persistence.createConversation(
+                title: "Conversation \(index)",
                 modelID: "llama3.2-3b-q4"
             )
         }
@@ -405,7 +407,7 @@ final class OfflineInferencePathTests: XCTestCase {
         // InferenceServiceProtocol defines only local operations.
         // We verify by loading a model through the mock (no URLSession involved).
         // This is a structural test — the protocol itself has no URL-based methods.
-        let model = ModelRegistry.llama32_3B
+        let model = ModelRegistry.llama32ThreeB
         let localURL = ModelManagerService.baseModelPath(for: model)
 
         // The loadModel method takes a baseURL: URL which is a local file path.
@@ -431,7 +433,7 @@ final class OfflineInferencePathTests: XCTestCase {
 
     func testInferenceServiceModelLoadingRecordsCalls() async throws {
         // Verify mock tracks calls correctly (no network in mock).
-        let model = ModelRegistry.llama32_3B
+        let model = ModelRegistry.llama32ThreeB
         let localURL = ModelManagerService.baseModelPath(for: model)
 
         try await mockService.loadModel(model, baseURL: localURL, mmprojURL: nil)
@@ -445,7 +447,7 @@ final class OfflineInferencePathTests: XCTestCase {
     }
 
     func testInferenceServiceUnloadWorksLocally() async throws {
-        let model = ModelRegistry.llama32_3B
+        let model = ModelRegistry.llama32ThreeB
         let localURL = ModelManagerService.baseModelPath(for: model)
 
         try await mockService.loadModel(model, baseURL: localURL, mmprojURL: nil)
@@ -469,7 +471,7 @@ final class OfflineInferencePathTests: XCTestCase {
 
         // Loading with a nonexistent file should fail with a local error,
         // NOT a network error — proving no network attempt is made.
-        let model = ModelRegistry.llama32_3B
+        let model = ModelRegistry.llama32ThreeB
         let fakeLocalPath = URL(fileURLWithPath: "/tmp/nonexistent-model.gguf")
 
         do {
@@ -535,11 +537,11 @@ final class OfflineOnboardingTests: XCTestCase {
         manager1.completeOnboarding()
 
         // Multiple relaunches.
-        for i in 0..<5 {
+        for index in 0..<5 {
             let manager = OnboardingManager(defaults: defaults)
             XCTAssertFalse(
                 manager.showOnboarding,
-                "Onboarding should not appear on relaunch \(i)"
+                "Onboarding should not appear on relaunch \(index)"
             )
         }
     }
@@ -588,22 +590,23 @@ final class OfflineModelsPageTests: XCTestCase {
 
     func testDownloadedModelsDetectedOffline() {
         // Create a fake downloaded model file.
-        let model = ModelRegistry.llama32_3B
+        let model = ModelRegistry.llama32ThreeB
         ModelManagerService.ensureModelsDirectory()
         let path = ModelManagerService.baseModelPath(for: model)
         FileManager.default.createFile(atPath: path.path, contents: Data("fake-gguf".utf8))
         defer { try? FileManager.default.removeItem(at: path) }
 
-        // Refresh disk status — should detect the file without network.
+        // Refresh disk status — invalid local files must become repairable without network.
         downloadManager.updateStatusesFromDisk()
 
         let status = downloadManager.status(for: model)
-        XCTAssertTrue(status.isReady, "Model should be detected as downloaded from local disk")
+        XCTAssertFalse(status.isReady)
+        XCTAssertTrue(status.isRepairNeeded)
     }
 
     func testModelsPageShowsDownloadedStateWithoutNetwork() {
         // Simulate a downloaded model.
-        let model = ModelRegistry.llama32_3B
+        let model = ModelRegistry.llama32ThreeB
         ModelManagerService.ensureModelsDirectory()
         let path = ModelManagerService.baseModelPath(for: model)
         FileManager.default.createFile(atPath: path.path, contents: Data("fake-gguf".utf8))
@@ -611,15 +614,15 @@ final class OfflineModelsPageTests: XCTestCase {
 
         downloadManager.updateStatusesFromDisk()
 
-        // ModelsViewModel should report the model as downloaded.
-        XCTAssertTrue(modelsViewModel.isDownloaded(model))
-        XCTAssertTrue(modelsViewModel.hasInstalledModels)
-        XCTAssertEqual(modelsViewModel.installedModels.count, 1)
+        // ModelsViewModel must not report an unverified file as installed.
+        XCTAssertFalse(modelsViewModel.isDownloaded(model))
+        XCTAssertFalse(modelsViewModel.hasInstalledModels)
+        XCTAssertTrue(modelsViewModel.installedModels.isEmpty)
     }
 
     func testDiskUsageReadableOffline() {
         // Disk usage should be available without network.
-        let model = ModelRegistry.llama32_3B
+        let model = ModelRegistry.llama32ThreeB
         ModelManagerService.ensureModelsDirectory()
         let path = ModelManagerService.baseModelPath(for: model)
         FileManager.default.createFile(atPath: path.path, contents: Data(repeating: 0, count: 1024))
@@ -628,7 +631,7 @@ final class OfflineModelsPageTests: XCTestCase {
         downloadManager.updateStatusesFromDisk()
 
         let usage = modelsViewModel.diskUsage(for: model)
-        XCTAssertFalse(usage.isEmpty, "Disk usage should be available offline")
+        XCTAssertTrue(usage.isEmpty, "Unverified artifacts must not appear as installed storage")
     }
 
     func testNoModelsDownloadedShowsEmptyState() {
@@ -649,25 +652,27 @@ final class NetworkIsolationTests: XCTestCase {
         // All methods use FileManager.default — no URLSession.
         // We verify by checking the methods work on local paths.
 
-        let model = ModelRegistry.llama32_3B
+        let model = ModelRegistry.llama32ThreeB
         ModelManagerService.ensureModelsDirectory()
 
         // These should all work without network.
-        let _ = ModelManagerService.modelsDirectory
-        let _ = ModelManagerService.baseModelPath(for: model)
-        let _ = ModelManagerService.isBaseDownloaded(model)
-        let _ = ModelManagerService.isFullyDownloaded(model)
-        let _ = ModelManagerService.diskUsage(for: model)
-        let _ = ModelManagerService.formattedDiskUsage(for: model)
-        let _ = ModelManagerService.totalDiskUsage()
-        let _ = ModelManagerService.formattedDiskUsage()
+        _ = ModelManagerService.modelsDirectory
+        _ = ModelManagerService.baseModelPath(for: model)
+        _ = ModelManagerService.isBaseDownloaded(model)
+        _ = ModelManagerService.isFullyDownloaded(model)
+        _ = ModelManagerService.diskUsage(for: model)
+        _ = ModelManagerService.formattedDiskUsage(for: model)
+        _ = ModelManagerService.totalDiskUsage()
+        _ = ModelManagerService.formattedDiskUsage()
     }
 
     func testModelManagerServiceDirectoryIsLocal() {
         // The models directory must be in the app's sandbox.
         let modelsDir = ModelManagerService.modelsDirectory
         XCTAssertTrue(modelsDir.isFileURL)
-        XCTAssertTrue(modelsDir.path.contains("Documents"))
+        let applicationSupportDir = FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].path
+        XCTAssertTrue(modelsDir.path.hasPrefix(applicationSupportDir))
         XCTAssertTrue(modelsDir.path.contains("Models"))
     }
 
@@ -764,7 +769,7 @@ final class OfflineFlowIntegrationTests: XCTestCase {
 
     func testColdStartShowsExistingConversationsAndCanLoadModel() async throws {
         // Setup: simulate previous session with conversations.
-        let _ = await persistence.createConversation(title: "Previous Chat", modelID: "llama3.2-3b-q4")
+        _ = await persistence.createConversation(title: "Previous Chat", modelID: "llama3.2-3b-q4")
 
         // Simulate cold start: conversations load from Core Data.
         let conversations = await persistence.fetchConversations()
@@ -772,7 +777,7 @@ final class OfflineFlowIntegrationTests: XCTestCase {
         XCTAssertEqual(conversations.first?.title, "Previous Chat")
 
         // Model should be loadable from local file path (no network needed).
-        let model = ModelRegistry.llama32_3B
+        let model = ModelRegistry.llama32ThreeB
         let localURL = ModelManagerService.baseModelPath(for: model)
         XCTAssertTrue(localURL.isFileURL, "Model path must be a local file URL")
     }
@@ -849,7 +854,7 @@ final class OfflineFlowIntegrationTests: XCTestCase {
 
     func testModelsPageShowsDownloadedModelsOffline() {
         // Create fake downloaded model files.
-        let model = ModelRegistry.llama32_3B
+        let model = ModelRegistry.llama32ThreeB
         ModelManagerService.ensureModelsDirectory()
         let path = ModelManagerService.baseModelPath(for: model)
         FileManager.default.createFile(atPath: path.path, contents: Data("fake-gguf".utf8))
@@ -858,29 +863,28 @@ final class OfflineFlowIntegrationTests: XCTestCase {
         // Refresh disk status.
         downloadManager.updateStatusesFromDisk()
 
-        // Verify model shows as downloaded.
+        // Verify the fake artifact is rejected rather than shown as ready.
         let status = downloadManager.status(for: model)
-        XCTAssertTrue(status.isReady, "Downloaded model should show as ready offline")
+        XCTAssertFalse(status.isReady)
+        XCTAssertTrue(status.isRepairNeeded)
     }
 
     // MARK: - Scenario: Downloaded model loads successfully offline
 
     func testDownloadedModelLoadsSuccessfullyOffline() async throws {
         // Create a fake model file.
-        let model = ModelRegistry.llama32_3B
+        let model = ModelRegistry.llama32ThreeB
         ModelManagerService.ensureModelsDirectory()
         let path = ModelManagerService.baseModelPath(for: model)
         FileManager.default.createFile(atPath: path.path, contents: Data("fake-gguf".utf8))
         defer { try? FileManager.default.removeItem(at: path) }
 
-        // Verify file exists locally.
-        XCTAssertTrue(ModelManagerService.isBaseDownloaded(model))
+        // The invalid fake file is quarantined and cannot be loaded.
+        XCTAssertFalse(ModelManagerService.isBaseDownloaded(model))
 
-        // Model loading should work from local file path.
-        // (In real app, LlamaEngine loads from this path. No network involved.)
         let localURL = ModelManagerService.baseModelPath(for: model)
         XCTAssertTrue(localURL.isFileURL)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: localURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: localURL.path))
     }
 
     // MARK: - Scenario: Chat works offline

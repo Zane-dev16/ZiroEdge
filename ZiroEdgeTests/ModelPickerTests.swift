@@ -50,7 +50,7 @@ final class ModelPickerTests: XCTestCase {
 
     func testAutoSelectLastUsedModel() throws {
         let provider = MockDownloadStatusProvider()
-        let model = ModelRegistry.llama32_3B
+        let model = ModelRegistry.llama32ThreeB
         provider.readyModelIDs = [model.id]
 
         UserDefaults.standard.set(model.id, forKey: "lastUsedModelID")
@@ -79,7 +79,7 @@ final class ModelPickerTests: XCTestCase {
 
     func testAutoSelectPicksNextAvailableWhenLastUsedMismatch() throws {
         let provider = MockDownloadStatusProvider()
-        let model = ModelRegistry.llama32_3B
+        let model = ModelRegistry.llama32ThreeB
         provider.readyModelIDs = [model.id]
 
         // Set a non-existent model ID as last used.
@@ -111,7 +111,7 @@ final class ModelPickerTests: XCTestCase {
 
     func testAvailableModelsOnlyIncludesDownloaded() throws {
         let provider = MockDownloadStatusProvider()
-        let model = ModelRegistry.llama32_3B
+        let model = ModelRegistry.llama32ThreeB
         provider.readyModelIDs = [model.id]
 
         let viewModel = makeViewModel(provider: provider)
@@ -133,7 +133,7 @@ final class ModelPickerTests: XCTestCase {
 
     func testSelectModelPersistsLastUsed() throws {
         let provider = MockDownloadStatusProvider()
-        let model = ModelRegistry.llama32_3B
+        let model = ModelRegistry.llama32ThreeB
         provider.readyModelIDs = [model.id]
 
         let viewModel = makeViewModel(provider: provider)

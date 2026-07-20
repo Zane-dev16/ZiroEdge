@@ -11,7 +11,7 @@ final class SettingsTests: XCTestCase {
     // MARK: - Storage Calculation
 
     func testDiskUsageReturnsZeroForNonexistentModel() throws {
-        let model = ModelRegistry.llama32_3B
+        let model = ModelRegistry.llama32ThreeB
         // Clean up any leftover files first.
         ModelManagerService.deleteModel(model)
 
@@ -20,7 +20,7 @@ final class SettingsTests: XCTestCase {
     }
 
     func testFormattedDiskUsageForNonexistentModel() throws {
-        let model = ModelRegistry.llama32_3B
+        let model = ModelRegistry.llama32ThreeB
         ModelManagerService.deleteModel(model)
 
         let formatted = ModelManagerService.formattedDiskUsage(for: model)
@@ -28,7 +28,7 @@ final class SettingsTests: XCTestCase {
     }
 
     func testDiskUsageReflectsActualFileSize() throws {
-        let model = ModelRegistry.llama32_3B
+        let model = ModelRegistry.llama32ThreeB
         ModelManagerService.ensureModelsDirectory()
 
         let basePath = ModelManagerService.baseModelPath(for: model)
@@ -45,7 +45,7 @@ final class SettingsTests: XCTestCase {
     }
 
     func testTotalDiskUsageIncludesAllModels() throws {
-        let model = ModelRegistry.llama32_3B
+        let model = ModelRegistry.llama32ThreeB
         ModelManagerService.ensureModelsDirectory()
 
         let basePath = ModelManagerService.baseModelPath(for: model)
@@ -62,15 +62,18 @@ final class SettingsTests: XCTestCase {
     // MARK: - Model Deletion
 
     func testDeleteModelRemovesFiles() throws {
-        let model = ModelRegistry.llama32_3B
+        let model = ModelRegistry.llama32ThreeB
         ModelManagerService.ensureModelsDirectory()
 
         let basePath = ModelManagerService.baseModelPath(for: model)
         let testData = Data(repeating: 0xEF, count: 512)
         try testData.write(to: basePath)
 
-        // Verify file exists.
-        XCTAssertTrue(ModelManagerService.isBaseDownloaded(model), "Model should be downloaded")
+        // The fake file is not a verified installation.
+        XCTAssertFalse(
+            ModelManagerService.isBaseDownloaded(model),
+            "Unverified model must not be treated as downloaded"
+        )
 
         // Delete via ModelManagerService.
         ModelManagerService.deleteModel(model)
@@ -81,7 +84,7 @@ final class SettingsTests: XCTestCase {
     }
 
     func testDeleteModelViaDownloadManager() throws {
-        let model = ModelRegistry.llama32_3B
+        let model = ModelRegistry.llama32ThreeB
         ModelManagerService.ensureModelsDirectory()
 
         let basePath = ModelManagerService.baseModelPath(for: model)
@@ -89,7 +92,7 @@ final class SettingsTests: XCTestCase {
         try testData.write(to: basePath)
 
         let downloadManager = DownloadManager()
-        XCTAssertTrue(downloadManager.status(for: model).isReady, "Model should appear as downloaded")
+        XCTAssertFalse(downloadManager.status(for: model).isReady, "Unverified model must not appear as downloaded")
 
         // Delete via DownloadManager (this is what SettingsView uses).
         downloadManager.deleteModel(model)
@@ -99,7 +102,7 @@ final class SettingsTests: XCTestCase {
     }
 
     func testDeleteModelUpdatesDiskUsage() throws {
-        let model = ModelRegistry.llama32_3B
+        let model = ModelRegistry.llama32ThreeB
         ModelManagerService.ensureModelsDirectory()
 
         let basePath = ModelManagerService.baseModelPath(for: model)
@@ -147,7 +150,7 @@ final class SettingsTests: XCTestCase {
     // MARK: - Download Status Integration
 
     func testDownloadedModelsFilterWorks() throws {
-        let model = ModelRegistry.llama32_3B
+        let model = ModelRegistry.llama32ThreeB
         ModelManagerService.deleteModel(model)
 
         let downloadManager = DownloadManager()
@@ -163,7 +166,8 @@ final class SettingsTests: XCTestCase {
         downloadManager.updateStatusesFromDisk()
 
         let statusAfter = downloadManager.status(for: model)
-        XCTAssertTrue(statusAfter.isReady, "Model should be ready after file exists on disk")
+        XCTAssertFalse(statusAfter.isReady, "A file is not ready until size, GGUF, and SHA-256 checks pass")
+        XCTAssertTrue(statusAfter.isRepairNeeded)
 
         // Clean up.
         ModelManagerService.deleteModel(model)

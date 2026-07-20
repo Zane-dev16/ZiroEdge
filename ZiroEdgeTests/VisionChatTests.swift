@@ -160,10 +160,10 @@ final class VisionChatTests: XCTestCase {
     /// isVisionModel returns true for vision models.
     func testIsVisionModelTrueForVisionModel() throws {
         let provider = MockDownloadStatusProvider()
-        provider.readyModelIDs = [ModelRegistry.gemma4_e2b.id]
+        provider.readyModelIDs = [ModelRegistry.gemma4E2B.id]
         let viewModel = makeViewModel(provider: provider)
 
-        viewModel.selectedModel = ModelRegistry.gemma4_e2b
+        viewModel.selectedModel = ModelRegistry.gemma4E2B
 
         XCTAssertTrue(viewModel.isVisionModel)
     }
@@ -171,10 +171,10 @@ final class VisionChatTests: XCTestCase {
     /// isVisionModel returns false for text-only models.
     func testIsVisionModelFalseForTextModel() throws {
         let provider = MockDownloadStatusProvider()
-        provider.readyModelIDs = [ModelRegistry.llama32_3B.id]
+        provider.readyModelIDs = [ModelRegistry.llama32ThreeB.id]
         let viewModel = makeViewModel(provider: provider)
 
-        viewModel.selectedModel = ModelRegistry.llama32_3B
+        viewModel.selectedModel = ModelRegistry.llama32ThreeB
 
         XCTAssertFalse(viewModel.isVisionModel)
     }
@@ -191,9 +191,9 @@ final class VisionChatTests: XCTestCase {
     /// Sending with images and text-only model sets vision warning.
     func testSendImagesWithTextModelSetsWarning() async throws {
         let provider = MockDownloadStatusProvider()
-        provider.readyModelIDs = [ModelRegistry.llama32_3B.id]
+        provider.readyModelIDs = [ModelRegistry.llama32ThreeB.id]
         let viewModel = makeViewModel(provider: provider)
-        viewModel.selectedModel = ModelRegistry.llama32_3B
+        viewModel.selectedModel = ModelRegistry.llama32ThreeB
         viewModel.addImage(makeImageData())
 
         await viewModel.sendMessage()

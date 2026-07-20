@@ -4,6 +4,7 @@
 // Tests for model registry, configuration, and download state.
 
 import XCTest
+import CryptoKit
 
 /// Direct inference test — loads Gemma, sends prompt, streams response.
 /// Uses InferenceService directly — no UI, no MainActor wrappers.
@@ -100,7 +101,7 @@ final class ModelRegistryTests: XCTestCase {
     }
 
     func testModelFileSizeFormatting() throws {
-        let model = ModelRegistry.llama32_3B
+        let model = ModelRegistry.llama32ThreeB
         XCTAssertFalse(model.formattedSize.isEmpty)
         XCTAssertGreaterThan(model.totalFileSizeBytes, 0)
     }
@@ -247,6 +248,115 @@ final class ModelRegistryTests: XCTestCase {
             XCTAssertNotNil(model.mmprojFileSizeBytes, "\(model.id) should have mmproj size")
         }
     }
+
+    // MARK: - Catalog Integrity
+
+    func testProductionCatalogSatisfiesIntegrityContract() throws {
+        let issues = ModelRegistry.validationIssues
+        XCTAssertTrue(issues.isEmpty, issues.map(\.description).joined(separator: "\n"))
+    }
+
+    func testCatalogValidationRejectsMalformedArtifactMetadata() throws {
+        let invalid = makeCatalogModel(
+            modelType: .vision,
+            baseURL: URL(string: "http://example.com/model.gguf")!,
+            mmprojURL: URL(string: "https://example.com/projector.gguf")!,
+            baseFileSizeBytes: 0,
+            mmprojFileSizeBytes: 0,
+            baseSHA256: "not-a-sha256",
+            mmprojSHA256: "bad"
+        )
+
+        let issues = ModelRegistry.validate([invalid])
+        XCTAssertTrue(issues.contains {
+            if case .malformedURL(artifact: .base) = $0 { return true }
+            return false
+        })
+        XCTAssertTrue(issues.contains {
+            if case .invalidSHA256(artifact: .base) = $0 { return true }
+            return false
+        })
+        XCTAssertTrue(issues.contains {
+            if case .nonPositiveSize(artifact: .base) = $0 { return true }
+            return false
+        })
+        XCTAssertTrue(issues.contains {
+            if case .invalidSHA256(artifact: .mmproj) = $0 { return true }
+            return false
+        })
+        XCTAssertTrue(issues.contains {
+            if case .nonPositiveSize(artifact: .mmproj) = $0 { return true }
+            return false
+        })
+    }
+
+    func testCatalogValidationRejectsVisionModelWithoutProjectorMetadata() throws {
+        let invalid = makeCatalogModel(modelType: .vision)
+        let issues = ModelRegistry.validate([invalid])
+
+        XCTAssertTrue(issues.contains {
+            if case .missingProjectorMetadata = $0 { return true }
+            return false
+        })
+    }
+
+    func testCatalogValidationRejectsDuplicateDestinations() throws {
+        let first = makeCatalogModel(id: "duplicate-model")
+        let second = makeCatalogModel(id: "duplicate-model")
+        let issues = ModelRegistry.validate([first, second])
+
+        XCTAssertTrue(issues.contains {
+            if case .duplicateDestination("duplicate-model.gguf") = $0 { return true }
+            return false
+        })
+    }
+
+    func testUnverifiableModelCannotStartDownload() throws {
+        let invalid = makeCatalogModel(baseSHA256: "")
+        let downloadManager = DownloadManager()
+
+        downloadManager.startDownload(for: invalid)
+
+        guard case .failed(let error) = downloadManager.status(for: invalid).baseState else {
+            return XCTFail("An unverifiable catalog entry must remain unavailable")
+        }
+        guard case .catalogUnavailable(let reason) = error else {
+            return XCTFail("Unexpected error: \(error)")
+        }
+        XCTAssertTrue(reason.contains("SHA-256"))
+    }
+
+    private func makeCatalogModel(
+        id: String = "catalog-test",
+        modelType: ModelType = .text,
+        baseURL: URL = URL(string: "https://example.com/model.gguf")!,
+        mmprojURL: URL? = nil,
+        baseFileSizeBytes: Int64 = 1,
+        mmprojFileSizeBytes: Int64? = nil,
+        baseSHA256: String = String(repeating: "a", count: 64),
+        mmprojSHA256: String? = nil
+    ) -> AIModel {
+        AIModel(
+            id: id,
+            displayName: "Catalog Test",
+            description: "Test model",
+            modelType: modelType,
+            baseURL: baseURL,
+            mmprojURL: mmprojURL,
+            baseFileSizeBytes: baseFileSizeBytes,
+            mmprojFileSizeBytes: mmprojFileSizeBytes,
+            baseSHA256: baseSHA256,
+            mmprojSHA256: mmprojSHA256,
+            quantization: "Q4_K_M",
+            config: .llama32,
+            minimumDeviceRAM: 0,
+            license: LicenseInfo(
+                name: "Test",
+                url: URL(string: "https://example.com/license")!,
+                copyright: "Test"
+            )
+        )
+    }
 }
 
 /// Diagnostic test that mimics the chat UI flow:
@@ -255,6 +365,9 @@ final class ModelRegistryTests: XCTestCase {
 final class ChatFlowDiagnosticTest: XCTestCase {
 
     func testChatUIFlowLoadsModel() async throws {
+        guard ModelRegistry.allModels.contains(where: { ModelManagerService.isFullyDownloaded($0) }) else {
+            throw XCTSkip("No verified model downloaded for the chat-flow diagnostic")
+        }
         print("[CHATFLOW-TEST] === Starting chat UI flow diagnostic ===")
         
         // Step 1: Create the same objects the chat UI uses
@@ -287,6 +400,9 @@ final class ChatFlowDiagnosticTest: XCTestCase {
 
     /// Full chat flow: autoLoad -> send message -> capture response
     func testFullChatFlowWithResponse() async throws {
+        guard ModelRegistry.allModels.contains(where: { ModelManagerService.isFullyDownloaded($0) }) else {
+            throw XCTSkip("No verified model downloaded for the full chat-flow diagnostic")
+        }
         print("[FULLFLOW] === Starting full chat flow ===")
         
         let inference = InferenceService()
