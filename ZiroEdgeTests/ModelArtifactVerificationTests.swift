@@ -10,7 +10,7 @@ import CryptoKit
 final class ModelArtifactVerificationTests: XCTestCase {
 
     func testAuthenticationBodyAtBothGemmaDestinationsIsNotInstalled() throws {
-        let model = ModelRegistry.gemma4E2B
+        let model = ModelRegistry.gemma4_e2b
         ModelManagerService.deleteModel(model)
         defer { ModelManagerService.deleteModel(model) }
 
