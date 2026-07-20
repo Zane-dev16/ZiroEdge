@@ -22,24 +22,33 @@ PROJECT="$PROJECT_DIR/ZiroEdge.xcodeproj"
 LAYER="smoke"
 TEST_CLASS=""
 while [[ $# -gt 0 ]]; do
-    case "$1" in
-        --layer) LAYER="$2"; shift 2 ;;
-        --test)  TEST_CLASS="$2"; shift 2 ;;
-        *)       echo "Unknown arg: $1"; exit 1 ;;
-    esac
+	case "$1" in
+	--layer)
+		LAYER="$2"
+		shift 2
+		;;
+	--test)
+		TEST_CLASS="$2"
+		shift 2
+		;;
+	*)
+		echo "Unknown arg: $1"
+		exit 1
+		;;
+	esac
 done
 
 # --- Device ---
 DEVICE_UDID="${DEVICE_UDID:-}"
 if [[ -z "$DEVICE_UDID" ]]; then
-    echo ">> Detecting connected device..."
-    DEVICE_UDID=$(xcrun xctrace list devices 2>/dev/null \
-        | grep -v "Simulator" | grep -v "Mac" \
-        | grep -oE '[0-9a-f]{40}' | head -1)
-    if [[ -z "$DEVICE_UDID" ]]; then
-        echo "ERROR: No physical device found. Set DEVICE_UDID or connect a device."
-        exit 1
-    fi
+	echo ">> Detecting connected device..."
+	DEVICE_UDID=$(xcrun xctrace list devices 2>/dev/null |
+		grep -E 'iPhone|iPad' | grep -v "Simulator" |
+		grep -oE '([0-9A-Fa-f]{40}|[0-9A-Fa-f]{8}-[0-9A-Fa-f]{16})' | head -1)
+	if [[ -z "$DEVICE_UDID" ]]; then
+		echo "ERROR: No physical device found. Set DEVICE_UDID or connect a device."
+		exit 1
+	fi
 fi
 echo ">> Using device: $DEVICE_UDID"
 
@@ -49,62 +58,64 @@ mkdir -p "$SCREENSHOTS_DIR"
 
 # --- Regenerate project (xcodegen) ---
 if command -v xcodegen &>/dev/null; then
-    echo ">> Regenerating project with xcodegen..."
-    cd "$PROJECT_DIR" && xcodegen generate
+	echo ">> Regenerating project with xcodegen..."
+	cd "$PROJECT_DIR" && xcodegen generate
 fi
 
 # --- Build for testing ---
 echo ">> Building for device (this may take a minute)..."
 xcodebuild build-for-testing \
-    -project "$PROJECT" \
-    -scheme "$SCHEME" \
-    -destination "id=$DEVICE_UDID" \
-    -derivedDataPath "$OUTPUT_DIR/DerivedData" \
-    -quiet \
-    SYMROOT="$OUTPUT_DIR/Build" \
-    2>&1 | tail -5
+	-project "$PROJECT" \
+	-scheme "$SCHEME" \
+	-destination "id=$DEVICE_UDID" \
+	-derivedDataPath "$OUTPUT_DIR/DerivedData" \
+	-quiet \
+	SYMROOT="$OUTPUT_DIR/Build" \
+	2>&1 | tail -5
 
 # --- Determine test filter ---
 if [[ -n "$TEST_CLASS" ]]; then
-    # Specific class
-    TEST_FILTER="ZiroEdgeUITests/$TEST_CLASS"
+	# Specific class
+	TEST_FILTER="ZiroEdgeUITests/$TEST_CLASS"
 else
-    case "$LAYER" in
-        smoke)
-            TEST_FILTER="ZiroEdgeUITests/SmokeTests"
-            ;;
-        feature)
-            TEST_FILTER="ZiroEdgeUITests/SmokeTests:ZiroEdgeUITests/FeatureTests"
-            ;;
-        model)
-            TEST_FILTER="ZiroEdgeUITests/SmokeTests:ZiroEdgeUITests/ModelTests"
-            ;;
-        all)
-            TEST_FILTER=""  # no filter = run everything
-            ;;
-        *)
-            echo "Unknown layer: $LAYER"; exit 1 ;;
-    esac
+	case "$LAYER" in
+	smoke)
+		TEST_FILTER="ZiroEdgeUITests/SmokeTests"
+		;;
+	feature)
+		TEST_FILTER="ZiroEdgeUITests/SmokeTests:ZiroEdgeUITests/FeatureTests"
+		;;
+	model)
+		TEST_FILTER="ZiroEdgeUITests/SmokeTests:ZiroEdgeUITests/ModelTests"
+		;;
+	all)
+		TEST_FILTER="" # no filter = run everything
+		;;
+	*)
+		echo "Unknown layer: $LAYER"
+		exit 1
+		;;
+	esac
 fi
 
 # --- Run tests ---
 echo ">> Running tests (layer: $LAYER)..."
 TEST_CMD=(
-    xcodebuild test-without-building
-    -project "$PROJECT"
-    -scheme "$SCHEME"
-    -destination "id=$DEVICE_UDID"
-    -derivedDataPath "$OUTPUT_DIR/DerivedData"
-    -resultBundlePath "$OUTPUT_DIR/xcresult.xcresult"
-    SYMROOT="$OUTPUT_DIR/Build"
+	xcodebuild test-without-building
+	-project "$PROJECT"
+	-scheme "$SCHEME"
+	-destination "id=$DEVICE_UDID"
+	-derivedDataPath "$OUTPUT_DIR/DerivedData"
+	-resultBundlePath "$OUTPUT_DIR/xcresult.xcresult"
+	SYMROOT="$OUTPUT_DIR/Build"
 )
 
 if [[ -n "$TEST_FILTER" ]]; then
-    # Split on : and add -only-testing for each
-    IFS=':' read -ra FILTERS <<< "$TEST_FILTER"
-    for f in "${FILTERS[@]}"; do
-        TEST_CMD+=(-only-testing "$f")
-    done
+	# Split on : and add -only-testing for each
+	IFS=':' read -ra FILTERS <<<"$TEST_FILTER"
+	for f in "${FILTERS[@]}"; do
+		TEST_CMD+=(-only-testing "$f")
+	done
 fi
 
 TEST_EXIT=0
@@ -113,18 +124,18 @@ TEST_EXIT=0
 # --- Extract screenshots from xcresult ---
 echo ">> Extracting screenshots..."
 if [[ -d "$OUTPUT_DIR/xcresult.xcresult" ]]; then
-    # xcrun xcresulttool to extract attachments
-    python3 "$SCRIPT_DIR/extract-screenshots.py" \
-        "$OUTPUT_DIR/xcresult.xcresult" \
-        "$SCREENSHOTS_DIR" 2>/dev/null || echo "   (no screenshots extracted — tests may have failed early)"
+	# xcrun xcresulttool to extract attachments
+	python3 "$SCRIPT_DIR/extract-screenshots.py" \
+		"$OUTPUT_DIR/xcresult.xcresult" \
+		"$SCREENSHOTS_DIR" 2>/dev/null || echo "   (no screenshots extracted — tests may have failed early)"
 fi
 
 # --- Generate report ---
 echo ">> Generating report..."
 python3 "$SCRIPT_DIR/generate-report.py" \
-    "$OUTPUT_DIR" \
-    "$LAYER" \
-    "$TEST_EXIT"
+	"$OUTPUT_DIR" \
+	"$LAYER" \
+	"$TEST_EXIT"
 
 echo ""
 echo ">> Done!"
