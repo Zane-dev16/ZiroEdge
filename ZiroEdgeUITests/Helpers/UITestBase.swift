@@ -52,16 +52,25 @@ class UITestBase: XCTestCase {
     @discardableResult
     func openSettings(timeout: TimeInterval = 5) -> Bool {
         // Try common accessibility labels for the gear button
-        for label in ["gear", "Settings", "settings"] {
+        for label in ["gear", "Settings", "settings", "Gear"] {
             let btn = app.buttons[label]
             if btn.waitForExistence(timeout: 2) {
                 btn.tap()
-                sleep(1) // Wait for sheet animation
+                sleep(1)
                 return true
             }
         }
-        // Fallback: look for a button containing a gear image via identifier
-        let gearButton = app.buttons.containing(NSPredicate(format: "identifier CONTAINS 'gear'")).firstMatch
+        // Try navigation bar buttons
+        let navBtn = app.navigationBars.buttons.firstMatch
+        if navBtn.waitForExistence(timeout: 2) {
+            navBtn.tap()
+            sleep(1)
+            return true
+        }
+        // Fallback: broader predicate match
+        let gearButton = app.buttons.containing(
+            NSPredicate(format: "identifier CONTAINS 'gear' OR label CONTAINS[c] 'gear' OR label CONTAINS[c] 'setting'")
+        ).firstMatch
         if gearButton.waitForExistence(timeout: timeout) {
             gearButton.tap()
             sleep(1)
@@ -287,8 +296,8 @@ class UITestBase: XCTestCase {
         let dismiss = app.buttons["Dismiss"].firstMatch
         guard dismiss.waitForExistence(timeout: 2) else { return nil }
         // Read all static texts — the error message is the red text near Dismiss
-        let texts = app.staticTexts.allElementsBoundByIndex.compactMap { e -> String? in
-            let label = e.label
+        let texts = app.staticTexts.allElementsBoundByIndex.compactMap { elem -> String? in
+            let label = elem.label
             guard !label.isEmpty else { return nil }
             if label == "ZiroEdge" || label.contains("Gemma") || label == "Dismiss"
                || label.contains("Message Ziro") || label.contains("messages")
@@ -311,8 +320,8 @@ class UITestBase: XCTestCase {
 
     /// Read visible messages from the chat. Returns the last meaningful text.
     func readLastAssistantMessage() -> String? {
-        let texts = app.scrollViews.otherElements.staticTexts.allElementsBoundByIndex.compactMap { e -> String? in
-            let label = e.label
+        let texts = app.scrollViews.otherElements.staticTexts.allElementsBoundByIndex.compactMap { elem -> String? in
+            let label = elem.label
             guard !label.isEmpty else { return nil }
             if label == "ZiroEdge" || label.contains("Gemma") || label.contains("No Model")
                || label.contains("Message Ziro") || label.contains("messages")
