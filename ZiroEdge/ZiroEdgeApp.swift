@@ -9,6 +9,27 @@ import SwiftUI
 @main
 struct ZiroEdgeApp: App {
 
+    // MARK: - Diagnostic Log File
+
+    /// Path to the diagnostic log file in Documents.
+    static let diagnosticLogURL: URL =
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("download-diagnostic.log")
+
+    /// Append a line to the diagnostic log file.
+    static func diagnosticLog(_ message: String) {
+        let ts = ISO8601DateFormatter().string(from: Date())
+        let line = "[\(ts)] \(message)\n"
+        let url = diagnosticLogURL
+        if let handle = try? FileHandle(forWritingTo: url) {
+            handle.seekToEndOfFile()
+            handle.write(Data(line.utf8))
+            try? handle.close()
+        } else {
+            try? line.write(to: url, atomically: true, encoding: .utf8)
+        }
+    }
+
     // MARK: - Shared Services
 
     /// Core Data persistence — actor-isolated background writer.
@@ -106,6 +127,20 @@ struct ZiroEdgeApp: App {
                 // UI testing: auto-load the first available model.
                 if CommandLine.arguments.contains("--uitesting") {
                     await lifecycleManager.autoLoadFirstModel()
+                }
+
+                // Auto-trigger download for diagnostics
+                if CommandLine.arguments.contains("--uitesting-download") {
+                    print("[UITEST-DL] Auto-download triggered")
+                    if let model = ModelRegistry.allModels.first(where: {
+                        !ModelManagerService.isFullyDownloaded($0)
+                    }) {
+                        print("[UITEST-DL] Selected: \(model.id) (\(model.formattedSize))")
+                        print("[UITEST-DL] URL: \(model.baseURL.absoluteString)")
+                        downloadManager.startDownload(for: model)
+                    } else {
+                        print("[UITEST-DL] All models already downloaded")
+                    }
                 }
 
                 // UI testing: send a test message bypassing the TextField.
