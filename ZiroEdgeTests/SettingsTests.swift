@@ -11,7 +11,7 @@ final class SettingsTests: XCTestCase {
     // MARK: - Storage Calculation
 
     func testDiskUsageReturnsZeroForNonexistentModel() throws {
-        let model = ModelRegistry.llama32ThreeB
+        let model = ModelRegistry.llama32_3B
         // Clean up any leftover files first.
         ModelManagerService.deleteModel(model)
 
@@ -20,7 +20,7 @@ final class SettingsTests: XCTestCase {
     }
 
     func testFormattedDiskUsageForNonexistentModel() throws {
-        let model = ModelRegistry.llama32ThreeB
+        let model = ModelRegistry.llama32_3B
         ModelManagerService.deleteModel(model)
 
         let formatted = ModelManagerService.formattedDiskUsage(for: model)
@@ -28,7 +28,7 @@ final class SettingsTests: XCTestCase {
     }
 
     func testDiskUsageReflectsActualFileSize() throws {
-        let model = ModelRegistry.llama32ThreeB
+        let model = ModelRegistry.llama32_3B
         ModelManagerService.ensureModelsDirectory()
 
         let basePath = ModelManagerService.baseModelPath(for: model)
@@ -45,7 +45,7 @@ final class SettingsTests: XCTestCase {
     }
 
     func testTotalDiskUsageIncludesAllModels() throws {
-        let model = ModelRegistry.llama32ThreeB
+        let model = ModelRegistry.llama32_3B
         ModelManagerService.ensureModelsDirectory()
 
         let basePath = ModelManagerService.baseModelPath(for: model)
@@ -62,7 +62,7 @@ final class SettingsTests: XCTestCase {
     // MARK: - Model Deletion
 
     func testDeleteModelRemovesFiles() throws {
-        let model = ModelRegistry.llama32ThreeB
+        let model = ModelRegistry.llama32_3B
         ModelManagerService.ensureModelsDirectory()
 
         let basePath = ModelManagerService.baseModelPath(for: model)
@@ -84,7 +84,7 @@ final class SettingsTests: XCTestCase {
     }
 
     func testDeleteModelViaDownloadManager() throws {
-        let model = ModelRegistry.llama32ThreeB
+        let model = ModelRegistry.llama32_3B
         ModelManagerService.ensureModelsDirectory()
 
         let basePath = ModelManagerService.baseModelPath(for: model)
@@ -102,7 +102,7 @@ final class SettingsTests: XCTestCase {
     }
 
     func testDeleteModelUpdatesDiskUsage() throws {
-        let model = ModelRegistry.llama32ThreeB
+        let model = ModelRegistry.llama32_3B
         ModelManagerService.ensureModelsDirectory()
 
         let basePath = ModelManagerService.baseModelPath(for: model)
@@ -150,7 +150,7 @@ final class SettingsTests: XCTestCase {
     // MARK: - Download Status Integration
 
     func testDownloadedModelsFilterWorks() throws {
-        let model = ModelRegistry.llama32ThreeB
+        let model = ModelRegistry.llama32_3B
         ModelManagerService.deleteModel(model)
 
         let downloadManager = DownloadManager()
