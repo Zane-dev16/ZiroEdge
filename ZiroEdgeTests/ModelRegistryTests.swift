@@ -4,6 +4,68 @@
 // Tests for model registry, configuration, and download state.
 
 import XCTest
+
+/// Direct inference test — loads Gemma, sends prompt, streams response.
+/// Uses InferenceService directly — no UI, no MainActor wrappers.
+final class DirectInferenceTest: XCTestCase {
+
+    func testGemmaResponds() async throws {
+        // Find the first downloaded model.
+        guard let model = ModelRegistry.allModels.first(where: { ModelManagerService.isFullyDownloaded($0) }) else {
+            print("[INFERENCE-TEST] No model downloaded — skipping")
+            throw XCTSkip("No model downloaded on device")
+        }
+        print("[INFERENCE-TEST] Using model: \(model.id)")
+
+        let inference = InferenceService()
+        let baseURL = ModelManagerService.baseModelPath(for: model)
+        let mmprojURL = model.requiresMMProj ? ModelManagerService.mmprojModelPath(for: model) : nil
+
+        print("[INFERENCE-TEST] Loading from: \(baseURL.path)")
+        do {
+            try await inference.loadModel(model, baseURL: baseURL, mmprojURL: mmprojURL)
+            print("[INFERENCE-TEST] Model loaded successfully")
+        } catch {
+            print("[INFERENCE-TEST] Load failed: \(error)")
+            XCTFail("Model load failed: \(error)")
+            return
+        }
+
+        // Use streamRawCompletion with a manually formatted Gemma 4 prompt.
+        // Gemma 4 format: <start_of_turn>user\n...<end_of_turn>\n<start_of_turn>model\n
+        let prompt = "<start_of_turn>user\nHello, say hi in one word<end_of_turn>\n<start_of_turn>model\n"
+        let sampling = SamplingConfig(
+            temperature: 0.7, topP: 0.9, topK: 40,
+            maxTokens: 64, repeatPenalty: 1.1
+        )
+        let stopStrings = model.config.stopStrings
+
+        print("[INFERENCE-TEST] Prompt tokens: \(prompt.count) chars")
+        print("[INFERENCE-TEST] Sending...")
+        var responseText = ""
+        do {
+            let stream = try await inference.streamRawCompletion(
+                prompt: prompt,
+                sampling: sampling,
+                stopStrings: stopStrings,
+                addBos: model.config.addBos
+            )
+            for try await token in stream {
+                responseText += token
+                print("[INFERENCE-TEST] T: \(token)")
+            }
+            print("[INFERENCE-TEST] Stream done")
+        } catch {
+            print("[INFERENCE-TEST] Error: \(error)")
+            XCTFail("Stream failed: \(error)")
+            return
+        }
+
+        print("[INFERENCE-TEST] Response: \(responseText)")
+        XCTAssertFalse(responseText.isEmpty, "Empty response")
+        print("[INFERENCE-TEST] SUCCESS — \(responseText.count) chars")
+    }
+}
 @testable import ZiroEdge
 
 final class ModelRegistryTests: XCTestCase {
@@ -31,11 +93,8 @@ final class ModelRegistryTests: XCTestCase {
     }
 
     func testDeviceRAMGating() throws {
-        // With enough RAM, all models should be available.
         let allModels = ModelRegistry.availableModels(deviceRAM: 16_000_000_000)
         XCTAssertFalse(allModels.isEmpty)
-
-        // With very low RAM, no models should be available.
         let noModels = ModelRegistry.availableModels(deviceRAM: 500_000_000)
         XCTAssertTrue(noModels.isEmpty)
     }
@@ -163,7 +222,6 @@ final class ModelRegistryTests: XCTestCase {
     }
 
     func testVisionModelDownloadStatusBothNeeded() throws {
-        // Vision model needs both base and mmproj downloaded.
         let status = ModelDownloadStatus(
             baseState: .downloaded,
             mmprojState: .notDownloaded
@@ -188,5 +246,94 @@ final class ModelRegistryTests: XCTestCase {
             XCTAssertTrue(model.requiresMMProj, "\(model.id) should require mmproj")
             XCTAssertNotNil(model.mmprojFileSizeBytes, "\(model.id) should have mmproj size")
         }
+    }
+}
+
+/// Diagnostic test that mimics the chat UI flow:
+/// autoLoadFirstModel -> loadModel -> isModelLoaded
+@MainActor
+final class ChatFlowDiagnosticTest: XCTestCase {
+
+    func testChatUIFlowLoadsModel() async throws {
+        print("[CHATFLOW-TEST] === Starting chat UI flow diagnostic ===")
+        
+        // Step 1: Create the same objects the chat UI uses
+        let inference = InferenceService()
+        let memoryBudgeter = MemoryBudgeter()
+        let lifecycle = ModelLifecycleManager(
+            inferenceService: inference,
+            memoryBudgeter: memoryBudgeter
+        )
+        
+        // Step 2: Check current state
+        print("[CHATFLOW-TEST] Initial state: \(lifecycle.currentState)")
+        print("[CHATFLOW-TEST] isModelLoaded: \(lifecycle.isModelLoaded)")
+        print("[CHATFLOW-TEST] activeModel: \(lifecycle.activeModel?.id ?? "nil")")
+        
+        // Step 3: Call autoLoadFirstModel (same as chat UI does on new conversation)
+        print("[CHATFLOW-TEST] Calling autoLoadFirstModel()...")
+        await lifecycle.autoLoadFirstModel()
+        
+        // Step 4: Check result
+        print("[CHATFLOW-TEST] After autoLoad:")
+        print("[CHATFLOW-TEST]   currentState: \(lifecycle.currentState)")
+        print("[CHATFLOW-TEST]   isModelLoaded: \(lifecycle.isModelLoaded)")
+        print("[CHATFLOW-TEST]   activeModel: \(lifecycle.activeModel?.id ?? "nil")")
+        
+        // Step 5: Assert
+        XCTAssertTrue(lifecycle.isModelLoaded, "Model was not loaded by autoLoadFirstModel(). state=\(lifecycle.currentState)")
+        print("[CHATFLOW-TEST] === PASSED ===")
+    }
+
+    /// Full chat flow: autoLoad -> send message -> capture response
+    func testFullChatFlowWithResponse() async throws {
+        print("[FULLFLOW] === Starting full chat flow ===")
+        
+        let inference = InferenceService()
+        let memoryBudgeter = MemoryBudgeter()
+        let lifecycle = ModelLifecycleManager(
+            inferenceService: inference,
+            memoryBudgeter: memoryBudgeter
+        )
+        
+        // Load model (same as UI flow)
+        await lifecycle.autoLoadFirstModel()
+        guard lifecycle.isModelLoaded else {
+            XCTFail("Model not loaded")
+            return
+        }
+        print("[FULLFLOW] Model loaded: \(lifecycle.activeModel!.id)")
+        
+        // Get the model config for prompt formatting
+        guard let model = lifecycle.activeModel else {
+            XCTFail("No active model")
+            return
+        }
+        
+        // Format a prompt using the SAME code path as streamChat
+        let messages = [ChatMessagePayload(role: .user, content: "Say hello in exactly one word")]
+        let sampling = SamplingConfig(
+            temperature: 0.7, topP: 0.9, topK: 40,
+            maxTokens: 32, repeatPenalty: 1.1
+        )
+        
+        print("[FULLFLOW] Sending via streamChat...")
+        var response = ""
+        do {
+            let stream = try await inference.streamChat(
+                messages: messages, systemPrompt: nil, sampling: sampling
+            )
+            for try await token in stream {
+                response += token
+            }
+            print("[FULLFLOW] Stream complete. Response: \(response)")
+        } catch {
+            print("[FULLFLOW] Stream error: \(error)")
+            XCTFail("Stream error: \(error)")
+            return
+        }
+        
+        XCTAssertFalse(response.isEmpty, "Empty response from model")
+        print("[FULLFLOW] === PASSED — response: \(response) ===")
     }
 }

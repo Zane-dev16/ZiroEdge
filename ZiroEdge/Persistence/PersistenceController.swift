@@ -435,6 +435,30 @@ actor PersistenceController {
         }
     }
 
+    /// Delete conversations that have zero messages (stale "New Conversation" entries).
+    /// Called on app launch to clean up abandoned conversations.
+    func purgeEmptyConversations() {
+        let context = writerContext
+        context.performAndWait {
+            let request = CDConversation.fetchRequest()
+            request.predicate = NSPredicate(format: "messages.@count == 0")
+
+            do {
+                let empties = try context.fetch(request)
+                if empties.isEmpty { return }
+
+                for conversation in empties {
+                    context.delete(conversation)
+                    logger.info("Purged empty conversation: \(conversation.id?.uuidString ?? "unknown", privacy: .public)")
+                }
+                saveContext(context, operation: "purgeEmptyConversations")
+                logger.info("Purged \(empties.count, privacy: .public) empty conversation(s)")
+            } catch {
+                logger.error("Failed to purge empty conversations: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
     // MARK: - Stress Test Support
 
     /// Generate test data for the 5,000-message stress test.

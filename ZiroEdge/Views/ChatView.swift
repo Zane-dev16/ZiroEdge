@@ -189,6 +189,7 @@ struct ChatView: View {
                 // Text input.
                 TextField("Message ZiroEdge...", text: $viewModel.inputText, axis: .vertical)
                     .textFieldStyle(.plain)
+                    .accessibilityIdentifier("chatInput")
                     .padding(.horizontal, 16)
                     .padding(.vertical, 10)
                     .background(Color(.systemGray6))
@@ -366,6 +367,7 @@ struct ChatView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
         .background(Color.red.opacity(0.1))
+        .accessibilityIdentifier("errorBanner")
     }
 
     // MARK: - Truncation Warning Banner

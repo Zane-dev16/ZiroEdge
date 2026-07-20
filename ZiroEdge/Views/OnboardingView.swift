@@ -111,7 +111,9 @@ final class OnboardingManager: ObservableObject {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        self.showOnboarding = !defaults.bool(forKey: "hasCompletedOnboarding")
+        let completed = defaults.bool(forKey: "hasCompletedOnboarding")
+        let isUITesting = CommandLine.arguments.contains("--uitesting")
+        self.showOnboarding = !completed && !isUITesting
     }
 
     func completeOnboarding() {

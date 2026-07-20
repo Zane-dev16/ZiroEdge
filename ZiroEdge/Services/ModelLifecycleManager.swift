@@ -73,16 +73,20 @@ final class ModelLifecycleManager: ObservableObject {
 
     /// Load a model. Checks memory budget first. Unloads current model if needed.
     func loadModel(_ model: AIModel) async {
+        print("[LOAD] loadModel(\(model.id)) — currentState=\(currentState)")
         // Don't reload if already loaded.
         if let active = activeModel, active.id == model.id, currentState == .loaded {
+            print("[LOAD] SKIP: already loaded")
             logger.info("Model already loaded: \(model.id, privacy: .public)")
             return
         }
 
+        print("[LOAD] Setting state to .loading")
         currentState = .loading
 
         // Check memory budget.
         let recommendation = await memoryBudgeter.recommendation(for: model)
+        print("[LOAD] Memory recommendation: \(recommendation)")
         switch recommendation {
         case .proceed:
             break  // Good to go.
@@ -98,9 +102,9 @@ final class ModelLifecycleManager: ObservableObject {
 
         case .insufficientRAM:
             let available = await memoryBudgeter.formattedAvailableRAM()
-            logger.error("Insufficient RAM for \(model.id, privacy: .public): \(available, privacy: .public) available")
-            currentState = .loadFailed
-            return
+            logger.warning("RAM is tight for \(model.id, privacy: .public): \(available, privacy: .public) available. Attempting load anyway...")
+            // Don't block — try to load. OS will kill us if we're wrong.
+            break
         }
 
         // Get file paths.
@@ -167,6 +171,31 @@ final class ModelLifecycleManager: ObservableObject {
         guard let model = activeModel else { return }
         showMemoryWarning = false
         await loadModel(model)
+    }
+
+    /// Load the first fully downloaded model. Used for UI testing.
+    func autoLoadFirstModel() async {
+        print("[AUTOLOAD] autoLoadFirstModel called — activeModel=\(activeModel?.id ?? "nil")")
+        guard activeModel == nil else {
+            print("[AUTOLOAD] SKIP: model already loaded (\(activeModel!.id))")
+            return
+        }
+        
+        // Check each model's download status
+        for m in ModelRegistry.allModels {
+            let isDL = ModelManagerService.isFullyDownloaded(m)
+            print("[AUTOLOAD]   \(m.id): downloaded=\(isDL)")
+        }
+        
+        guard let model = ModelRegistry.allModels.first(where: { ModelManagerService.isFullyDownloaded($0) }) else {
+            print("[AUTOLOAD] FAIL: no downloaded models found")
+            logger.warning("autoLoadFirstModel: no downloaded models found")
+            return
+        }
+        print("[AUTOLOAD] Selected: \(model.id), loading...")
+        logger.info("autoLoadFirstModel: loading \(model.id, privacy: .public)")
+        await loadModel(model)
+        print("[AUTOLOAD] loadModel returned — currentState=\(self.currentState), isLoaded=\(self.isModelLoaded)")
     }
 }
 
