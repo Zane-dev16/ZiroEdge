@@ -223,20 +223,49 @@ enum ModelManagerService {
         modelsDirectory.appendingPathComponent("\(model.id)-mmproj.gguf")
     }
 
-    /// Whether the base model file exists on disk.
+    /// Whether the base model file exists on disk AND passes basic validation.
+    /// Bogus files (wrong magic, size mismatch, etc.) are removed automatically.
     static func isBaseDownloaded(_ model: AIModel) -> Bool {
-        FileManager.default.fileExists(atPath: baseModelPath(for: model).path)
+        let path = baseModelPath(for: model)
+        guard FileManager.default.fileExists(atPath: path.path) else { return false }
+        guard verifyGGUFHeader(fileURL: path) else {
+            try? FileManager.default.removeItem(at: path)
+            return false
+        }
+        // Cheap size check — wrong byte count means the download is incomplete/corrupt.
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: path.path),
+           let fileSize = attrs[.size] as? Int64,
+           fileSize != model.baseFileSizeBytes {
+            try? FileManager.default.removeItem(at: path)
+            return false
+        }
+        return true
     }
 
-    /// Whether the mmproj file exists on disk (always true for text-only models).
+    /// Whether the mmproj file exists on disk AND passes basic validation.
+    /// Always returns true for text-only models.
     static func isMMProjDownloaded(_ model: AIModel) -> Bool {
         guard model.requiresMMProj else { return true }
-        return FileManager.default.fileExists(atPath: mmprojModelPath(for: model).path)
+        let path = mmprojModelPath(for: model)
+        guard FileManager.default.fileExists(atPath: path.path) else { return false }
+        guard verifyGGUFHeader(fileURL: path) else {
+            try? FileManager.default.removeItem(at: path)
+            return false
+        }
+        if let expectedSize = model.mmprojFileSizeBytes,
+           let attrs = try? FileManager.default.attributesOfItem(atPath: path.path),
+           let fileSize = attrs[.size] as? Int64,
+           fileSize != expectedSize {
+            try? FileManager.default.removeItem(at: path)
+            return false
+        }
+        return true
     }
 
-    /// Whether a model is fully downloaded (base + mmproj if needed).
+    /// Whether a model is fully downloaded AND passes validation (GGUF header, size, SHA-256).
     static func isFullyDownloaded(_ model: AIModel) -> Bool {
-        isBaseDownloaded(model) && isMMProjDownloaded(model)
+        if case .ready = availability(for: model) { return true }
+        return false
     }
 
     /// Disk usage in bytes for a specific model (base + mmproj).
@@ -318,6 +347,72 @@ enum ModelManagerService {
     }
 }
 
+// MARK: - Availability Check
+
+extension ModelManagerService {
+
+    /// Comprehensive model availability check. Validates files on disk
+    /// and returns ready, repair-needed, or unavailable.
+    static func availability(for modelID: String) -> ModelAvailability {
+        guard let model = ModelRegistry.model(for: modelID) else {
+            return .unavailable
+        }
+        return availability(for: model)
+    }
+
+    /// Comprehensive model availability check for an AIModel.
+    static func availability(for model: AIModel) -> ModelAvailability {
+        // Missing catalog metadata → unavailable.
+        guard !model.baseSHA256.isEmpty else {
+            return .unavailable
+        }
+
+        var issues: [ArtifactIssue] = []
+
+        // Check base artifact.
+        let basePath = baseModelPath(for: model)
+        if !FileManager.default.fileExists(atPath: basePath.path) {
+            issues.append(.missing(artifact: .base))
+        } else if !verifyGGUFHeader(fileURL: basePath) {
+            issues.append(.missingGGUFHeader)
+        } else {
+            // SHA-256 check.
+            if let actualSHA = computeSHA256(fileURL: basePath), !model.baseSHA256.isEmpty {
+                if actualSHA != model.baseSHA256.lowercased() {
+                    issues.append(.sha256Mismatch)
+                }
+            }
+            // Size check.
+            if let attrs = try? FileManager.default.attributesOfItem(atPath: basePath.path),
+               let fileSize = attrs[.size] as? Int64 {
+                if fileSize != model.baseFileSizeBytes {
+                    issues.append(.sizeMismatch)
+                }
+            }
+        }
+
+        // Check mmproj artifact for vision models.
+        if model.requiresMMProj {
+            let mmprojPath = mmprojModelPath(for: model)
+            if !FileManager.default.fileExists(atPath: mmprojPath.path) {
+                issues.append(.missing(artifact: .mmproj))
+            } else if !verifyGGUFHeader(fileURL: mmprojPath) {
+                issues.append(.missingGGUFHeader)
+            } else if let expectedSHA = model.mmprojSHA256, !expectedSHA.isEmpty {
+                if let actualSHA = computeSHA256(fileURL: mmprojPath),
+                   actualSHA != expectedSHA.lowercased() {
+                    issues.append(.sha256Mismatch)
+                }
+            }
+        }
+
+        if issues.isEmpty {
+            return .ready
+        }
+        return .repairNeeded(issues: issues)
+    }
+}
+
 // MARK: - SHA256 Helper
 
 import CryptoKit
@@ -328,5 +423,143 @@ extension ModelManagerService {
         guard let data = try? Data(contentsOf: fileURL) else { return nil }
         let hash = SHA256.hash(data: data)
         return hash.map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+// MARK: - Managed Storage Directories
+
+extension ModelManagerService {
+
+    /// Root directory for managed, backup-excluded model storage.
+    static var managedStorageDirectory: URL {
+        let appSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory, in: .userDomainMask
+        )[0]
+        return appSupport.appendingPathComponent("ZiroEdge/Models", isDirectory: true)
+    }
+
+    /// Staging area for in-progress downloads.
+    static var stagingDirectory: URL {
+        managedStorageDirectory.appendingPathComponent("Staging", isDirectory: true)
+    }
+
+    /// Resume data for interrupted downloads.
+    static var resumeDirectory: URL {
+        managedStorageDirectory.appendingPathComponent("Resume", isDirectory: true)
+    }
+
+    /// Quarantine area for files that failed validation.
+    static var quarantineDirectory: URL {
+        managedStorageDirectory.appendingPathComponent("Quarantine", isDirectory: true)
+    }
+
+    /// Legacy models directory (pre-#4 location in Documents).
+    static var legacyModelsDirectory: URL {
+        let documents = FileManager.default.urls(
+            for: .documentDirectory, in: .userDomainMask
+        )[0]
+        return documents.appendingPathComponent("Models", isDirectory: true)
+    }
+}
+
+// MARK: - Artifact Validation
+
+extension ModelManagerService {
+
+    /// Lightweight pre-SHA validation of a model artifact. Returns a list of
+    /// human-readable issue descriptions. Empty list means the file passes.
+    static func artifactValidationIssues(
+        at url: URL,
+        model: AIModel,
+        artifact: ArtifactType
+    ) -> [String] {
+        var issues: [String] = []
+        let fm = FileManager.default
+
+        guard fm.fileExists(atPath: url.path) else {
+            issues.append("File does not exist at \(url.path)")
+            return issues
+        }
+
+        guard let attrs = try? fm.attributesOfItem(atPath: url.path),
+              let fileSize = attrs[.size] as? Int64,
+              fileSize > 0 else {
+            issues.append("File is empty or unreadable")
+            return issues
+        }
+
+        // Verify GGUF header magic.
+        guard verifyGGUFHeader(fileURL: url) else {
+            issues.append("Invalid or missing GGUF header magic")
+            return issues
+        }
+
+        // Size sanity check: must be at least the advertised model size.
+        let expectedSize = artifact == .base
+            ? model.baseFileSizeBytes
+            : model.mmprojFileSizeBytes ?? 0
+        if expectedSize > 0 && fileSize < expectedSize / 2 {
+            issues.append(
+                "File size (\(fileSize) bytes) is less than half of expected (\(expectedSize) bytes)"
+            )
+        }
+
+        return issues
+    }
+
+    /// Verify the GGUF magic number at the start of a file.
+    /// GGUF format: 4-byte magic "GGUF" (0x47 0x47 0x55 0x46)
+    /// followed by a 4-byte little-endian version (2 or 3).
+    static func verifyGGUFHeader(fileURL: URL) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: fileURL) else {
+            return false
+        }
+        defer { try? handle.close() }
+
+        guard let header = try? handle.read(upToCount: 8),
+              header.count >= 8 else {
+            return false
+        }
+
+        let magic = header[0..<4]
+        let expectedMagic: [UInt8] = [0x47, 0x47, 0x55, 0x46]  // "GGUF"
+        guard Array(magic) == expectedMagic else {
+            return false
+        }
+
+        // Version is little-endian uint32 at bytes 4-7.
+        let version = UInt32(header[4])
+            | (UInt32(header[5]) << 8)
+            | (UInt32(header[6]) << 16)
+            | (UInt32(header[7]) << 24)
+        return version == 2 || version == 3
+    }
+}
+
+// MARK: - Repair Tracking
+
+extension ModelManagerService {
+
+    private static let repairMarkerPrefix = ".repair-needed-"
+
+    /// Mark a model as needing repair (e.g. after a failed migration).
+    static func markRepairNeeded(for model: AIModel) {
+        let marker = managedStorageDirectory
+            .appendingPathComponent("\(repairMarkerPrefix)\(model.id)")
+        try? Data("1".utf8).write(to: marker, options: .atomic)
+    }
+
+    /// Check whether a model has been marked for repair.
+    static func isRepairNeeded(for model: AIModel) -> Bool {
+        let marker = managedStorageDirectory
+            .appendingPathComponent("\(repairMarkerPrefix)\(model.id)")
+        return FileManager.default.fileExists(atPath: marker.path)
+    }
+
+    /// Clear the repair marker after a successful repair.
+    static func clearRepairNeeded(for model: AIModel) {
+        let marker = managedStorageDirectory
+            .appendingPathComponent("\(repairMarkerPrefix)\(model.id)")
+        try? FileManager.default.removeItem(at: marker)
     }
 }
