@@ -66,7 +66,7 @@ final class MockInferenceServiceForTitle: InferenceServiceProtocol, @unchecked S
         }
     }
 
-    func cancelCurrentStream() {}
+    func cancelCurrentStream() async {}
 }
 
 // MARK: - Testable Title Generator

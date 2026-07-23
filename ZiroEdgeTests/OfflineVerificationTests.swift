@@ -86,7 +86,7 @@ final class MockInferenceService: InferenceServiceProtocol, @unchecked Sendable 
         }
     }
 
-    func cancelCurrentStream() {
+    func cancelCurrentStream() async {
         cancelCallCount += 1
     }
 }
@@ -354,9 +354,9 @@ final class OfflineConversationPersistenceTests: XCTestCase {
 
     func testMultipleConversationsOffline() async throws {
         // Create multiple conversations — all local.
-        for i in 0..<5 {
+        for index in 0..<5 {
             let _ = await persistence.createConversation(
-                title: "Conversation \(i)",
+                title: "Conversation \(index)",
                 modelID: "llama3.2-3b-q4"
             )
         }
@@ -535,11 +535,11 @@ final class OfflineOnboardingTests: XCTestCase {
         manager1.completeOnboarding()
 
         // Multiple relaunches.
-        for i in 0..<5 {
+        for index in 0..<5 {
             let manager = OnboardingManager(defaults: defaults)
             XCTAssertFalse(
                 manager.showOnboarding,
-                "Onboarding should not appear on relaunch \(i)"
+                "Onboarding should not appear on relaunch \(index)"
             )
         }
     }
