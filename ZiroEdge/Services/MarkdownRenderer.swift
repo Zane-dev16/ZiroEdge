@@ -21,7 +21,12 @@ struct MarkdownRenderer {
         var result = AttributedString()
 
         // Split into lines for block-level processing.
-        let lines = markdown.components(separatedBy: "\n")
+        // Drop trailing empty lines so the renderer doesn't add extra blank
+        // lines at the end (e.g. when the LLM response ends with \n).
+        var lines = markdown.components(separatedBy: "\n")
+        while let last = lines.last, last.isEmpty {
+            lines.removeLast()
+        }
         var inCodeBlock = false
         var codeBlockLanguage = ""
         var codeBlockLines: [String] = []
@@ -77,7 +82,14 @@ struct MarkdownRenderer {
             result.append(renderCodeBlock(code, language: codeBlockLanguage))
         }
 
-        return result
+        // Strip trailing newlines. Every block-level element appends "\n",
+        // so the final output always ends with at least one trailing newline.
+        // We bridge through NSAttributedString to safely delete trailing chars.
+        let nsResult = NSMutableAttributedString(attributedString: NSAttributedString(result))
+        while nsResult.length > 0, nsResult.string.hasSuffix("\n") {
+            nsResult.deleteCharacters(in: NSRange(location: nsResult.length - 1, length: 1))
+        }
+        return AttributedString(nsResult)
     }
 
     // MARK: - Inline Rendering
