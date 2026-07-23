@@ -5,9 +5,21 @@
 // All writes flow through the background writer to prevent conflicts.
 // Main context is read-only for UI, auto-merges from writer.
 
+// swiftlint:disable file_length
+
 import Foundation
 import CoreData
 import os
+
+struct ConversationPayload: Sendable, Identifiable {
+    let id: UUID
+    let title: String
+    let modelID: String
+    let updatedAt: Date?
+    let createdAt: Date?
+    let messageCount: Int
+    let isBranch: Bool
+}
 
 // MARK: - Persistence Controller
 
@@ -142,6 +154,32 @@ actor PersistenceController {
                 }
             } catch {
                 logger.error("Failed to fetch conversation for title update: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
+    /// Update a conversation title only when it still matches the expected value.
+    func updateConversationTitleIfStill(
+        id: UUID,
+        newTitle: String,
+        expectedCurrentTitle: String
+    ) {
+        let context = writerContext
+        context.performAndWait {
+            let request = CDConversation.fetchRequest()
+            request.predicate = NSPredicate(format: "id == %@", id as CVarArg)
+            request.fetchLimit = 1
+
+            do {
+                guard let conversation = try context.fetch(request).first,
+                      conversation.title == expectedCurrentTitle else {
+                    return
+                }
+                conversation.title = newTitle
+                conversation.updatedAt = Date()
+                saveContext(context, operation: "updateConversationTitleIfStill")
+            } catch {
+                logger.error("Failed to fetch conversation for conditional title update: \(error.localizedDescription, privacy: .public)")
             }
         }
     }
@@ -294,66 +332,13 @@ actor PersistenceController {
         }
     }
 
-    /// Finalize a streaming message — flush remaining buffer, set `isStreaming = false`.
+    /// Finalize a streaming message by appending buffered tokens and clearing
+    /// `isStreaming` in a single save.
     func endStreamingMessage(messageID: UUID) {
-        flushBuffer(messageID: messageID)
-
+        let buffered = tokenBuffer[messageID] ?? ""
         let context = writerContext
-        context.performAndWait {
-            let request = CDChatMessage.fetchRequest()
-            request.predicate = NSPredicate(format: "id == %@", messageID as CVarArg)
-            request.fetchLimit = 1
+        var didSave = false
 
-            do {
-                if let message = try context.fetch(request).first {
-                    message.isStreaming = false
-                    saveContext(context, operation: "endStreamingMessage")
-                }
-            } catch {
-                logger.error("Failed to end streaming message: \(error.localizedDescription, privacy: .public)")
-            }
-        }
-
-        // Clean up buffer state.
-        tokenBuffer.removeValue(forKey: messageID)
-        bufferFlushCount.removeValue(forKey: messageID)
-        lastFlushTime.removeValue(forKey: messageID)
-    }
-
-    /// Cancel a streaming message — flush buffer, mark as cancelled.
-    func cancelStreamingMessage(messageID: UUID) {
-        flushBuffer(messageID: messageID)
-
-        let context = writerContext
-        context.performAndWait {
-            let request = CDChatMessage.fetchRequest()
-            request.predicate = NSPredicate(format: "id == %@", messageID as CVarArg)
-            request.fetchLimit = 1
-
-            do {
-                if let message = try context.fetch(request).first {
-                    message.isStreaming = false
-                    // Append cancellation indicator.
-                    let current = message.content ?? ""
-                    message.content = current + "\n\n_[Generation cancelled]_"
-                    saveContext(context, operation: "cancelStreamingMessage")
-                }
-            } catch {
-                logger.error("Failed to cancel streaming message: \(error.localizedDescription, privacy: .public)")
-            }
-        }
-
-        // Clean up buffer state.
-        tokenBuffer.removeValue(forKey: messageID)
-        bufferFlushCount.removeValue(forKey: messageID)
-        lastFlushTime.removeValue(forKey: messageID)
-    }
-
-    /// Flush the token buffer for a specific message to Core Data.
-    private func flushBuffer(messageID: UUID) {
-        guard let buffered = tokenBuffer[messageID], !buffered.isEmpty else { return }
-
-        let context = writerContext
         context.performAndWait {
             let request = CDChatMessage.fetchRequest()
             request.predicate = NSPredicate(format: "id == %@", messageID as CVarArg)
@@ -362,48 +347,151 @@ actor PersistenceController {
             do {
                 if let message = try context.fetch(request).first {
                     message.appendTokens(buffered)
-                    saveContext(context, operation: "flushBuffer")
+                    message.isStreaming = false
+                    didSave = saveContext(context, operation: "endStreamingMessage")
+                    if !didSave {
+                        context.rollback()
+                    }
+                }
+            } catch {
+                logger.error("Failed to end streaming message: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+
+        if didSave {
+            clearBufferState(messageID: messageID)
+        }
+    }
+
+    /// Cancel a streaming message by appending buffered tokens and marking it
+    /// cancelled in a single save.
+    func cancelStreamingMessage(messageID: UUID) {
+        let buffered = tokenBuffer[messageID] ?? ""
+        let context = writerContext
+        var didSave = false
+
+        context.performAndWait {
+            let request = CDChatMessage.fetchRequest()
+            request.predicate = NSPredicate(format: "id == %@", messageID as CVarArg)
+            request.fetchLimit = 1
+
+            do {
+                if let message = try context.fetch(request).first {
+                    message.appendTokens(buffered)
+                    message.isStreaming = false
+                    let current = message.content ?? ""
+                    message.content = current + "\n\n_[Generation cancelled]_"
+                    didSave = saveContext(context, operation: "cancelStreamingMessage")
+                    if !didSave {
+                        context.rollback()
+                    }
+                }
+            } catch {
+                logger.error("Failed to cancel streaming message: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+
+        if didSave {
+            clearBufferState(messageID: messageID)
+        }
+    }
+
+    /// Persist all buffered streaming tokens before the app is suspended.
+    func flushPendingWrites() {
+        for messageID in Array(tokenBuffer.keys) {
+            flushBuffer(messageID: messageID)
+        }
+    }
+
+    /// Flush the token buffer for a specific message to Core Data.
+    private func flushBuffer(messageID: UUID) {
+        guard let buffered = tokenBuffer[messageID], !buffered.isEmpty else { return }
+
+        let context = writerContext
+        var didSave = false
+        context.performAndWait {
+            let request = CDChatMessage.fetchRequest()
+            request.predicate = NSPredicate(format: "id == %@", messageID as CVarArg)
+            request.fetchLimit = 1
+
+            do {
+                if let message = try context.fetch(request).first {
+                    message.appendTokens(buffered)
+                    didSave = saveContext(context, operation: "flushBuffer")
+                    if !didSave {
+                        context.rollback()
+                    }
                 }
             } catch {
                 logger.error("Failed to flush token buffer: \(error.localizedDescription, privacy: .public)")
             }
         }
 
-        // Reset buffer and timer.
-        tokenBuffer[messageID] = ""
-        bufferFlushCount[messageID] = 0
-        lastFlushTime[messageID] = currentTimeMs()
+        if didSave {
+            tokenBuffer[messageID] = ""
+            bufferFlushCount[messageID] = 0
+            lastFlushTime[messageID] = currentTimeMs()
+        }
     }
 
+}
+
+extension PersistenceController {
     // MARK: - Fetch Helpers
 
     /// Fetch all conversations, sorted by most recently updated.
-    func fetchConversations() -> [CDConversation] {
+    func fetchConversations() -> [ConversationPayload] {
         let context = viewContext
-        let request = CDConversation.fetchRequest()
-        request.sortDescriptors = [NSSortDescriptor(key: "updatedAt", ascending: false)]
-
-        do {
-            return try context.fetch(request)
-        } catch {
-            logger.error("Failed to fetch conversations: \(error.localizedDescription, privacy: .public)")
-            return []
+        var results: [ConversationPayload] = []
+        context.performAndWait {
+            let request = CDConversation.fetchRequest()
+            request.sortDescriptors = [NSSortDescriptor(key: "updatedAt", ascending: false)]
+            do {
+                let objects = try context.fetch(request)
+                results = objects.map { conversation in
+                    ConversationPayload(
+                        id: conversation.id ?? UUID(),
+                        title: conversation.title ?? "Untitled",
+                        modelID: conversation.modelID ?? "",
+                        updatedAt: conversation.updatedAt,
+                        createdAt: conversation.createdAt,
+                        messageCount: conversation.messageCount,
+                        isBranch: conversation.isBranch
+                    )
+                }
+            } catch {
+                logger.error("Failed to fetch conversations: \(error.localizedDescription, privacy: .public)")
+            }
         }
+        return results
     }
 
     /// Fetch messages for a conversation, sorted by sequence index.
-    func fetchMessages(conversationID: UUID) -> [CDChatMessage] {
+    func fetchMessages(conversationID: UUID) -> [ChatMessagePayload] {
         let context = viewContext
-        let request = CDChatMessage.fetchRequest()
-        request.predicate = NSPredicate(format: "conversation.id == %@", conversationID as CVarArg)
-        request.sortDescriptors = [NSSortDescriptor(key: "sequenceIndex", ascending: true)]
-
-        do {
-            return try context.fetch(request)
-        } catch {
-            logger.error("Failed to fetch messages: \(error.localizedDescription, privacy: .public)")
-            return []
+        var results: [ChatMessagePayload] = []
+        context.performAndWait {
+            let request = CDChatMessage.fetchRequest()
+            request.predicate = NSPredicate(format: "conversation.id == %@", conversationID as CVarArg)
+            request.sortDescriptors = [NSSortDescriptor(key: "sequenceIndex", ascending: true)]
+            do {
+                let objects = try context.fetch(request)
+                results = objects.map { message in
+                    ChatMessagePayload(
+                        id: message.id ?? UUID(),
+                        role: message.messageRole,
+                        content: message.content ?? "",
+                        imageData: message.imageData,
+                        sequenceIndex: message.sequenceIndex,
+                        isStreaming: message.isStreaming,
+                        createdAt: message.createdAt
+                    )
+                }
+            } catch {
+                logger.error("Failed to fetch messages: \(error.localizedDescription, privacy: .public)")
+            }
         }
+        return results
     }
 
     /// Recover any messages left in streaming state (e.g. after a crash).
@@ -424,7 +512,8 @@ actor PersistenceController {
                     } else {
                         message.content = "_[Generation was interrupted]_"
                     }
-                    logger.info("Recovered incomplete message: \(message.id?.uuidString ?? "unknown", privacy: .public)")
+                    let messageID = message.id?.uuidString ?? "unknown"
+                    logger.info("Recovered incomplete message: \(messageID, privacy: .public)")
                 }
                 if !incomplete.isEmpty {
                     saveContext(context, operation: "recoverIncompleteStreams")
@@ -449,7 +538,8 @@ actor PersistenceController {
 
                 for conversation in empties {
                     context.delete(conversation)
-                    logger.info("Purged empty conversation: \(conversation.id?.uuidString ?? "unknown", privacy: .public)")
+                    let conversationID = conversation.id?.uuidString ?? "unknown"
+                    logger.info("Purged empty conversation: \(conversationID, privacy: .public)")
                 }
                 saveContext(context, operation: "purgeEmptyConversations")
                 logger.info("Purged \(empties.count, privacy: .public) empty conversation(s)")
@@ -552,154 +642,114 @@ actor PersistenceController {
     /// Used when the .xcdatamodeld isn't available (e.g. test targets).
     private static func createManagedModel() -> NSManagedObjectModel {
         let model = NSManagedObjectModel()
+        let conversationEntity = createConversationEntity()
+        let messageEntity = createMessageEntity()
+        configureRelationships(
+            conversationEntity: conversationEntity,
+            messageEntity: messageEntity
+        )
+        model.entities = [conversationEntity, messageEntity]
+        return model
+    }
 
-        // CDConversation entity.
-        let conversationEntity = NSEntityDescription()
-        conversationEntity.name = "CDConversation"
-        conversationEntity.managedObjectClassName = "CDConversation"
-
-        let convID = NSAttributeDescription()
-        convID.name = "id"
-        convID.attributeType = .UUIDAttributeType
-        convID.isOptional = true
-
-        let convTitle = NSAttributeDescription()
-        convTitle.name = "title"
-        convTitle.attributeType = .stringAttributeType
-        convTitle.isOptional = true
-        convTitle.defaultValue = "New Conversation"
-
-        let convSystemPrompt = NSAttributeDescription()
-        convSystemPrompt.name = "systemPrompt"
-        convSystemPrompt.attributeType = .stringAttributeType
-        convSystemPrompt.isOptional = true
-
-        let convModelID = NSAttributeDescription()
-        convModelID.name = "modelID"
-        convModelID.attributeType = .stringAttributeType
-        convModelID.isOptional = true
-
-        let convTemp = NSAttributeDescription()
-        convTemp.name = "temperature"
-        convTemp.attributeType = .doubleAttributeType
-        convTemp.defaultValue = 0.7
-
-        let convTopP = NSAttributeDescription()
-        convTopP.name = "topP"
-        convTopP.attributeType = .doubleAttributeType
-        convTopP.defaultValue = 0.9
-
-        let convTopK = NSAttributeDescription()
-        convTopK.name = "topK"
-        convTopK.attributeType = .integer32AttributeType
-        convTopK.defaultValue = 40
-
-        let convCreated = NSAttributeDescription()
-        convCreated.name = "createdAt"
-        convCreated.attributeType = .dateAttributeType
-        convCreated.isOptional = true
-
-        let convUpdated = NSAttributeDescription()
-        convUpdated.name = "updatedAt"
-        convUpdated.attributeType = .dateAttributeType
-        convUpdated.isOptional = true
-
-        let convParentBranch = NSAttributeDescription()
-        convParentBranch.name = "parentBranchID"
-        convParentBranch.attributeType = .UUIDAttributeType
-        convParentBranch.isOptional = true
-
-        let convBranchPoint = NSAttributeDescription()
-        convBranchPoint.name = "branchPointMessageID"
-        convBranchPoint.attributeType = .UUIDAttributeType
-        convBranchPoint.isOptional = true
-
-        conversationEntity.properties = [
-            convID, convTitle, convSystemPrompt, convModelID,
-            convTemp, convTopP, convTopK, convCreated, convUpdated,
-            convParentBranch, convBranchPoint
+    private static func createConversationEntity() -> NSEntityDescription {
+        let entity = NSEntityDescription()
+        entity.name = "CDConversation"
+        entity.managedObjectClassName = "CDConversation"
+        entity.properties = [
+            attribute("id", type: .UUIDAttributeType, isOptional: true),
+            attribute(
+                "title",
+                type: .stringAttributeType,
+                isOptional: true,
+                defaultValue: "New Conversation"
+            ),
+            attribute("systemPrompt", type: .stringAttributeType, isOptional: true),
+            attribute("modelID", type: .stringAttributeType, isOptional: true),
+            attribute("temperature", type: .doubleAttributeType, defaultValue: 0.7),
+            attribute("topP", type: .doubleAttributeType, defaultValue: 0.9),
+            attribute("topK", type: .integer32AttributeType, defaultValue: 40),
+            attribute("createdAt", type: .dateAttributeType, isOptional: true),
+            attribute("updatedAt", type: .dateAttributeType, isOptional: true),
+            attribute("parentBranchID", type: .UUIDAttributeType, isOptional: true),
+            attribute("branchPointMessageID", type: .UUIDAttributeType, isOptional: true)
         ]
+        return entity
+    }
 
-        // CDChatMessage entity.
-        let messageEntity = NSEntityDescription()
-        messageEntity.name = "CDChatMessage"
-        messageEntity.managedObjectClassName = "CDChatMessage"
-
-        let msgID = NSAttributeDescription()
-        msgID.name = "id"
-        msgID.attributeType = .UUIDAttributeType
-        msgID.isOptional = true
-
-        let msgRole = NSAttributeDescription()
-        msgRole.name = "role"
-        msgRole.attributeType = .stringAttributeType
-        msgRole.isOptional = true
-
-        let msgContent = NSAttributeDescription()
-        msgContent.name = "content"
-        msgContent.attributeType = .stringAttributeType
-        msgContent.isOptional = true
-        msgContent.defaultValue = ""
-
-        let msgImageData = NSAttributeDescription()
-        msgImageData.name = "imageData"
-        msgImageData.attributeType = .binaryDataAttributeType
-        msgImageData.isOptional = true
-
-        let msgSeqIndex = NSAttributeDescription()
-        msgSeqIndex.name = "sequenceIndex"
-        msgSeqIndex.attributeType = .integer32AttributeType
-        msgSeqIndex.defaultValue = 0
-
-        let msgIsStreaming = NSAttributeDescription()
-        msgIsStreaming.name = "isStreaming"
-        msgIsStreaming.attributeType = .booleanAttributeType
-        msgIsStreaming.defaultValue = false
-
-        let msgCreated = NSAttributeDescription()
-        msgCreated.name = "createdAt"
-        msgCreated.attributeType = .dateAttributeType
-        msgCreated.isOptional = true
-
-        messageEntity.properties = [
-            msgID, msgRole, msgContent, msgImageData,
-            msgSeqIndex, msgIsStreaming, msgCreated
+    private static func createMessageEntity() -> NSEntityDescription {
+        let entity = NSEntityDescription()
+        entity.name = "CDChatMessage"
+        entity.managedObjectClassName = "CDChatMessage"
+        entity.properties = [
+            attribute("id", type: .UUIDAttributeType, isOptional: true),
+            attribute("role", type: .stringAttributeType, isOptional: true),
+            attribute("content", type: .stringAttributeType, isOptional: true, defaultValue: ""),
+            attribute("imageData", type: .binaryDataAttributeType, isOptional: true),
+            attribute("sequenceIndex", type: .integer32AttributeType, defaultValue: 0),
+            attribute("isStreaming", type: .booleanAttributeType, defaultValue: false),
+            attribute("createdAt", type: .dateAttributeType, isOptional: true)
         ]
+        return entity
+    }
 
-        // Relationships.
+    private static func attribute(
+        _ name: String,
+        type: NSAttributeType,
+        isOptional: Bool = false,
+        defaultValue: Any? = nil
+    ) -> NSAttributeDescription {
+        let attribute = NSAttributeDescription()
+        attribute.name = name
+        attribute.attributeType = type
+        attribute.isOptional = isOptional
+        attribute.defaultValue = defaultValue
+        return attribute
+    }
+
+    private static func configureRelationships(
+        conversationEntity: NSEntityDescription,
+        messageEntity: NSEntityDescription
+    ) {
         let messagesRelationship = NSRelationshipDescription()
         messagesRelationship.name = "messages"
         messagesRelationship.destinationEntity = messageEntity
         messagesRelationship.isOptional = true
-        messagesRelationship.maxCount = 0  // to-many
+        messagesRelationship.maxCount = 0
         messagesRelationship.deleteRule = .cascadeDeleteRule
 
         let conversationRelationship = NSRelationshipDescription()
         conversationRelationship.name = "conversation"
         conversationRelationship.destinationEntity = conversationEntity
         conversationRelationship.isOptional = true
-        conversationRelationship.maxCount = 1  // to-one
+        conversationRelationship.maxCount = 1
         conversationRelationship.deleteRule = .nullifyDeleteRule
 
         messagesRelationship.inverseRelationship = conversationRelationship
         conversationRelationship.inverseRelationship = messagesRelationship
-
         conversationEntity.properties.append(messagesRelationship)
         messageEntity.properties.append(conversationRelationship)
-
-        model.entities = [conversationEntity, messageEntity]
-        return model
     }
 
     // MARK: - Helpers
 
-    private func saveContext(_ context: NSManagedObjectContext, operation: String) {
-        guard context.hasChanges else { return }
+    @discardableResult
+    private func saveContext(_ context: NSManagedObjectContext, operation: String) -> Bool {
+        guard context.hasChanges else { return true }
         do {
             try context.save()
+            return true
         } catch {
-            logger.error("Core Data save failed (\(operation, privacy: .public)): \(error.localizedDescription, privacy: .public)")
+            let description = error.localizedDescription
+            logger.error("Core Data save failed (\(operation, privacy: .public)): \(description, privacy: .public)")
+            return false
         }
+    }
+
+    private func clearBufferState(messageID: UUID) {
+        tokenBuffer.removeValue(forKey: messageID)
+        bufferFlushCount.removeValue(forKey: messageID)
+        lastFlushTime.removeValue(forKey: messageID)
     }
 
     private func currentTimeMs() -> UInt64 {

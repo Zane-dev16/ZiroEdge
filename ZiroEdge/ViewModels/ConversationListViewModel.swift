@@ -13,7 +13,7 @@ final class ConversationListViewModel: ObservableObject {
 
     // MARK: - Published State
 
-    @Published var conversations: [CDConversation] = []
+    @Published var conversations: [ConversationPayload] = []
     @Published var selectedConversationID: UUID?
     @Published var isEditingTitle: Bool = false
     @Published var editingTitle: String = ""
@@ -60,19 +60,23 @@ final class ConversationListViewModel: ObservableObject {
 
     /// Delete conversations at specific index set (for swipe-to-delete).
     func deleteConversations(at offsets: IndexSet) async {
-        for index in offsets {
-            let conversation = conversations[index]
-            if let id = conversation.id {
-                await deleteConversation(id)
-            }
+        let idsToDelete = offsets.compactMap { index in
+            conversations.indices.contains(index) ? conversations[index].id : nil
         }
+        for id in idsToDelete {
+            await persistence.deleteConversation(id: id)
+        }
+        if selectedConversationID.map(idsToDelete.contains) == true {
+            selectedConversationID = nil
+        }
+        await loadConversations()
     }
 
     // MARK: - Rename
 
     /// Begin editing a conversation title.
-    func beginRename(_ conversation: CDConversation) {
-        editingTitle = conversation.title ?? "Untitled"
+    func beginRename(_ conversation: ConversationPayload) {
+        editingTitle = conversation.title
         isEditingTitle = true
     }
 
@@ -104,7 +108,7 @@ final class ConversationListViewModel: ObservableObject {
     // MARK: - Helpers
 
     /// The currently selected conversation object.
-    var selectedConversation: CDConversation? {
+    var selectedConversation: ConversationPayload? {
         guard let id = selectedConversationID else { return nil }
         return conversations.first { $0.id == id }
     }

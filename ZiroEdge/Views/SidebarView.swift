@@ -11,10 +11,10 @@ struct SidebarView: View {
     let onNewConversation: () -> Void
     let onSelectConversation: (UUID) -> Void
 
-    @State private var conversationToRename: CDConversation?
+    @State private var conversationToRename: ConversationPayload?
     @State private var renameText: String = ""
     @State private var showDeleteConfirmation = false
-    @State private var conversationToDelete: CDConversation?
+    @State private var conversationToDelete: ConversationPayload?
 
     var body: some View {
         List(selection: $viewModel.selectedConversationID) {
@@ -33,14 +33,12 @@ struct SidebarView: View {
                         .tag(conversation.id)
                         .contentShape(Rectangle())
                         .onTapGesture {
-                            if let id = conversation.id {
-                                onSelectConversation(id)
-                            }
+                            onSelectConversation(conversation.id)
                         }
                         .contextMenu {
                             Button(action: {
                                 conversationToRename = conversation
-                                renameText = conversation.title ?? "Untitled"
+                                renameText = conversation.title
                             }) {
                                 Label("Rename", systemImage: "pencil")
                             }
@@ -71,9 +69,9 @@ struct SidebarView: View {
         )) {
             TextField("Title", text: $renameText)
             Button("Save") {
-                if let conversation = conversationToRename, let id = conversation.id {
+                if let conversation = conversationToRename {
                     viewModel.editingTitle = renameText
-                    Task { await viewModel.commitRename(id) }
+                    Task { await viewModel.commitRename(conversation.id) }
                 }
             }
             Button("Cancel", role: .cancel) {
@@ -84,8 +82,8 @@ struct SidebarView: View {
         }
         .alert("Delete Conversation?", isPresented: $showDeleteConfirmation) {
             Button("Delete", role: .destructive) {
-                if let conversation = conversationToDelete, let id = conversation.id {
-                    Task { await viewModel.deleteConversation(id) }
+                if let conversation = conversationToDelete {
+                    Task { await viewModel.deleteConversation(conversation.id) }
                 }
             }
             Button("Cancel", role: .cancel) {
@@ -103,11 +101,11 @@ struct SidebarView: View {
 // MARK: - Conversation Row
 
 struct ConversationRow: View {
-    let conversation: CDConversation
+    let conversation: ConversationPayload
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(conversation.title ?? "Untitled")
+            Text(conversation.title)
                 .font(.body)
                 .lineLimit(1)
 

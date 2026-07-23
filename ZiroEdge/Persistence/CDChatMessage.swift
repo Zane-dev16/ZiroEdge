@@ -90,12 +90,26 @@ struct ChatMessagePayload: Sendable, Hashable {
     let role: MessageRole
     let content: String
     let imageData: Data?
+    let sequenceIndex: Int32
+    let isStreaming: Bool
+    let createdAt: Date?
 
-    init(id: UUID = UUID(), role: MessageRole, content: String, imageData: Data? = nil) {
+    init(
+        id: UUID = UUID(),
+        role: MessageRole,
+        content: String,
+        imageData: Data? = nil,
+        sequenceIndex: Int32 = 0,
+        isStreaming: Bool = false,
+        createdAt: Date? = nil
+    ) {
         self.id = id
         self.role = role
         self.content = content
         self.imageData = imageData
+        self.sequenceIndex = sequenceIndex
+        self.isStreaming = isStreaming
+        self.createdAt = createdAt
     }
 }
 
