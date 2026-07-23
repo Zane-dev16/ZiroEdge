@@ -158,9 +158,15 @@ final class DownloadManager: NSObject, ObservableObject {
 
     // MARK: - Status Queries
 
-    /// Get download status for a model.
+    /// Get download status for a model. Falls back to disk check when
+    /// no cached download task exists.
     func status(for model: AIModel) -> ModelDownloadStatus {
-        downloadStatuses[model.id] ?? ModelDownloadStatus(baseState: .notDownloaded, mmprojState: model.requiresMMProj ? .notDownloaded : nil)
+        if let cached = downloadStatuses[model.id] { return cached }
+        let baseState: DownloadState = ModelManagerService.isBaseDownloaded(model) ? .downloaded : .notDownloaded
+        let mmprojState: DownloadState? = model.requiresMMProj
+            ? (ModelManagerService.isMMProjDownloaded(model) ? .downloaded : .notDownloaded)
+            : nil
+        return ModelDownloadStatus(modelID: model.id, baseState: baseState, mmprojState: mmprojState)
     }
 
     /// Check disk and update statuses for all registered models.
@@ -168,7 +174,7 @@ final class DownloadManager: NSObject, ObservableObject {
         for model in ModelRegistry.allModels {
             let baseState: DownloadState = ModelManagerService.isBaseDownloaded(model) ? .downloaded : .notDownloaded
             let mmprojState: DownloadState? = model.requiresMMProj ? (ModelManagerService.isMMProjDownloaded(model) ? .downloaded : .notDownloaded) : nil
-            downloadStatuses[model.id] = ModelDownloadStatus(baseState: baseState, mmprojState: mmprojState)
+            downloadStatuses[model.id] = ModelDownloadStatus(modelID: model.id, baseState: baseState, mmprojState: mmprojState)
         }
     }
 
@@ -645,7 +651,7 @@ extension DownloadManager {
                 ?? (ModelManagerService.isMMProjDownloaded(model) ? .downloaded : .notDownloaded))
             : nil
 
-        downloadStatuses[model.id] = ModelDownloadStatus(baseState: baseState, mmprojState: mmprojState)
+        downloadStatuses[model.id] = ModelDownloadStatus(modelID: model.id, baseState: baseState, mmprojState: mmprojState)
     }
 
     /// Clean up partial files for failed downloads that cannot be resumed.
