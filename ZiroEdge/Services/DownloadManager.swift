@@ -56,7 +56,10 @@ final class DownloadTask {
         case .base:
             return model.baseURL
         case .mmproj:
-            return model.mmprojURL!
+            guard let url = model.mmprojURL else {
+                fatalError("DownloadTask .mmproj for model '\(model.id)' with no mmprojURL")
+            }
+            return url
         }
     }
 
@@ -117,6 +120,7 @@ final class NetworkMonitor: ObservableObject {
 // MARK: - Download Manager
 
 /// Manages model file downloads with progress, pause/resume, and verification.
+@MainActor
 final class DownloadManager: NSObject, ObservableObject {
 
     // MARK: - Published State
@@ -154,6 +158,11 @@ final class DownloadManager: NSObject, ObservableObject {
         super.init()
         ModelManagerService.ensureModelsDirectory()
         updateStatusesFromDisk()
+    }
+
+    deinit {
+        urlSession.invalidateAndCancel()
+        stuckTimer?.invalidate()
     }
 
     // MARK: - Status Queries
@@ -312,6 +321,9 @@ final class DownloadManager: NSObject, ObservableObject {
                     }
                 }
             }
+        }
+        if let stuckTimer {
+            RunLoop.main.add(stuckTimer, forMode: .common)
         }
     }
 
