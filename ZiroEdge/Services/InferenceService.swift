@@ -32,7 +32,7 @@ protocol InferenceServiceProtocol: Sendable {
         sampling: SamplingConfig
     ) async throws -> AsyncThrowingStream<String, Error>
 
-    func cancelCurrentStream()
+    func cancelCurrentStream() async
 }
 
 // MARK: - Inference Service
@@ -55,6 +55,12 @@ actor InferenceService {
     /// Current model reference (for reloads).
     private var currentModel: AIModel?
 
+    /// Pending unload task — awaited before loading a new model to prevent race conditions.
+    private var pendingUnload: Task<Void, Never>?
+
+    /// Pending stream cancellation — awaited before starting more engine work.
+    private var pendingCancellation: Task<Void, Never>?
+
     // MARK: - State
 
     var isModelLoaded: Bool {
@@ -69,6 +75,10 @@ actor InferenceService {
 
     func loadModel(_ model: AIModel, baseURL: URL, mmprojURL: URL?) async throws {
         print("[INFERENCE-LOAD] loadModel(\(model.id)) from \(baseURL.path)")
+        // Wait for any pending cancellation or unload to complete before loading.
+        await waitForPendingCancellation()
+        await pendingUnload?.value
+        pendingUnload = nil
         // Unload any existing model first.
         unloadInternal()
 
@@ -120,9 +130,7 @@ actor InferenceService {
 
     private func unloadInternal() {
         if let eng = engine {
-            Task {
-                await eng.unload()
-            }
+            pendingUnload = Task { await eng.unload() }
         }
         engine = nil
         _loadedModelID = nil
@@ -141,6 +149,7 @@ actor InferenceService {
         stopStrings: [String],
         addBos: Bool?
     ) async throws -> AsyncThrowingStream<String, Error> {
+        await waitForPendingCancellation()
         guard let eng = engine else {
             throw InferenceError.modelNotLoaded
         }
@@ -166,6 +175,7 @@ actor InferenceService {
         systemPrompt: String?,
         sampling: SamplingConfig
     ) async throws -> AsyncThrowingStream<String, Error> {
+        await waitForPendingCancellation()
         guard let eng = engine else {
             throw InferenceError.modelNotLoaded
         }
@@ -207,6 +217,7 @@ actor InferenceService {
         systemPrompt: String?,
         sampling: SamplingConfig
     ) async throws -> AsyncThrowingStream<String, Error> {
+        await waitForPendingCancellation()
         guard let eng = engine else {
             throw InferenceError.modelNotLoaded
         }
@@ -264,13 +275,28 @@ actor InferenceService {
 
     // MARK: - Cancellation
 
-    func cancelCurrentStream() {
-        if let eng = engine {
-            Task {
-                await eng.cancel()
-            }
+    func cancelCurrentStream() async {
+        if let pendingCancellation {
+            await pendingCancellation.value
+            return
         }
-    }    // MARK: - Prompt Formatting
+        guard let eng = engine else { return }
+
+        let cancellationTask = Task {
+            await eng.cancel()
+        }
+        pendingCancellation = cancellationTask
+        await cancellationTask.value
+        pendingCancellation = nil
+    }
+
+    private func waitForPendingCancellation() async {
+        guard let pendingCancellation else { return }
+        await pendingCancellation.value
+        self.pendingCancellation = nil
+    }
+
+    // MARK: - Prompt Formatting
 
     /// Format messages into a prompt string for the model.
     /// Handles chat template and raw format paths.

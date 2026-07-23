@@ -50,6 +50,9 @@ final class ModelLifecycleManager: ObservableObject {
     /// Tracks download state per model ID. Populated by ModelManagerService.
     @Published var downloadStatuses: [String: ModelDownloadStatus] = [:]
 
+    /// Stores the evicted model so it can be reloaded after memory pressure eviction.
+    private var evictedModel: AIModel?
+
     // MARK: - Initialization
 
     init(inferenceService: InferenceService, memoryBudgeter: MemoryBudgeter) {
@@ -95,7 +98,7 @@ final class ModelLifecycleManager: ObservableObject {
             // Unload current model to free RAM.
             if activeModel != nil {
                 logger.info("Unloading current model to make room for \(model.id, privacy: .public)")
-                unloadCurrentModel()
+                await unloadCurrentModel()
                 // Give the system a moment to reclaim memory.
                 try? await Task.sleep(nanoseconds: 500_000_000)  // 0.5s
             }
@@ -124,10 +127,8 @@ final class ModelLifecycleManager: ObservableObject {
     }
 
     /// Unload the current model, freeing memory.
-    func unloadCurrentModel() {
-        Task {
-            await inferenceService.unloadModel()
-        }
+    func unloadCurrentModel() async {
+        await inferenceService.unloadModel()
         let previousModel = activeModel
         activeModel = nil
         currentState = .unloaded
@@ -140,7 +141,7 @@ final class ModelLifecycleManager: ObservableObject {
             return  // Already on this model.
         }
 
-        unloadCurrentModel()
+        await unloadCurrentModel()
         await loadModel(model)
     }
 
@@ -154,8 +155,11 @@ final class ModelLifecycleManager: ObservableObject {
 
     @objc private func handleMemoryPressure() {
         logger.warning("Memory pressure received — evicting model")
+        guard currentState == .loaded else { return }
         Task {
-            unloadCurrentModel()
+            guard currentState == .loaded else { return }
+            evictedModel = activeModel
+            await unloadCurrentModel()
             currentState = .evicted
             showMemoryWarning = true
         }
@@ -168,7 +172,8 @@ final class ModelLifecycleManager: ObservableObject {
 
     /// Reload after eviction.
     func reloadEvictedModel() async {
-        guard let model = activeModel else { return }
+        guard let model = evictedModel else { return }
+        evictedModel = nil
         showMemoryWarning = false
         await loadModel(model)
     }
@@ -182,9 +187,9 @@ final class ModelLifecycleManager: ObservableObject {
         }
         
         // Check each model's download status
-        for m in ModelRegistry.allModels {
-            let isDL = ModelManagerService.isFullyDownloaded(m)
-            print("[AUTOLOAD]   \(m.id): downloaded=\(isDL)")
+        for model in ModelRegistry.allModels {
+            let isDL = ModelManagerService.isFullyDownloaded(model)
+            print("[AUTOLOAD]   \(model.id): downloaded=\(isDL)")
         }
         
         guard let model = ModelRegistry.allModels.first(where: { ModelManagerService.isFullyDownloaded($0) }) else {
@@ -318,9 +323,7 @@ enum ModelManagerService {
 
     /// Verify SHA-256 of a downloaded file.
     static func verifySHA256(fileURL: URL, expected: String) -> Bool {
-        guard let data = try? Data(contentsOf: fileURL) else { return false }
-        let hash = SHA256.hash(data: data)
-        let hex = hash.map { String(format: "%02x", $0) }.joined()
+        guard let hex = computeSHA256(fileURL: fileURL) else { return false }
         return hex == expected.lowercased()
     }
 
@@ -418,11 +421,23 @@ extension ModelManagerService {
 import CryptoKit
 
 extension ModelManagerService {
-    /// Compute SHA-256 of a file.
+    /// Compute SHA-256 of a file by streaming in 64 KB chunks.
+    /// Avoids loading the entire file into memory (critical for multi-GB GGUFs).
     static func computeSHA256(fileURL: URL) -> String? {
-        guard let data = try? Data(contentsOf: fileURL) else { return nil }
-        let hash = SHA256.hash(data: data)
-        return hash.map { String(format: "%02x", $0) }.joined()
+        guard let handle = try? FileHandle(forReadingFrom: fileURL) else { return nil }
+        defer { try? handle.close() }
+
+        var hasher = SHA256()
+        while autoreleasepool(invoking: {
+            guard let chunk = try? handle.read(upToCount: 65_536), !chunk.isEmpty else {
+                return false
+            }
+            hasher.update(data: chunk)
+            return true
+        }) {}
+
+        let digest = hasher.finalize()
+        return digest.map { String(format: "%02x", $0) }.joined()
     }
 }
 
