@@ -19,6 +19,7 @@ enum ModelMigrationService {
     static let currentVersion = 1
 
     private static let fileManager = FileManager.default
+    private static let migrationLock = NSLock()
     private static let migrationMarkerName = ".model-storage-migration"
     private static let migrationJournalName = ".model-storage-migration.journal.json"
 
@@ -28,6 +29,9 @@ enum ModelMigrationService {
     /// has completed, so a later launch can safely continue an interrupted run.
     @discardableResult
     static func migrateIfNeeded(models: [AIModel] = ModelRegistry.allModels) -> ModelMigrationResult {
+        migrationLock.lock()
+        defer { migrationLock.unlock() }
+
         ensureManagedDirectories()
 
         if hasCurrentVersionMarker {
@@ -113,6 +117,9 @@ enum ModelMigrationService {
         }
     }
 
+}
+
+extension ModelMigrationService {
     // MARK: - Test Support
 
     /// Remove only migration bookkeeping. Tests use unique model IDs and clean

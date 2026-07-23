@@ -80,6 +80,7 @@ actor TitleGenerator: TitleGeneratorProtocol {
             // Collect the full response.
             var rawTitle = ""
             for try await token in stream {
+                try Task.checkCancellation()
                 rawTitle += token
             }
 
