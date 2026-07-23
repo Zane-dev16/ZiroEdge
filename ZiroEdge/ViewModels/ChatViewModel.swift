@@ -45,6 +45,9 @@ final class ChatViewModel: ObservableObject {
     /// Warning message when context window auto-truncates old messages.
     @Published var truncationWarning: String?
 
+    /// Cancellation guard: prevents onComplete from firing after cancelStream.
+    private var streamCancelled = false
+
     // MARK: - Model Selection
 
     /// The currently selected model for this chat session.
@@ -70,6 +73,7 @@ final class ChatViewModel: ObservableObject {
     weak var conversationListViewModel: ConversationListViewModel?
 
     private(set) var activeConversationID: UUID?
+    private var loadGeneration: UInt64 = 0
 
     // MARK: - UserDefaults Keys
 
@@ -136,22 +140,20 @@ final class ChatViewModel: ObservableObject {
         // Switch model in lifecycle manager if different from current.
         if lifecycleManager.activeModel?.id != model.id {
             isSwitchingModel = true
-            defer { isSwitchingModel = false }
             await lifecycleManager.switchToModel(model)
+            isSwitchingModel = false
         }
     }
 
     func loadConversation(_ conversationID: UUID) async {
         activeConversationID = conversationID
+        loadGeneration += 1
+        let myGeneration = loadGeneration
+
         let fetched = await persistence.fetchMessages(conversationID: conversationID)
-        messages = fetched.map { msg in
-            ChatMessagePayload(
-                id: msg.id ?? UUID(),
-                role: msg.messageRole,
-                content: msg.content ?? "",
-                imageData: msg.imageData
-            )
-        }
+        guard loadGeneration == myGeneration else { return }
+
+        messages = fetched
         truncationWarning = nil
         // Token count reset happens via resetTokenCount() when appropriate
     }
@@ -168,162 +170,126 @@ final class ChatViewModel: ObservableObject {
 
     // MARK: - Message Sending
 
-    func sendMessage() async {
-        let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let hasImages = !pendingImages.isEmpty
-
+    /// Validate preconditions for sending a message. Returns nil on success,
+    /// or the conversationID. Sets error/warning state on failure.
+    private func validateSendPreconditions(
+        text: String, hasImages: Bool
+    ) async -> UUID? {
         if CommandLine.arguments.contains("--uitesting-sendtest") {
             print("[UITEST] sendMessage: text='\(text)', hasImages=\(hasImages)")
             print("[UITEST] sendMessage: selectedModel=\(selectedModel?.id ?? "nil")")
             print("[UITEST] sendMessage: isModelLoaded=\(lifecycleManager.isModelLoaded)")
-            print("[UITEST] sendMessage: activeConversationID=\(String(describing: activeConversationID))")
         }
 
-        // Allow sending with images only (no text) or text only, but not empty both.
-        guard !text.isEmpty || hasImages else {
-            if CommandLine.arguments.contains("--uitesting-sendtest") {
-                print("[UITEST] sendMessage: GUARD FAILED - empty text and no images")
-            }
-            return
-        }
+        guard !text.isEmpty || hasImages else { return nil }
 
-        // Auto-select model if none selected.
-        if selectedModel == nil {
-            autoSelectModel()
-        }
+        if selectedModel == nil { autoSelectModel() }
+        guard selectedModel != nil else { needsModelRedirect = true; return nil }
 
-        guard selectedModel != nil else {
-            needsModelRedirect = true
-            return
-        }
-
-        // Graceful degradation: reject images with text-only model.
         if hasImages && !isVisionModel {
             visionWarning = "Vision not supported with text-only model. Switch to a vision model."
-            return
+            return nil
         }
-
         guard let conversationID = activeConversationID else {
-            errorMessage = "No active conversation."
-            showError = true
-            return
+            errorMessage = "No active conversation."; showError = true; return nil
         }
-
         guard lifecycleManager.isModelLoaded else {
-            let state = lifecycleManager.currentState
-            let activeID = lifecycleManager.activeModel?.id ?? "nil"
-            errorMessage = "No model loaded. (state=\(state), active=\(activeID))"
-            print("[SEND] GUARD FAILED: \(errorMessage)")
-            showError = true
-            return
+            errorMessage = "No model loaded. (state=\(lifecycleManager.currentState))"
+            showError = true; return nil
         }
+        return conversationID
+    }
+
+    func sendMessage() async {
+        let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasImages = !pendingImages.isEmpty
+
+        guard let conversationID = await validateSendPreconditions(
+            text: text, hasImages: hasImages
+        ) else { return }
 
         inputText = ""
-
-        // Capture whether this is the first exchange BEFORE appending the user message.
         let isFirstExchange = messages.isEmpty
         let firstUserMessage = text
-
-        // Capture images before clearing; store first image for persistence (v1 single-image field).
         let imagesToSend = hasImages ? pendingImages : []
 
         guard await persistence.insertMessage(
-            conversationID: conversationID,
-            role: .user,
-            content: text,
+            conversationID: conversationID, role: .user, content: text,
             imageData: hasImages ? pendingImages.first : nil
         ) != nil else {
-            errorMessage = "Failed to save message."
-            showError = true
-            return
+            errorMessage = "Failed to save message."; showError = true; return
         }
 
-        let userPayload = ChatMessagePayload(role: .user, content: text, imageData: hasImages ? pendingImages.first : nil)
-        messages.append(userPayload)
+        messages.append(ChatMessagePayload(role: .user, content: text, imageData: hasImages ? pendingImages.first : nil))
+        let history = messages.map { ChatMessagePayload(role: $0.role, content: $0.content, imageData: $0.imageData) }
 
-        let history = messages.map { msg in
-            ChatMessagePayload(role: msg.role, content: msg.content, imageData: msg.imageData)
-        }
+        isStreaming = true; streamingText = ""; errorMessage = nil; visionWarning = nil
+        streamCancelled = false
 
-        isStreaming = true
-        streamingText = ""
-        errorMessage = nil
-        visionWarning = nil
+        await startStreaming(
+            conversationID: conversationID, history: history, images: imagesToSend,
+            hasImages: hasImages, isFirstExchange: isFirstExchange,
+            firstUserMessage: firstUserMessage, streamCancelled: &streamCancelled
+        )
+        clearImages()
+    }
 
-        // Token/completion callbacks shared by both paths.
+    private func startStreaming(
+        conversationID: UUID, history: [ChatMessagePayload], images: [Data],
+        hasImages: Bool, isFirstExchange: Bool, firstUserMessage: String,
+        streamCancelled: Bool
+    ) async {
         let onToken: @Sendable (String) -> Void = { [weak self] token in
             Task { @MainActor [weak self] in
-                self?.streamingText += token
-                self?.tokenCount += 1
+                self?.streamingText += token; self?.tokenCount += 1
             }
         }
         let onComplete: @Sendable () -> Void = { [weak self] in
             Task { @MainActor [weak self] in
-                guard let self else { return }
+                guard let self, !streamCancelled else { return }
                 self.isStreaming = false
-                // Trim trailing newlines from the streamed response so messages
-                // don't end with blank lines. MarkdownRenderer also strips
-                // trailing newlines for display; this keeps stored data clean.
                 let trimmed = self.streamingText.trimmingCharacters(in: .newlines)
                 if !trimmed.isEmpty {
-                    let assistantPayload = ChatMessagePayload(role: .assistant, content: trimmed)
-                    self.messages.append(assistantPayload)
+                    self.messages.append(ChatMessagePayload(role: .assistant, content: trimmed))
                 }
-                let assistantResponse = trimmed
                 self.streamingText = ""
                 await self.loadConversation(conversationID)
-
-                // Auto-generate title after the first exchange.
                 if isFirstExchange && !firstUserMessage.isEmpty {
-                    Task {
-                        await self.generateTitleIfNeeded(
-                            conversationID: conversationID,
-                            userMessage: firstUserMessage,
-                            assistantResponse: assistantResponse
-                        )
-                    }
+                    await self.generateTitleIfNeeded(
+                        conversationID: conversationID, userMessage: firstUserMessage, assistantResponse: trimmed
+                    )
                 }
             }
         }
         let onError: @Sendable (Error) -> Void = { [weak self] error in
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                self.isStreaming = false
-                self.streamingText = ""
-                self.errorMessage = error.localizedDescription
-                self.showError = true
+                self.isStreaming = false; self.streamingText = ""
+                self.errorMessage = error.localizedDescription; self.showError = true
                 await self.loadConversation(conversationID)
             }
         }
 
         if hasImages {
             await sessionActor.startVisionStream(
-                conversationID: conversationID,
-                messages: history,
-                images: imagesToSend,
-                systemPrompt: nil,
-                sampling: .default,
-                onToken: onToken,
-                onComplete: onComplete,
-                onError: onError
+                conversationID: conversationID, messages: history, images: images,
+                systemPrompt: nil, sampling: .default,
+                onToken: onToken, onComplete: onComplete, onError: onError
             )
         } else {
             await sessionActor.startStream(
-                conversationID: conversationID,
-                messages: history,
-                systemPrompt: nil,
-                sampling: .default,
-                onToken: onToken,
-                onComplete: onComplete,
-                onError: onError
+                conversationID: conversationID, messages: history,
+                systemPrompt: nil, sampling: .default,
+                onToken: onToken, onComplete: onComplete, onError: onError
             )
         }
-        clearImages()
     }
 
     func cancelStream() async {
+        streamCancelled = true
         await sessionActor.cancel()
         isStreaming = false
+        streamingText = ""
         if let conversationID = activeConversationID {
             await loadConversation(conversationID)
         }
@@ -352,22 +318,18 @@ final class ChatViewModel: ObservableObject {
         userMessage: String,
         assistantResponse: String
     ) async {
-        // Check if title is still the default.
-        let conversations = await persistence.fetchConversations()
-        guard let conversation = conversations.first(where: { $0.id == conversationID }),
-              conversation.title == "New Conversation" else {
-            logger.debug("Title already set, skipping generation")
-            return
-        }
-
         logger.info("Generating title for first exchange")
         let title = await titleGenerator.generateTitle(
             userMessage: userMessage,
             assistantResponse: assistantResponse
         )
 
-        // Update in persistence.
-        await persistence.updateConversationTitle(id: conversationID, title: title)
+        // Update only if the user has not renamed the conversation while the title was generated.
+        await persistence.updateConversationTitleIfStill(
+            id: conversationID,
+            newTitle: title,
+            expectedCurrentTitle: "New Conversation"
+        )
 
         // Reload sidebar.
         await conversationListViewModel?.loadConversations()
@@ -402,10 +364,45 @@ final class ChatViewModel: ObservableObject {
 
     // MARK: - Image Attachment
 
-    /// Add an image to the pending attachments.
+    /// Maximum image dimension (width or height) in pixels.
+    private static let maxImageDimension: CGFloat = 1024
+    /// Maximum raw image data size before forced resize (10 MB).
+    private static let maxImageBytes = 10 * 1024 * 1024
+
+    /// Add an image to the pending attachments. Validates size and resizes if needed.
     func addImage(_ data: Data) {
-        pendingImages.append(data)
+        // If the image is very large, resize it to prevent memory explosion.
+        if data.count > Self.maxImageBytes {
+            guard let image = UIImage(data: data) else {
+                visionWarning = "Could not read image data."
+                return
+            }
+            let resized = resizeImage(image, maxDimension: Self.maxImageDimension)
+            guard let jpegData = resized.jpegData(compressionQuality: 0.8) else {
+                visionWarning = "Image is too large and could not be resized."
+                return
+            }
+            pendingImages.append(jpegData)
+        } else if let image = UIImage(data: data),
+                  (image.size.width > Self.maxImageDimension || image.size.height > Self.maxImageDimension) {
+            let resized = resizeImage(image, maxDimension: Self.maxImageDimension)
+            guard let jpegData = resized.jpegData(compressionQuality: 0.8) else { return }
+            pendingImages.append(jpegData)
+        } else {
+            pendingImages.append(data)
+        }
         visionWarning = nil
+    }
+
+    /// Resize a UIImage to fit within maxDimension while preserving aspect ratio.
+    private func resizeImage(_ image: UIImage, maxDimension: CGFloat) -> UIImage {
+        let size = image.size
+        let ratio = min(maxDimension / size.width, maxDimension / size.height, 1.0)
+        let newSize = CGSize(width: size.width * ratio, height: size.height * ratio)
+        let renderer = UIGraphicsImageRenderer(size: newSize)
+        return renderer.image { _ in
+            image.draw(in: CGRect(origin: .zero, size: newSize))
+        }
     }
 
     /// Remove an image at the specified index.
