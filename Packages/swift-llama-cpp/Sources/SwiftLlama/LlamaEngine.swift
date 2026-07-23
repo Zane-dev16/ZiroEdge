@@ -25,6 +25,7 @@ public actor LlamaEngine {
     private let config: LlamaConfigSwift
     private var isCancelled = false
     private var eosTokenID: llama_token = -1
+    private var isBackendInitialized = false
 
     // MARK: - Initialization
 
@@ -32,6 +33,7 @@ public actor LlamaEngine {
         self.config = config
 
         llama_backend_init()
+        isBackendInitialized = true
 
         // Load model.
         var modelParams = llama_model_default_params()
@@ -39,6 +41,8 @@ public actor LlamaEngine {
         modelParams.n_gpu_layers = Int32(config.gpuLayers)
 
         guard let loadedModel = llama_model_load_from_file(config.modelPath, modelParams) else {
+            llama_backend_free()
+            isBackendInitialized = false
             throw LlamaError.modelLoadFailed(path: config.modelPath)
         }
         model = loadedModel
@@ -47,6 +51,8 @@ public actor LlamaEngine {
         guard let vocab = vocabulary else {
             llama_model_free(loadedModel)
             model = nil
+            llama_backend_free()
+            isBackendInitialized = false
             throw LlamaError.modelLoadFailed(path: config.modelPath)
         }
         eosTokenID = llama_vocab_eos(vocab)
@@ -61,6 +67,8 @@ public actor LlamaEngine {
         guard let ctx = llama_init_from_model(loadedModel, ctxParams) else {
             llama_model_free(loadedModel)
             model = nil
+            llama_backend_free()
+            isBackendInitialized = false
             throw LlamaError.contextCreationFailed
         }
         context = ctx
@@ -92,8 +100,8 @@ public actor LlamaEngine {
     }
 
     private func unloadSync() {
-        if let m = mtmdCtx {
-            mtmd_free(m)
+        if let mctx = mtmdCtx {
+            mtmd_free(mctx)
             mtmdCtx = nil
         }
         if let ctx = context {
@@ -105,6 +113,10 @@ public actor LlamaEngine {
             model = nil
         }
         vocabulary = nil
+        if isBackendInitialized {
+            llama_backend_free()
+            isBackendInitialized = false
+        }
         logger.info("Model unloaded")
     }
 
@@ -132,7 +144,10 @@ public actor LlamaEngine {
             // Pass nil for tmpl to use the model's built-in template.
             let nBytes = llama_chat_apply_template(nil, ptr.baseAddress, chatMessages.count, addAssistant, &buffer, Int32(bufferSize))
             if nBytes > 0 && nBytes <= Int32(bufferSize) {
-                return String(cString: buffer.prefix(Int(nBytes)).withUnsafeBufferPointer { $0.baseAddress! })
+                return buffer.prefix(Int(nBytes)).withUnsafeBufferPointer { ptr in
+                    guard let base = ptr.baseAddress else { return "" }
+                    return String(cString: base)
+                }
             }
             // If buffer too small, retry with larger buffer.
             if nBytes > Int32(bufferSize) {
@@ -140,7 +155,10 @@ public actor LlamaEngine {
                 var largerBuffer = [CChar](repeating: 0, count: largerSize)
                 let nBytes2 = llama_chat_apply_template(nil, ptr.baseAddress, chatMessages.count, addAssistant, &largerBuffer, Int32(largerSize))
                 if nBytes2 > 0 {
-                    return String(cString: largerBuffer.prefix(Int(nBytes2)).withUnsafeBufferPointer { $0.baseAddress! })
+                    return largerBuffer.prefix(Int(nBytes2)).withUnsafeBufferPointer { ptr in
+                        guard let base = ptr.baseAddress else { return "" }
+                        return String(cString: base)
+                    }
                 }
             }
             // Fallback: empty string (will cause tokenization to fail).
@@ -199,13 +217,13 @@ public actor LlamaEngine {
                     // Evaluate prompt tokens using batch_get_one for sequential processing.
                     // For the prompt, we evaluate all tokens at once.
                     var batch = llama_batch_init(Int32(tokens.count), 0, 1)
-                    for (i, token) in tokens.enumerated() {
-                        batch.token[i] = token
-                        batch.pos[i] = Int32(i)
-                        batch.n_seq_id[i] = 1
+                    for (idx, token) in tokens.enumerated() {
+                        batch.token[idx] = token
+                        batch.pos[idx] = Int32(idx)
+                        batch.n_seq_id[idx] = 1
                         // Use pre-allocated seq_id from llama_batch_init (no manual alloc).
-                        batch.seq_id[i]![0] = 0
-                        batch.logits[i] = (i == tokens.count - 1) ? 1 : 0
+                        batch.seq_id[idx]![0] = 0
+                        batch.logits[idx] = (idx == tokens.count - 1) ? 1 : 0
                     }
                     batch.n_tokens = Int32(tokens.count)
 
@@ -220,84 +238,11 @@ public actor LlamaEngine {
                     let sampler = try createSamplerChain(sampling: sampling, vocab: vocab)
                     defer { llama_sampler_free(sampler) }
 
-                    // Generate tokens.
-                    var nPos = Int32(tokens.count)
-                    var generatedText = ""
-                    var pendingBuffer = ""  // Buffer to prevent stop-token leaks
-                    var nGenerated = 0
-                    let maxTokens = sampling.maxTokens > 0 ? sampling.maxTokens : 2048
-
-                    while nPos < Int32(config.contextLength) && nGenerated < maxTokens {
-                        if self.isCancelled || Task.isCancelled { break }
-
-                        // Sample next token.
-                        let newTokenID = llama_sampler_sample(sampler, ctx, -1)
-
-                        // Check EOS.
-                        if newTokenID == self.eosTokenID { break }
-
-                        // Decode token to text.
-                        let tokenText = tokenToText(token: newTokenID, vocab: vocab)
-                        generatedText += tokenText
-                        pendingBuffer += tokenText
-
-                        // Check if buffer ends with a stop string.
-                        var shouldStop = false
-                        for stop in stopStrings where !stop.isEmpty {
-                            if pendingBuffer.hasSuffix(stop) {
-                                // Strip the stop string and yield the clean remainder.
-                                let clean = String(pendingBuffer.dropLast(stop.count))
-                                if !clean.isEmpty {
-                                    continuation.yield(clean)
-                                }
-                                pendingBuffer = ""  // Clear buffer — stop consumed.
-                                shouldStop = true
-                                break
-                            }
-                        }
-                        if shouldStop { break }
-
-                        // Check if buffer could be the start of a stop string.
-                        // If not, it's safe to flush to preserve streaming responsiveness.
-                        var mightBeStop = false
-                        for stop in stopStrings where !stop.isEmpty {
-                            if stop.hasPrefix(pendingBuffer) {
-                                mightBeStop = true
-                                break
-                            }
-                        }
-
-                        if !mightBeStop {
-                            // Safe to flush — this text is not part of any stop string.
-                            continuation.yield(pendingBuffer)
-                            pendingBuffer = ""
-                        }
-
-                        // Evaluate single token.
-                        var evalBatch = llama_batch_init(1, 0, 1)
-                        evalBatch.token[0] = newTokenID
-                        evalBatch.pos[0] = nPos
-                        evalBatch.n_seq_id[0] = 1
-                        // Use pre-allocated seq_id from llama_batch_init.
-                        evalBatch.seq_id[0]![0] = 0
-                        evalBatch.logits[0] = 1
-                        evalBatch.n_tokens = 1
-
-                        if llama_decode(ctx, evalBatch) != 0 {
-                            llama_batch_free(evalBatch)
-                            throw LlamaError.decodeFailed
-                        }
-
-                        llama_batch_free(evalBatch)
-                        nPos += 1
-                        nGenerated += 1
-                    }
-
-                    // Flush any remaining buffered tokens (EOS, maxTokens, or cancellation).
-                    if !pendingBuffer.isEmpty {
-                        continuation.yield(pendingBuffer)
-                    }
-
+                    // Generate tokens using shared generation loop.
+                    try generateTokens(
+                        startPos: Int32(tokens.count), sampler: sampler, vocab: vocab,
+                        stopStrings: stopStrings, sampling: sampling, continuation: continuation
+                    )
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)
@@ -330,8 +275,8 @@ public actor LlamaEngine {
                     // Create bitmaps from image data.
                     var bitmaps: [OpaquePointer?] = []
                     defer {
-                        for bmp in bitmaps {
-                            if let b = bmp { mtmd_bitmap_free(b) }
+                        for bitmapPtr in bitmaps {
+                            if let bmp = bitmapPtr { mtmd_bitmap_free(bmp) }
                         }
                     }
 
@@ -404,77 +349,11 @@ public actor LlamaEngine {
                     let sampler = try createSamplerChain(sampling: sampling, vocab: vocab)
                     defer { llama_sampler_free(sampler) }
 
-                    // Generate tokens (same autoregressive loop as streamCompletion).
-                    var nPos = newNPast
-                    var generatedText = ""
-                    var pendingBuffer = ""  // Buffer to prevent stop-token leaks
-                    var nGenerated = 0
-                    let maxTokens = sampling.maxTokens > 0 ? sampling.maxTokens : 2048
-
-                    while nPos < Int32(config.contextLength) && nGenerated < maxTokens {
-                        if self.isCancelled || Task.isCancelled { break }
-
-                        let newTokenID = llama_sampler_sample(sampler, ctx, -1)
-
-                        if newTokenID == self.eosTokenID { break }
-
-                        let tokenText = tokenToText(token: newTokenID, vocab: vocab)
-                        generatedText += tokenText
-                        pendingBuffer += tokenText
-
-                        var shouldStop = false
-                        for stop in stopStrings where !stop.isEmpty {
-                            if pendingBuffer.hasSuffix(stop) {
-                                let clean = String(pendingBuffer.dropLast(stop.count))
-                                if !clean.isEmpty {
-                                    continuation.yield(clean)
-                                }
-                                pendingBuffer = ""  // Clear buffer — stop consumed.
-                                shouldStop = true
-                                break
-                            }
-                        }
-                        if shouldStop { break }
-
-                        // Check if buffer could be the start of a stop string.
-                        var mightBeStop = false
-                        for stop in stopStrings where !stop.isEmpty {
-                            if stop.hasPrefix(pendingBuffer) {
-                                mightBeStop = true
-                                break
-                            }
-                        }
-
-                        if !mightBeStop {
-                            continuation.yield(pendingBuffer)
-                            pendingBuffer = ""
-                        }
-
-                        // Evaluate single token.
-                        var evalBatch = llama_batch_init(1, 0, 1)
-                        evalBatch.token[0] = newTokenID
-                        evalBatch.pos[0] = nPos
-                        evalBatch.n_seq_id[0] = 1
-                        // Use pre-allocated seq_id from llama_batch_init.
-                        evalBatch.seq_id[0]![0] = 0
-                        evalBatch.logits[0] = 1
-                        evalBatch.n_tokens = 1
-
-                        if llama_decode(ctx, evalBatch) != 0 {
-                            llama_batch_free(evalBatch)
-                            throw LlamaError.decodeFailed
-                        }
-
-                        llama_batch_free(evalBatch)
-                        nPos += 1
-                        nGenerated += 1
-                    }
-
-                    // Flush any remaining buffered tokens.
-                    if !pendingBuffer.isEmpty {
-                        continuation.yield(pendingBuffer)
-                    }
-
+                    // Generate tokens using shared generation loop.
+                    try generateTokens(
+                        startPos: newNPast, sampler: sampler, vocab: vocab,
+                        stopStrings: stopStrings, sampling: sampling, continuation: continuation
+                    )
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)
@@ -488,10 +367,15 @@ public actor LlamaEngine {
     public func cancel() {
         isCancelled = true
     }
+}
 
+private extension LlamaEngine {
     // MARK: - Sampler Chain
 
-    private func createSamplerChain(sampling: SamplingConfigSwift, vocab: OpaquePointer) throws -> UnsafeMutablePointer<llama_sampler> {
+    private func createSamplerChain(
+        sampling: SamplingConfigSwift,
+        vocab: OpaquePointer
+    ) throws -> UnsafeMutablePointer<llama_sampler> {
         let sparams = llama_sampler_chain_default_params()
         guard let chain = llama_sampler_chain_init(sparams) else {
             throw LlamaError.samplerCreationFailed
@@ -517,6 +401,17 @@ public actor LlamaEngine {
             // Temperature.
             let temp = llama_sampler_init_temp(sampling.temperature)
             llama_sampler_chain_add(chain, temp)
+
+            // Repeat penalty (prevents looping and repetitive phrases).
+            if sampling.repeatPenalty != 1.0 {
+                let penalty = llama_sampler_init_penalties(
+                    64,                      // penalty last N tokens
+                    sampling.repeatPenalty,    // repeat penalty
+                    0.0,                       // frequency penalty
+                    0.0                        // presence penalty
+                )
+                llama_sampler_chain_add(chain, penalty)
+            }
 
             // Distribution sampling (random from remaining candidates).
             let dist = llama_sampler_init_dist(0)
@@ -556,6 +451,74 @@ public actor LlamaEngine {
         return buffer.prefix(Int(nChars)).withUnsafeBufferPointer { ptr in
             String(cString: ptr.baseAddress!)
         }
+    }
+
+    // MARK: - Shared Generation Loop
+
+    /// Shared autoregressive generation loop used by both text and vision streaming.
+    private func generateTokens(
+        startPos: llama_pos,
+        sampler: UnsafeMutablePointer<llama_sampler>,
+        vocab: OpaquePointer,
+        stopStrings: [String],
+        sampling: SamplingConfigSwift,
+        continuation: AsyncThrowingStream<String, Error>.Continuation
+    ) throws {
+        guard let ctx = context else { throw LlamaError.modelNotLoaded }
+
+        var nPos = startPos
+        var pendingBuffer = ""
+        var nGenerated = 0
+        let maxTokens = sampling.maxTokens > 0 ? sampling.maxTokens : 2048
+
+        while nPos < Int32(config.contextLength) && nGenerated < maxTokens {
+            if self.isCancelled || Task.isCancelled { break }
+
+            let newTokenID = llama_sampler_sample(sampler, ctx, -1)
+            if newTokenID == self.eosTokenID { break }
+
+            let tokenText = tokenToText(token: newTokenID, vocab: vocab)
+            pendingBuffer += tokenText
+
+            // Check stop strings.
+            var shouldStop = false
+            for stop in stopStrings where !stop.isEmpty {
+                if pendingBuffer.hasSuffix(stop) {
+                    let clean = String(pendingBuffer.dropLast(stop.count))
+                    if !clean.isEmpty { continuation.yield(clean) }
+                    pendingBuffer = ""
+                    shouldStop = true
+                    break
+                }
+            }
+            if shouldStop { break }
+
+            // Check if buffer could be start of a stop string.
+            var mightBeStop = false
+            for stop in stopStrings where !stop.isEmpty {
+                if stop.hasPrefix(pendingBuffer) { mightBeStop = true; break }
+            }
+            if !mightBeStop { continuation.yield(pendingBuffer); pendingBuffer = "" }
+
+            // Evaluate single token.
+            var evalBatch = llama_batch_init(1, 0, 1)
+            evalBatch.token[0] = newTokenID
+            evalBatch.pos[0] = nPos
+            evalBatch.n_seq_id[0] = 1
+            evalBatch.seq_id[0]![0] = 0
+            evalBatch.logits[0] = 1
+            evalBatch.n_tokens = 1
+
+            if llama_decode(ctx, evalBatch) != 0 {
+                llama_batch_free(evalBatch)
+                throw LlamaError.decodeFailed
+            }
+            llama_batch_free(evalBatch)
+            nPos += 1
+            nGenerated += 1
+        }
+
+        if !pendingBuffer.isEmpty { continuation.yield(pendingBuffer) }
     }
 }
 
