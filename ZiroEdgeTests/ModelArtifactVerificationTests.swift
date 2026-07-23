@@ -38,7 +38,7 @@ final class ModelArtifactVerificationTests: XCTestCase {
             return XCTFail("Wrong SHA-256 must be repairable")
         }
         XCTAssertFalse(ModelManagerService.isFullyDownloaded(model))
-        XCTAssertTrue(issues.contains { if case .sha256Mismatch = $0 { return true }; return false })
+        XCTAssertTrue(issues.contains { if case ArtifactIssue.sha256Mismatch = $0 { return true }; return false })
     }
 
     func testCorrectSHA256WithWrongByteCountNeedsRepair() throws {
@@ -50,7 +50,7 @@ final class ModelArtifactVerificationTests: XCTestCase {
             return XCTFail("Wrong byte count must be repairable")
         }
         XCTAssertFalse(ModelManagerService.isFullyDownloaded(model))
-        XCTAssertTrue(issues.contains { if case .sizeMismatch = $0 { return true }; return false })
+        XCTAssertTrue(issues.contains { if case ArtifactIssue.sizeMismatch = $0 { return true }; return false })
     }
 
     func testVisionModelWithOnlyValidBaseIsNotInstalled() throws {

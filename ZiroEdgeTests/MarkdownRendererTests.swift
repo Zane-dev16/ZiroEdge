@@ -82,6 +82,39 @@ final class MarkdownRendererTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(nsStr.length, 0)
     }
 
+    // MARK: - Trailing Newline Regression
+
+    func testNoTrailingNewline_plainText() throws {
+        let result = MarkdownRenderer.render("Hello, world!")
+        let string = NSAttributedString(result).string
+        XCTAssertFalse(string.hasSuffix("\n"), "Plain text should not end with a trailing newline.")
+    }
+
+    func testNoTrailingNewline_multiline() throws {
+        let result = MarkdownRenderer.render("Hello\nWorld")
+        let string = NSAttributedString(result).string
+        XCTAssertFalse(string.hasSuffix("\n"), "Multi-line text should not end with a trailing newline.")
+    }
+
+    func testNoTrailingNewline_withTrailingNewlineInput() throws {
+        // Simulates a common LLM response that ends with \n.
+        let result = MarkdownRenderer.render("Hello\nWorld\n")
+        let string = NSAttributedString(result).string
+        XCTAssertFalse(string.hasSuffix("\n"), "Input with trailing newline should not produce extra blank lines.")
+    }
+
+    func testNoTrailingNewline_multipleTrailing() throws {
+        let result = MarkdownRenderer.render("Hello\n\n")
+        let string = NSAttributedString(result).string
+        XCTAssertFalse(string.hasSuffix("\n"), "Input with multiple trailing newlines should not produce blank lines.")
+    }
+
+    func testNoTrailingNewline_heading() throws {
+        let result = MarkdownRenderer.render("# Title\n\nBody text")
+        let string = NSAttributedString(result).string
+        XCTAssertFalse(string.hasSuffix("\n"), "Heading + body should not end with trailing newline.")
+    }
+
     func testMixedContent() throws {
         let markdown = """
         # Title
