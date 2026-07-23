@@ -261,11 +261,15 @@ final class ChatViewModel: ObservableObject {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.isStreaming = false
-                if !self.streamingText.isEmpty {
-                    let assistantPayload = ChatMessagePayload(role: .assistant, content: self.streamingText)
+                // Trim trailing newlines from the streamed response so messages
+                // don't end with blank lines. MarkdownRenderer also strips
+                // trailing newlines for display; this keeps stored data clean.
+                let trimmed = self.streamingText.trimmingCharacters(in: .newlines)
+                if !trimmed.isEmpty {
+                    let assistantPayload = ChatMessagePayload(role: .assistant, content: trimmed)
                     self.messages.append(assistantPayload)
                 }
-                let assistantResponse = self.streamingText
+                let assistantResponse = trimmed
                 self.streamingText = ""
                 await self.loadConversation(conversationID)
 

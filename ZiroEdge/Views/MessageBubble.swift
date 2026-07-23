@@ -53,13 +53,24 @@ struct MessageBubble: View {
                         .clipShape(RoundedRectangle(cornerRadius: 18))
                 } else {
                     VStack(alignment: .leading, spacing: 0) {
-                        Text(markdown: displayContent)
-                            .font(.body)
-                            .textSelection(.enabled)
-
-                        // Streaming cursor.
                         if isStreaming {
-                            StreamingCursor()
+                            // Inline cursor appended to rendered text so it
+                            // appears at the end of the last line, not below it.
+                            let rendered: AttributedString = {
+                                var attributed = MarkdownRenderer.render(displayContent)
+                                var cursor = AttributedString("|")
+                                cursor.font = .body
+                                cursor.foregroundColor = Color.accentColor
+                                attributed.append(cursor)
+                                return attributed
+                            }()
+                            Text(rendered)
+                                .font(.body)
+                                .textSelection(.enabled)
+                        } else {
+                            Text(markdown: displayContent)
+                                .font(.body)
+                                .textSelection(.enabled)
                         }
                     }
                     .padding(.horizontal, 16)
