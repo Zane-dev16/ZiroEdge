@@ -61,7 +61,10 @@ actor ChatSessionActor {
         let selfRef = self
 
         currentStream = Task { [weak self] in
-            guard let self else { return }
+            guard let self else {
+                await MainActor.run { onComplete() }
+                return
+            }
 
             // Create the streaming message.
             let messageID = await persist.beginStreamingMessage(conversationID: conversationID)
@@ -81,6 +84,10 @@ actor ChatSessionActor {
                     sampling: sampling
                 )
 
+                var tokenBatch = ""
+                var lastBatchTime = Date()
+                let batchInterval: TimeInterval = 0.5
+
                 for try await token in stream {
                     // Check cancellation.
                     let cancelled = await selfRef.getIsCancelled()
@@ -92,13 +99,23 @@ actor ChatSessionActor {
                         return
                     }
 
-                    // Buffer token.
+                    // Buffer token for persistence and batch UI updates.
                     await persist.bufferTokens(messageID: messageID, tokens: token)
+                    tokenBatch += token
 
-                    // Notify UI.
-                    await MainActor.run { onToken(token) }
+                    let now = Date()
+                    if tokenBatch.count >= 20 || now.timeIntervalSince(lastBatchTime) >= batchInterval {
+                        let batch = tokenBatch
+                        tokenBatch = ""
+                        lastBatchTime = now
+                        await MainActor.run { onToken(batch) }
+                        await selfRef.incrementTokenCount()
+                    }
+                }
 
-                    await selfRef.incrementTokenCount()
+                // Flush any remaining UI tokens.
+                if !tokenBatch.isEmpty {
+                    await MainActor.run { onToken(tokenBatch) }
                 }
 
                 // Stream completed.
@@ -153,7 +170,10 @@ actor ChatSessionActor {
         let capturedImages = images
 
         currentStream = Task { [weak self] in
-            guard let self else { return }
+            guard let self else {
+                await MainActor.run { onComplete() }
+                return
+            }
 
             // Create the streaming message.
             let messageID = await persist.beginStreamingMessage(conversationID: conversationID)
@@ -174,6 +194,10 @@ actor ChatSessionActor {
                     sampling: sampling
                 )
 
+                var tokenBatch = ""
+                var lastBatchTime = Date()
+                let batchInterval: TimeInterval = 0.5
+
                 for try await token in stream {
                     // Check cancellation.
                     let cancelled = await selfRef.getIsCancelled()
@@ -185,13 +209,23 @@ actor ChatSessionActor {
                         return
                     }
 
-                    // Buffer token.
+                    // Buffer token for persistence and batch UI updates.
                     await persist.bufferTokens(messageID: messageID, tokens: token)
+                    tokenBatch += token
 
-                    // Notify UI.
-                    await MainActor.run { onToken(token) }
+                    let now = Date()
+                    if tokenBatch.count >= 20 || now.timeIntervalSince(lastBatchTime) >= batchInterval {
+                        let batch = tokenBatch
+                        tokenBatch = ""
+                        lastBatchTime = now
+                        await MainActor.run { onToken(batch) }
+                        await selfRef.incrementTokenCount()
+                    }
+                }
 
-                    await selfRef.incrementTokenCount()
+                // Flush any remaining UI tokens.
+                if !tokenBatch.isEmpty {
+                    await MainActor.run { onToken(tokenBatch) }
                 }
 
                 // Stream completed.
