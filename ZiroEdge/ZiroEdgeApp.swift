@@ -9,6 +9,8 @@ import SwiftUI
 @main
 struct ZiroEdgeApp: App {
 
+    @Environment(\.scenePhase) private var scenePhase
+
     // MARK: - Diagnostic Log File
 
     /// Path to the diagnostic log file in Documents.
@@ -164,6 +166,12 @@ struct ZiroEdgeApp: App {
                     print("[UITEST] sendtest: sendMessage completed")
                 } else if CommandLine.arguments.contains("--uitesting-sendtest") {
                     print("[UITEST] sendtest: model not loaded, skipping — isLoaded=\(lifecycleManager.isModelLoaded)")
+                }
+            }
+            .onChange(of: scenePhase) { _, newPhase in
+                guard newPhase == .background else { return }
+                Task {
+                    await persistence.flushPendingWrites()
                 }
             }
         }
@@ -342,6 +350,9 @@ struct SettingsView: View {
     @State private var availableRAM: String = "Loading..."
     @State private var totalRAM: String = "Loading..."
 
+    private static let privacyPolicyURL = URL(string: "https://ziroedge.app/privacy")
+        ?? URL(fileURLWithPath: "/")
+
     /// Models that are currently downloaded on disk.
     private var downloadedModels: [AIModel] {
         ModelRegistry.allModels.filter { model in
@@ -429,7 +440,7 @@ struct SettingsView: View {
                         Label("Licenses", systemImage: "doc.text")
                     }
 
-                    Link(destination: URL(string: "https://ziroedge.app/privacy")!) {
+                    Link(destination: Self.privacyPolicyURL) {
                         Label("Privacy Policy", systemImage: "hand.raised")
                     }
                 }
