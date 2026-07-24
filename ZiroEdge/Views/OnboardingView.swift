@@ -1,96 +1,114 @@
 // OnboardingView.swift
 // ZiroEdge — Privacy-first local AI assistant
-//
-// 3-screen onboarding tour shown on first launch only.
 
 import SwiftUI
 
 struct OnboardingView: View {
     @Binding var isPresented: Bool
     @State private var currentPage = 0
+    @ScaledMetric(relativeTo: .largeTitle) private var heroIconSize: CGFloat = 72
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private let pages: [(symbol: String, color: Color, title: String, description: String)] = [
-        (
-            symbol: "lock.shield.fill",
-            color: .blue,
-            title: "Welcome to ZiroEdge",
-            description: "A privacy-first AI assistant. Everything runs on your device — no data ever leaves your phone."
+    private struct Page {
+        let symbol: String
+        let color: Color
+        let eyebrow: String
+        let title: String
+        let description: String
+    }
+
+    private let pages = [
+        Page(
+            symbol: "lock.shield.fill", color: .blue, eyebrow: "PRIVATE BY DESIGN", title: "Your AI stays yours",
+            description: "Messages, images, and model responses are processed locally. Your conversations never leave this device."
         ),
-        (
-            symbol: "arrow.down.circle.fill",
-            color: .green,
-            title: "Download a Model",
-            description: "Get started by downloading an AI model. Choose from a variety of models optimized for on-device use."
+        Page(
+            symbol: "arrow.down.circle.fill", color: .green, eyebrow: "YOU CHOOSE THE MODEL", title: "Download once. Use anywhere.",
+            description: "Pick a model that fits your device. After downloading, chat works without an internet connection."
         ),
-        (
-            symbol: "bubble.left.and.bubble.right.fill",
-            color: .purple,
-            title: "Start Chatting",
-            description: "Ask questions, get help, or just have a conversation. Your data stays private, always."
+        Page(
+            symbol: "bubble.left.and.bubble.right.fill", color: .purple, eyebrow: "READY WHEN YOU ARE", title: "A focused place to think",
+            description: "Start conversations, attach images with vision models, and keep a private history on your device."
         )
     ]
 
     var body: some View {
         VStack(spacing: 0) {
-            // Skip button
             HStack {
+                Text("ZIROEDGE")
+                    .font(.caption.weight(.bold))
+                    .tracking(1.4)
+                    .foregroundStyle(.secondary)
                 Spacer()
-                Button("Skip") {
-                    completeOnboarding()
-                }
-                .foregroundStyle(.secondary)
-                .padding()
+                Button("Skip", action: completeOnboarding)
+                    .foregroundStyle(.secondary)
+                    .accessibilityHint("Closes introduction")
             }
+            .padding(.horizontal, ZiroTheme.Spacing.xLarge)
+            .padding(.top, ZiroTheme.Spacing.large)
 
-            // Pages
             TabView(selection: $currentPage) {
                 ForEach(Array(pages.enumerated()), id: \.offset) { index, page in
-                    VStack(spacing: 24) {
-                        Spacer()
+                    ScrollView {
+                        VStack(spacing: ZiroTheme.Spacing.xLarge) {
+                            Image(systemName: page.symbol)
+                                .font(.system(size: min(heroIconSize, 120), weight: .medium))
+                                .foregroundStyle(page.color)
+                                .symbolRenderingMode(.hierarchical)
+                                .accessibilityHidden(true)
 
-                        Image(systemName: page.symbol)
-                            .font(.system(size: 80))
-                            .foregroundStyle(page.color)
-                            .padding(.bottom, 16)
-
-                        Text(page.title)
-                            .font(.title.bold())
-                            .multilineTextAlignment(.center)
-
-                        Text(page.description)
-                            .font(.body)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, 40)
-
-                        Spacer()
+                            VStack(spacing: ZiroTheme.Spacing.medium) {
+                                Text(page.eyebrow)
+                                    .font(.caption.weight(.bold))
+                                    .tracking(1.1)
+                                    .foregroundStyle(page.color)
+                                Text(page.title)
+                                    .font(.largeTitle.bold())
+                                    .multilineTextAlignment(.center)
+                                Text(page.description)
+                                    .font(.body)
+                                    .foregroundStyle(.secondary)
+                                    .multilineTextAlignment(.center)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            .frame(maxWidth: 520)
+                        }
+                        .padding(.horizontal, ZiroTheme.Spacing.xLarge)
+                        .padding(.vertical, ZiroTheme.Spacing.xxLarge)
+                        .frame(maxWidth: .infinity)
                     }
                     .tag(index)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("Page \(index + 1) of \(pages.count). \(page.title). \(page.description)")
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: .always))
             .indexViewStyle(.page(backgroundDisplayMode: .always))
 
-            // Continue / Get Started button
-            Button(action: {
-                if currentPage < pages.count - 1 {
-                    withAnimation {
-                        currentPage += 1
+            HStack(spacing: ZiroTheme.Spacing.medium) {
+                if currentPage > 0 {
+                    Button("Back") {
+                        if reduceMotion { currentPage -= 1 }
+                        else { withAnimation(.snappy) { currentPage -= 1 } }
                     }
-                } else {
-                    completeOnboarding()
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
                 }
-            }) {
-                Text(currentPage < pages.count - 1 ? "Continue" : "Get Started")
-                    .font(.body.weight(.semibold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 16)
+
+                Button(currentPage < pages.count - 1 ? "Continue" : "Get Started") {
+                    if currentPage < pages.count - 1 {
+                        if reduceMotion { currentPage += 1 }
+                        else { withAnimation(.snappy) { currentPage += 1 } }
+                    } else {
+                        completeOnboarding()
+                    }
+                }
+                .buttonStyle(ZiroPrimaryButtonStyle())
             }
-            .buttonStyle(.borderedProminent)
-            .clipShape(Capsule())
-            .padding(.horizontal, 40)
-            .padding(.bottom, 40)
+            .padding(.horizontal, ZiroTheme.Spacing.xLarge)
+            .padding(.bottom, ZiroTheme.Spacing.xLarge)
         }
+        .background(ZiroTheme.pageBackground)
         .interactiveDismissDisabled()
     }
 
@@ -100,20 +118,16 @@ struct OnboardingView: View {
     }
 }
 
-// MARK: - Onboarding Manager
-
-/// Manages onboarding state. Extracted for testability.
 @MainActor
 final class OnboardingManager: ObservableObject {
     @Published var showOnboarding: Bool
-
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         let completed = defaults.bool(forKey: "hasCompletedOnboarding")
         let isUITesting = CommandLine.arguments.contains("--uitesting")
-        self.showOnboarding = !completed && !isUITesting
+        showOnboarding = !completed && !isUITesting
     }
 
     func completeOnboarding() {
@@ -122,6 +136,4 @@ final class OnboardingManager: ObservableObject {
     }
 }
 
-#Preview {
-    OnboardingView(isPresented: .constant(true))
-}
+#Preview { OnboardingView(isPresented: .constant(true)) }

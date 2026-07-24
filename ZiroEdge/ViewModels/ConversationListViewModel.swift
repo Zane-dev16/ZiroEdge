@@ -14,6 +14,7 @@ final class ConversationListViewModel: ObservableObject {
     // MARK: - Published State
 
     @Published var conversations: [ConversationPayload] = []
+    @Published private(set) var isLoading = false
     @Published var selectedConversationID: UUID?
     @Published var isEditingTitle: Bool = false
     @Published var editingTitle: String = ""
@@ -34,6 +35,8 @@ final class ConversationListViewModel: ObservableObject {
 
     /// Fetch all conversations from persistence.
     func loadConversations() async {
+        isLoading = true
+        defer { isLoading = false }
         switch await persistence.fetchConversationsResult() {
         case .success(let fetched):
             conversations = fetched
@@ -49,7 +52,15 @@ final class ConversationListViewModel: ObservableObject {
     /// Create a new conversation with the given model.
     @discardableResult
     func createConversation(modelID: String, title: String = "New Conversation") async -> UUID? {
-        let result = await persistence.createConversationResult(title: title, modelID: modelID)
+        let defaultPrompt = UserDefaults.standard.string(
+            forKey: ChatViewModel.DefaultsKeys.defaultSystemPrompt
+        )
+        let normalizedPrompt = defaultPrompt?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let result = await persistence.createConversationResult(
+            title: title,
+            modelID: modelID,
+            systemPrompt: normalizedPrompt?.isEmpty == false ? normalizedPrompt : nil
+        )
         guard case .success(let id) = result else {
             if case .failure(let error) = result { errorMessage = error.localizedDescription }
             return nil

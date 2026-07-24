@@ -18,16 +18,39 @@ struct SidebarView: View {
 
     var body: some View {
         List(selection: $viewModel.selectedConversationID) {
-            // New conversation button.
             Section {
                 Button(action: onNewConversation) {
-                    Label("New Conversation", systemImage: "plus.circle.fill")
-                        .font(.body.weight(.medium))
+                    Label("New Conversation", systemImage: "square.and.pencil")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(Color.accentColor)
+                }
+                .accessibilityHint("Creates a private on-device chat")
+            }
+
+            if let error = viewModel.errorMessage {
+                Section {
+                    Label(error, systemImage: "exclamationmark.triangle")
+                        .font(.subheadline)
+                        .foregroundStyle(.red)
                 }
             }
 
-            // Conversation list.
-            Section("Conversations") {
+            Section("Recent") {
+                if viewModel.isLoading && viewModel.conversations.isEmpty {
+                    ForEach(0..<4, id: \.self) { _ in
+                        ConversationRow.placeholder
+                            .redacted(reason: .placeholder)
+                            .accessibilityHidden(true)
+                    }
+                } else if viewModel.conversations.isEmpty {
+                    ContentUnavailableView(
+                        "No Conversations",
+                        systemImage: "bubble.left.and.bubble.right",
+                        description: Text("Create a conversation to get started.")
+                    )
+                    .listRowBackground(Color.clear)
+                }
+
                 ForEach(viewModel.conversations) { conversation in
                     ConversationRow(conversation: conversation)
                         .tag(conversation.id)
@@ -62,7 +85,8 @@ struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
-        .navigationTitle("ZiroEdge")
+        .navigationTitle("Conversations")
+        .refreshable { await viewModel.loadConversations() }
         .alert("Rename Conversation", isPresented: Binding(
             get: { conversationToRename != nil },
             set: { if !$0 { conversationToRename = nil } }
@@ -123,7 +147,33 @@ struct ConversationRow: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, ZiroTheme.Spacing.xSmall)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilitySummary)
+    }
+
+    private var accessibilitySummary: String {
+        let count = conversation.messageCount
+        let date = ConversationListViewModel.formattedDate(conversation.updatedAt)
+        return "\(conversation.title), \(count) \(count == 1 ? "message" : "messages"), updated \(date)"
+    }
+
+    static var placeholder: ConversationRow {
+        ConversationRow(conversation: ConversationPayload(
+            id: UUID(),
+            title: "Loading conversation title",
+            modelID: "placeholder",
+            updatedAt: Date(),
+            createdAt: Date(),
+            systemPrompt: nil,
+            temperature: 0.7,
+            topP: 0.9,
+            topK: 40,
+            messageCount: 3,
+            isBranch: false,
+            parentBranchID: nil,
+            branchPointMessageID: nil
+        ))
     }
 }
 

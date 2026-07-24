@@ -6,6 +6,7 @@ import SwiftUI
 @main
 struct ZiroEdgeApp: App {
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @StateObject private var runtime = AppRuntime()
 
     static let diagnosticLogURL: URL =
@@ -51,7 +52,13 @@ struct ZiroEdgeApp: App {
     private var rootView: some View {
         switch runtime.state {
         case .loading(let attempt):
-            ProgressView("Opening local history (attempt \(attempt))…")
+            StoreOperationProgressView(
+                symbol: "lock.open.display",
+                title: "Opening local history",
+                message: attempt > 1
+                    ? "Retry attempt \(attempt). Large histories can take a moment to verify."
+                    : "Preparing your private conversations on this device."
+            )
         case .ready(let services):
             MainView(
                 chatViewModel: services.chatViewModel,
@@ -63,6 +70,20 @@ struct ZiroEdgeApp: App {
                 modelsViewModel: services.modelsViewModel,
                 onboardingManager: OnboardingManager()
             )
+            .overlay(alignment: .top) {
+                if let message = runtime.postResetMessage {
+                    ZiroStatusBanner(
+                        icon: "checkmark.circle.fill",
+                        message: message,
+                        tint: .green
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: ZiroTheme.Radius.control))
+                    .shadow(color: .black.opacity(0.12), radius: 8, y: 4)
+                    .padding()
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                }
+            }
+            .animation(reduceMotion ? nil : .snappy, value: runtime.postResetMessage)
             .task {
                 // Unit-test hosts execute the app entry point; avoid racing test-owned fixtures.
                 guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
@@ -77,26 +98,29 @@ struct ZiroEdgeApp: App {
             StoreRecoveryView(
                 failure: failure,
                 diagnosticsURL: runtime.diagnosticsURL,
+                diagnosticsExportError: runtime.diagnosticsExportError,
                 onRetry: runtime.retry,
                 onExportDiagnostics: runtime.exportDiagnostics,
                 onReset: runtime.prepareReset
             )
         case .quarantining:
-            ProgressView("Copying local history for recovery…")
+            StoreOperationProgressView(
+                symbol: "doc.on.doc.fill",
+                title: "Creating a recovery copy",
+                message: "Copying and verifying local history before any changes are made."
+            )
         case .awaitingResetConfirmation(let artifact):
-            VStack(spacing: 20) {
-                Image(systemName: "externaldrive.badge.checkmark").font(.largeTitle)
-                Text("Recovery Copy Created").font(.title2.bold())
-                Text("A byte-for-byte recovery copy was created. Resetting will now remove the original local history and create a new store.")
-                    .multilineTextAlignment(.center)
-                HStack {
-                    Button("Cancel", action: runtime.cancelReset)
-                    Button("Confirm Reset", role: .destructive) { runtime.confirmReset(artifact) }
-                }
-            }
-            .padding()
+            StoreResetConfirmationView(
+                artifact: artifact,
+                onCancel: runtime.cancelReset,
+                onConfirm: { runtime.confirmReset(artifact) }
+            )
         case .resetting:
-            ProgressView("Resetting local history…")
+            StoreOperationProgressView(
+                symbol: "arrow.clockwise.circle.fill",
+                title: "Starting fresh",
+                message: "Preserving the recovery copy and creating a clean local history."
+            )
         }
     }
 }
@@ -114,69 +138,21 @@ struct MainView: View {
     let modelsViewModel: ModelsViewModel
     @ObservedObject var onboardingManager: OnboardingManager
 
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var showSettings = false
     @State private var showModelsFromPicker = false
+    @State private var compactPath: [UUID] = []
 
-    /// Whether any models are currently downloaded.
     private var hasModels: Bool {
         ModelRegistry.allModels.contains { downloadManager.status(for: $0).isReady }
     }
 
     var body: some View {
-        NavigationSplitView {
-            SidebarView(
-                viewModel: conversationListViewModel,
-                onNewConversation: {
-                    Task {
-                        // Load the model before creating conversation.
-                        print("[NEWCONV] Loading model...")
-                        await lifecycleManager.autoLoadFirstModel()
-                        print("[NEWCONV] After autoLoad: isLoaded=\(lifecycleManager.isModelLoaded), state=\(lifecycleManager.currentState)")
-                        
-                        chatViewModel.autoSelectModel()
-                        if chatViewModel.needsModelRedirect {
-                            showModelsFromPicker = true
-                        } else if let model = chatViewModel.selectedModel {
-                            if let id = await conversationListViewModel.createConversation(
-                                modelID: model.id
-                            ) {
-                                await chatViewModel.loadConversation(id)
-                                print("[NEWCONV] Conversation \(id) created")
-                            }
-                        }
-                    }
-                },
-                onSelectConversation: { id in
-                    conversationListViewModel.selectConversation(id)
-                    Task { await chatViewModel.loadConversation(id) }
-                }
-            )
-        } detail: {
-            if conversationListViewModel.selectedConversationID != nil {
-                ChatView(viewModel: chatViewModel)
-                    .toolbar {
-                        ToolbarItem(placement: .primaryAction) {
-                            Button(action: { showSettings = true }) {
-                                Image(systemName: "gear")
-                            }
-                        }
-                    }
+        Group {
+            if horizontalSizeClass == .compact {
+                compactNavigation
             } else {
-                // No conversation selected — show welcome screen.
-                WelcomeView(onNewConversation: {
-                    Task {
-                        chatViewModel.autoSelectModel()
-                        if chatViewModel.needsModelRedirect {
-                            showModelsFromPicker = true
-                        } else if let model = chatViewModel.selectedModel {
-                            if let id = await conversationListViewModel.createConversation(
-                                modelID: model.id
-                            ) {
-                                await chatViewModel.loadConversation(id)
-                            }
-                        }
-                    }
-                }, hasModels: hasModels)
+                splitNavigation
             }
         }
         .sheet(isPresented: $showSettings) {
@@ -188,23 +164,25 @@ struct MainView: View {
                 modelsViewModel: modelsViewModel
             )
         }
-        .alert("Memory Warning", isPresented: $lifecycleManager.showMemoryWarning) {
-            Button("Reload Model") {
-                Task { await lifecycleManager.reloadEvictedModel() }
-            }
-            Button("Dismiss", role: .cancel) {
-                lifecycleManager.dismissMemoryWarning()
-            }
+        .alert("Model Unloaded", isPresented: $lifecycleManager.showMemoryWarning) {
+            Button("Reload Model") { Task { await lifecycleManager.reloadEvictedModel() } }
+            Button("Not Now", role: .cancel) { lifecycleManager.dismissMemoryWarning() }
         } message: {
-            Text("The model was unloaded due to memory pressure. Tap Reload to continue chatting.")
+            Text("ZiroEdge released the model to protect your device under memory pressure. Reload it when you are ready to continue.")
+        }
+        .alert("Model Needs More Memory", isPresented: $lifecycleManager.showInsufficientMemoryWarning) {
+            Button("Choose Another Model") { showModelsFromPicker = true }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(lifecycleManager.insufficientMemoryMessage ?? "This model cannot be loaded safely on the available memory.")
         }
         .sheet(isPresented: $showModelsFromPicker) {
             NavigationStack {
                 ModelsView(viewModel: modelsViewModel)
-                    .navigationTitle("Download a Model")
+                    .navigationTitle("Choose a Model")
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
-                        ToolbarItem(placement: .primaryAction) {
+                        ToolbarItem(placement: .confirmationAction) {
                             Button("Done") { showModelsFromPicker = false }
                         }
                     }
@@ -212,6 +190,83 @@ struct MainView: View {
         }
         .fullScreenCover(isPresented: $onboardingManager.showOnboarding) {
             OnboardingView(isPresented: $onboardingManager.showOnboarding)
+        }
+        .onChange(of: conversationListViewModel.selectedConversationID) { _, selection in
+            if selection == nil {
+                chatViewModel.clearActiveConversation()
+                compactPath.removeAll()
+            }
+        }
+        .onChange(of: chatViewModel.needsModelRedirect) { _, needsRedirect in
+            if needsRedirect {
+                showModelsFromPicker = true
+                chatViewModel.needsModelRedirect = false
+            }
+        }
+    }
+
+    private var compactNavigation: some View {
+        NavigationStack(path: $compactPath) {
+            sidebar(navigateInCompactLayout: true)
+                .toolbar { settingsToolbar }
+                .navigationDestination(for: UUID.self) { _ in
+                    ChatView(viewModel: chatViewModel)
+                        .toolbar { settingsToolbar }
+                }
+        }
+    }
+
+    private var splitNavigation: some View {
+        NavigationSplitView {
+            sidebar(navigateInCompactLayout: false)
+                .toolbar { settingsToolbar }
+        } detail: {
+            if conversationListViewModel.selectedConversationID != nil {
+                ChatView(viewModel: chatViewModel)
+                    .toolbar { settingsToolbar }
+            } else {
+                WelcomeView(
+                    onNewConversation: { startNewConversation(navigateInCompactLayout: false) },
+                    hasModels: hasModels
+                )
+                .toolbar { settingsToolbar }
+            }
+        }
+        .navigationSplitViewStyle(.prominentDetail)
+    }
+
+    private func sidebar(navigateInCompactLayout: Bool) -> some View {
+        SidebarView(
+            viewModel: conversationListViewModel,
+            onNewConversation: { startNewConversation(navigateInCompactLayout: navigateInCompactLayout) },
+            onSelectConversation: { id in
+                conversationListViewModel.selectConversation(id)
+                if navigateInCompactLayout { compactPath = [id] }
+                Task { await chatViewModel.loadConversation(id) }
+            }
+        )
+    }
+
+    private func startNewConversation(navigateInCompactLayout: Bool) {
+        Task {
+            chatViewModel.autoSelectModel()
+            guard !chatViewModel.needsModelRedirect, let model = chatViewModel.selectedModel else {
+                showModelsFromPicker = true
+                return
+            }
+            await chatViewModel.selectModel(model)
+            guard lifecycleManager.activeModel?.id == model.id else { return }
+            guard let id = await conversationListViewModel.createConversation(modelID: model.id) else { return }
+            if navigateInCompactLayout { compactPath = [id] }
+            await chatViewModel.loadConversation(id)
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var settingsToolbar: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) {
+            Button { showSettings = true } label: { Image(systemName: "gearshape") }
+                .accessibilityLabel("Settings")
         }
     }
 }
@@ -224,32 +279,33 @@ struct WelcomeView: View {
     let hasModels: Bool
 
     var body: some View {
-        VStack(spacing: 24) {
-            Image(systemName: hasModels ? "brain.head.profile" : "arrow.down.circle.dotted")
-                .font(.system(size: 64))
-                .foregroundStyle(.tertiary)
-
-            Text(hasModels ? "Welcome to ZiroEdge" : "Download a Model")
-                .font(.largeTitle.bold())
-
-            Text(hasModels
-                ? "Your private AI assistant. Everything runs on your device — no data ever leaves your phone."
-                : "You need a model to start chatting. Download one to get started.")
-                .font(.body)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 40)
+        VStack(spacing: ZiroTheme.Spacing.xLarge) {
+            ZiroHero(
+                symbol: hasModels ? "brain.head.profile" : "arrow.down.circle.dotted",
+                title: hasModels ? "Private AI, ready when you are" : "Choose your local model",
+                message: hasModels
+                    ? "Start a focused conversation. Everything you write and every response stays on this device."
+                    : "Download a model once, then chat privately without an internet connection.",
+                tint: hasModels ? .accentColor : .green
+            )
 
             Button(action: onNewConversation) {
-                Label(hasModels ? "Start a Conversation" : "Download a Model", systemImage: hasModels ? "plus.circle.fill" : "arrow.down.circle.fill")
-                    .font(.body.weight(.medium))
-                    .padding(.horizontal, 24)
-                    .padding(.vertical, 12)
+                Label(
+                    hasModels ? "New Conversation" : "Browse Models",
+                    systemImage: hasModels ? "square.and.pencil" : "arrow.down.circle.fill"
+                )
             }
-            .buttonStyle(.borderedProminent)
-            .clipShape(Capsule())
+            .buttonStyle(ZiroPrimaryButtonStyle())
+            .frame(maxWidth: 320)
+            .accessibilityHint(hasModels ? "Creates a new private chat" : "Opens the model catalog")
+
+            Label("No cloud account required", systemImage: "lock.fill")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
+        .padding(ZiroTheme.Spacing.xxLarge)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(ZiroTheme.pageBackground)
     }
 }
 
@@ -264,6 +320,8 @@ struct SettingsView: View {
     @ObservedObject var modelsViewModel: ModelsViewModel
 
     @Environment(\.dismiss) private var dismiss
+    @AppStorage(ChatViewModel.DefaultsKeys.defaultSystemPrompt)
+    private var defaultSystemPrompt = ""
 
     /// Local state to trigger refresh after deletion.
     @State private var storageRefreshID = UUID()
@@ -305,8 +363,10 @@ struct SettingsView: View {
                         LabeledContent("Size", value: model.formattedSize)
                         LabeledContent("Type", value: model.modelType.rawValue.capitalized)
 
-                        Button("Unload Model", role: .destructive) {
+                        Button {
                             Task { await lifecycleManager.unloadCurrentModel() }
+                        } label: {
+                            Label("Unload Model", systemImage: "eject")
                         }
                     } else {
                         Text("No model loaded")
@@ -337,6 +397,7 @@ struct SettingsView: View {
                                 } label: {
                                     Image(systemName: "trash")
                                 }
+                                .accessibilityLabel("Delete \(model.displayName)")
                             }
                         }
                     }
@@ -349,6 +410,16 @@ struct SettingsView: View {
                     Text("Storage")
                 } footer: {
                     Text("Models are stored locally on your device. Deleting a model frees disk space.")
+                }
+
+                Section {
+                    TextEditor(text: $defaultSystemPrompt)
+                        .frame(minHeight: 120)
+                        .accessibilityLabel("Default model instructions")
+                } header: {
+                    Text("Default Instructions")
+                } footer: {
+                    Text("Applied to new conversations and used when a conversation has no custom instructions. Processing remains on device.")
                 }
 
                 // Memory section.
