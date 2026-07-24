@@ -19,7 +19,7 @@ final class PersistenceTests: XCTestCase {
     // MARK: - Conversation CRUD
 
     func testCreateConversation() async throws {
-        let id = await persistence.createConversation(
+        let id = try await persistence.createConversation(
             title: "Test Conversation",
             modelID: "llama3.2-3b-q4"
         )
@@ -35,7 +35,7 @@ final class PersistenceTests: XCTestCase {
     }
 
     func testDeleteConversation() async throws {
-        let id = await persistence.createConversation(
+        let id = try await persistence.createConversation(
             title: "To Delete",
             modelID: "llama3.2-3b-q4"
         )
@@ -47,7 +47,7 @@ final class PersistenceTests: XCTestCase {
     }
 
     func testUpdateConversationTitle() async throws {
-        let id = await persistence.createConversation(
+        let id = try await persistence.createConversation(
             title: "Original",
             modelID: "llama3.2-3b-q4"
         )
@@ -59,7 +59,7 @@ final class PersistenceTests: XCTestCase {
     }
 
     func testUpdateConversationSampling() async throws {
-        let id = await persistence.createConversation(
+        let id = try await persistence.createConversation(
             title: "Sampling Test",
             modelID: "llama3.2-3b-q4"
         )
@@ -78,7 +78,7 @@ final class PersistenceTests: XCTestCase {
     }
 
     func testUpdateConversationSystemPrompt() async throws {
-        let id = await persistence.createConversation(
+        let id = try await persistence.createConversation(
             title: "System Prompt Test",
             modelID: "llama3.2-3b-q4",
             systemPrompt: "You are helpful."
@@ -96,7 +96,7 @@ final class PersistenceTests: XCTestCase {
     // MARK: - Message CRUD
 
     func testInsertMessage() async throws {
-        let convID = await persistence.createConversation(
+        let convID = try await persistence.createConversation(
             title: "Message Test",
             modelID: "llama3.2-3b-q4"
         )
@@ -112,13 +112,13 @@ final class PersistenceTests: XCTestCase {
         let messages = await persistence.fetchMessages(conversationID: convID)
         XCTAssertEqual(messages.count, 1)
         XCTAssertEqual(messages.first?.content, "Hello, world!")
-        XCTAssertEqual(messages.first?.role, "user")
+        XCTAssertEqual(messages.first?.role, .user)
         XCTAssertEqual(messages.first?.sequenceIndex, 0)
         XCTAssertFalse(messages.first?.isStreaming ?? true)
     }
 
     func testMultipleMessagesOrdering() async throws {
-        let convID = await persistence.createConversation(
+        let convID = try await persistence.createConversation(
             title: "Order Test",
             modelID: "llama3.2-3b-q4"
         )
@@ -140,7 +140,7 @@ final class PersistenceTests: XCTestCase {
     // MARK: - Streaming
 
     func testStreamingLifecycle() async throws {
-        let convID = await persistence.createConversation(
+        let convID = try await persistence.createConversation(
             title: "Streaming Test",
             modelID: "llama3.2-3b-q4"
         )
@@ -153,7 +153,7 @@ final class PersistenceTests: XCTestCase {
         let messages1 = await persistence.fetchMessages(conversationID: convID)
         XCTAssertEqual(messages1.count, 1)
         XCTAssertTrue(messages1.first?.isStreaming ?? false)
-        XCTAssertEqual(messages1.first?.role, "assistant")
+        XCTAssertEqual(messages1.first?.role, .assistant)
 
         // Buffer some tokens.
         await persistence.bufferTokens(messageID: msgID!, tokens: "Hello")
@@ -166,11 +166,11 @@ final class PersistenceTests: XCTestCase {
         let messages2 = await persistence.fetchMessages(conversationID: convID)
         XCTAssertEqual(messages2.count, 1)
         XCTAssertFalse(messages2.first?.isStreaming ?? true)
-        XCTAssertFalse(messages2.first?.content?.isEmpty ?? true)
+        XCTAssertFalse(messages2.first?.content.isEmpty ?? true)
     }
 
     func testStreamingCancellation() async throws {
-        let convID = await persistence.createConversation(
+        let convID = try await persistence.createConversation(
             title: "Cancel Test",
             modelID: "llama3.2-3b-q4"
         )
@@ -178,17 +178,44 @@ final class PersistenceTests: XCTestCase {
         let msgID = await persistence.beginStreamingMessage(conversationID: convID)!
         await persistence.bufferTokens(messageID: msgID, tokens: "Partial ")
         await persistence.cancelStreamingMessage(messageID: msgID)
+        await persistence.cancelStreamingMessage(messageID: msgID)
 
         let messages = await persistence.fetchMessages(conversationID: convID)
         XCTAssertEqual(messages.count, 1)
         XCTAssertFalse(messages.first?.isStreaming ?? true)
-        XCTAssertTrue(messages.first?.content?.contains("cancelled") ?? false)
+        XCTAssertEqual(messages.first?.content.components(separatedBy: "_[Generation cancelled]_" ).count, 2)
+    }
+
+    func testMultipleAttachmentsSurviveColdFetchInOrder() async throws {
+        let convID = try await persistence.createConversation(title: "Images", modelID: "vision")
+        let attachments = [Data([1, 2]), Data([3, 4, 5]), Data([6])]
+
+        let messageID = await persistence.insertMessage(
+            conversationID: convID,
+            role: .user,
+            content: "compare",
+            attachments: attachments
+        )
+        XCTAssertNotNil(messageID)
+
+        let messages = await persistence.fetchMessages(conversationID: convID)
+        XCTAssertEqual(messages.first?.attachments, attachments)
+    }
+
+    func testLegacyRawImageDecodesAsSingleAttachment() {
+        let legacy = Data([0x89, 0x50, 0x4E, 0x47])
+        XCTAssertEqual(MessageAttachmentCodec.decode(legacy), [legacy])
+    }
+
+    func testAttachmentCodecRejectsMalformedArchiveAsLegacyData() {
+        let malformed = Data([0x5A, 0x45, 0x49, 0x4D, 1, 1, 0, 0, 0, 100])
+        XCTAssertEqual(MessageAttachmentCodec.decode(malformed), [malformed])
     }
 
     // MARK: - Crash Recovery
 
     func testCrashRecovery() async throws {
-        let convID = await persistence.createConversation(
+        let convID = try await persistence.createConversation(
             title: "Crash Test",
             modelID: "llama3.2-3b-q4"
         )
@@ -215,7 +242,7 @@ final class PersistenceTests: XCTestCase {
     // MARK: - Branching
 
     func testConversationBranching() async throws {
-        let sourceID = await persistence.createConversation(
+        let sourceID = try await persistence.createConversation(
             title: "Original",
             modelID: "llama3.2-3b-q4"
         )
@@ -266,7 +293,7 @@ final class PersistenceTests: XCTestCase {
         // Verify total message count.
         var totalMessages = 0
         for conv in conversations {
-            let messages = await persistence.fetchMessages(conversationID: conv.id!)
+            let messages = await persistence.fetchMessages(conversationID: conv.id)
             totalMessages += messages.count
         }
         XCTAssertEqual(totalMessages, 5000)
@@ -280,7 +307,7 @@ final class PersistenceTests: XCTestCase {
     }
 
     func testEmptyMessageFetch() async throws {
-        let convID = await persistence.createConversation(
+        let convID = try await persistence.createConversation(
             title: "Empty",
             modelID: "llama3.2-3b-q4"
         )

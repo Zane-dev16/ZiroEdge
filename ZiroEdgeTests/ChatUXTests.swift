@@ -156,7 +156,7 @@ final class ChatUXTests: XCTestCase {
         XCTAssertNotNil(viewModel.truncationWarning)
 
         let persistence = PersistenceController(inMemory: true)
-        let conversationID = await persistence.createConversation(
+        let conversationID = try await persistence.createConversation(
             title: "Test",
             modelID: "test-model"
         )

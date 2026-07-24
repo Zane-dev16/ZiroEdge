@@ -17,6 +17,7 @@ final class ConversationListViewModel: ObservableObject {
     @Published var selectedConversationID: UUID?
     @Published var isEditingTitle: Bool = false
     @Published var editingTitle: String = ""
+    @Published var errorMessage: String?
 
     // MARK: - Dependencies
 
@@ -33,15 +34,27 @@ final class ConversationListViewModel: ObservableObject {
 
     /// Fetch all conversations from persistence.
     func loadConversations() async {
-        conversations = await persistence.fetchConversations()
+        switch await persistence.fetchConversationsResult() {
+        case .success(let fetched):
+            conversations = fetched
+            errorMessage = nil
+        case .failure(let failure):
+            // Preserve the last known rows and selection while recovery remains available.
+            errorMessage = failure.localizedDescription
+        }
     }
 
     // MARK: - Create
 
     /// Create a new conversation with the given model.
     @discardableResult
-    func createConversation(modelID: String, title: String = "New Conversation") async -> UUID {
-        let id = await persistence.createConversation(title: title, modelID: modelID)
+    func createConversation(modelID: String, title: String = "New Conversation") async -> UUID? {
+        let result = await persistence.createConversationResult(title: title, modelID: modelID)
+        guard case .success(let id) = result else {
+            if case .failure(let error) = result { errorMessage = error.localizedDescription }
+            return nil
+        }
+        errorMessage = nil
         await loadConversations()
         selectedConversationID = id
         return id
@@ -51,11 +64,13 @@ final class ConversationListViewModel: ObservableObject {
 
     /// Delete a conversation by ID. If it was selected, clear selection.
     func deleteConversation(_ id: UUID) async {
-        await persistence.deleteConversation(id: id)
-        if selectedConversationID == id {
-            selectedConversationID = nil
+        switch await persistence.deleteConversation(id: id) {
+        case .success:
+            if selectedConversationID == id { selectedConversationID = nil }
+            await loadConversations()
+        case .failure(let failure):
+            errorMessage = failure.localizedDescription
         }
-        await loadConversations()
     }
 
     /// Delete conversations at specific index set (for swipe-to-delete).
@@ -64,11 +79,12 @@ final class ConversationListViewModel: ObservableObject {
             conversations.indices.contains(index) ? conversations[index].id : nil
         }
         for id in idsToDelete {
-            await persistence.deleteConversation(id: id)
+            if case .failure(let failure) = await persistence.deleteConversation(id: id) {
+                errorMessage = failure.localizedDescription
+                return
+            }
         }
-        if selectedConversationID.map(idsToDelete.contains) == true {
-            selectedConversationID = nil
-        }
+        if selectedConversationID.map(idsToDelete.contains) == true { selectedConversationID = nil }
         await loadConversations()
     }
 
@@ -87,9 +103,13 @@ final class ConversationListViewModel: ObservableObject {
             isEditingTitle = false
             return
         }
-        await persistence.updateConversationTitle(id: conversationID, title: newTitle)
-        isEditingTitle = false
-        await loadConversations()
+        switch await persistence.updateConversationTitle(id: conversationID, title: newTitle) {
+        case .success:
+            isEditingTitle = false
+            await loadConversations()
+        case .failure(let failure):
+            errorMessage = failure.localizedDescription
+        }
     }
 
     /// Cancel the rename.

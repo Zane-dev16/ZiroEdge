@@ -1,24 +1,17 @@
 // ZiroEdgeApp.swift
 // ZiroEdge — Privacy-first local AI assistant
-//
-// App entry point. Initializes Core Data, creates shared services,
-// and recovers any incomplete streams from the previous session.
 
 import SwiftUI
 
 @main
 struct ZiroEdgeApp: App {
-
     @Environment(\.scenePhase) private var scenePhase
+    @StateObject private var runtime = AppRuntime()
 
-    // MARK: - Diagnostic Log File
-
-    /// Path to the diagnostic log file in Documents.
     static let diagnosticLogURL: URL =
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("download-diagnostic.log")
 
-    /// Append a line to the diagnostic log file.
     static func diagnosticLog(_ message: String) {
         let ts = ISO8601DateFormatter().string(from: Date())
         let line = "[\(ts)] \(message)\n"
@@ -32,148 +25,78 @@ struct ZiroEdgeApp: App {
         }
     }
 
-    // MARK: - Shared Services
-
-    /// Core Data persistence — actor-isolated background writer.
-    @State private var persistence: PersistenceController
-
-    /// LLM inference service.
-    @State private var inferenceService: InferenceService
-
-    /// Memory budget checker.
-    @State private var memoryBudgeter: MemoryBudgeter
-
-    /// Model lifecycle manager.
-    @State private var lifecycleManager: ModelLifecycleManager
-
-    /// Chat session actor.
-    @State private var sessionActor: ChatSessionActor
-
-    /// ViewModels.
-    @State private var chatViewModel: ChatViewModel
-    @State private var conversationListViewModel: ConversationListViewModel
-
-    /// Download manager.
-    @State private var downloadManager: DownloadManager
-
-    /// Models page view model.
-    @State private var modelsViewModel: ModelsViewModel
-
-    /// Onboarding manager.
-    @State private var onboardingManager = OnboardingManager()
-
-    // MARK: - Init
-
-    init() {
-        let persistence = PersistenceController()
-        let inferenceService = InferenceService()
-        let memoryBudgeter = MemoryBudgeter()
-        let lifecycleManager = ModelLifecycleManager(
-            inferenceService: inferenceService,
-            memoryBudgeter: memoryBudgeter
-        )
-        let sessionActor = ChatSessionActor(
-            inferenceService: inferenceService,
-            persistence: persistence
-        )
-        let conversationListViewModel = ConversationListViewModel(persistence: persistence)
-        let downloadManager = DownloadManager()
-        let chatViewModel = ChatViewModel(
-            persistence: persistence,
-            inferenceService: inferenceService,
-            sessionActor: sessionActor,
-            lifecycleManager: lifecycleManager,
-            downloadStatusProvider: downloadManager
-        )
-        chatViewModel.conversationListViewModel = conversationListViewModel
-        let modelsViewModel = ModelsViewModel(
-            downloadManager: downloadManager,
-            lifecycleManager: lifecycleManager
-        )
-
-        _persistence = State(initialValue: persistence)
-        _inferenceService = State(initialValue: inferenceService)
-        _memoryBudgeter = State(initialValue: memoryBudgeter)
-        _lifecycleManager = State(initialValue: lifecycleManager)
-        _sessionActor = State(initialValue: sessionActor)
-        _chatViewModel = State(initialValue: chatViewModel)
-        _conversationListViewModel = State(initialValue: conversationListViewModel)
-        _downloadManager = State(initialValue: downloadManager)
-        _modelsViewModel = State(initialValue: modelsViewModel)
-    }
-
-    // MARK: - Body
-
     var body: some Scene {
         WindowGroup {
-            MainView(
-                chatViewModel: chatViewModel,
-                conversationListViewModel: conversationListViewModel,
-                lifecycleManager: lifecycleManager,
-                inferenceService: inferenceService,
-                memoryBudgeter: memoryBudgeter,
-                downloadManager: downloadManager,
-                modelsViewModel: modelsViewModel,
-                onboardingManager: onboardingManager
-            )
-            .task {
-                // Recover any incomplete streams from the previous session.
-                await persistence.recoverIncompleteStreams()
-
-                // Purge stale empty conversations from the sidebar.
-                await persistence.purgeEmptyConversations()
-
-                // Ensure models directory exists.
-                ModelManagerService.ensureModelsDirectory()
-
-                // UI testing: auto-load the first available model.
-                if CommandLine.arguments.contains("--uitesting") {
-                    await lifecycleManager.autoLoadFirstModel()
+            rootView
+                .task {
+                    guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
+                    await runtime.start()
                 }
-
-                // Auto-trigger download for diagnostics
-                if CommandLine.arguments.contains("--uitesting-download") {
-                    print("[UITEST-DL] Auto-download triggered")
-                    if let model = ModelRegistry.allModels.first(where: {
-                        !ModelManagerService.isFullyDownloaded($0)
-                    }) {
-                        print("[UITEST-DL] Selected: \(model.id) (\(model.formattedSize))")
-                        print("[UITEST-DL] URL: \(model.baseURL.absoluteString)")
-                        downloadManager.startDownload(for: model)
-                    } else {
-                        print("[UITEST-DL] All models already downloaded")
+                .onChange(of: scenePhase) { _, phase in
+                    guard phase == .background,
+                          case .ready(let services) = runtime.state else { return }
+                    Task {
+                        let failures = await services.persistence.flushPendingWrites()
+                        if let failure = failures.values.first {
+                            await MainActor.run {
+                                services.chatViewModel.presentBackgroundPersistenceFailure(failure)
+                            }
+                        }
                     }
                 }
+        }
+    }
 
-                // UI testing: send a test message bypassing the TextField.
-                // Works around @FocusState preventing XCUITest typeText from
-                // registering in SwiftUI TextFields.
-                if CommandLine.arguments.contains("--uitesting-sendtest"),
-                   lifecycleManager.isModelLoaded,
-                   let model = lifecycleManager.activeModel {
-                    print("[UITEST] sendtest: starting — model=\(model.id)")
-                    chatViewModel.selectedModel = model
-                    let convID = await conversationListViewModel.createConversation(
-                        modelID: model.id,
-                        title: "UITest Send Test"
-                    )
-                    print("[UITEST] sendtest: created conversation \(convID)")
-                    await chatViewModel.loadConversation(convID)
-                    print("[UITEST] sendtest: loaded conversation, activeID=\(String(describing: chatViewModel.activeConversationID))")
-                    chatViewModel.inputText = "Hello, say hi in one word"
-                    print("[UITEST] sendtest: inputText set, calling sendMessage...")
-                    await chatViewModel.sendMessage()
-                    print("[UITEST] sendtest: sendMessage completed")
-                } else if CommandLine.arguments.contains("--uitesting-sendtest") {
-                    print("[UITEST] sendtest: model not loaded, skipping — isLoaded=\(lifecycleManager.isModelLoaded)")
+    @ViewBuilder
+    private var rootView: some View {
+        switch runtime.state {
+        case .loading(let attempt):
+            ProgressView("Opening local history (attempt \(attempt))…")
+        case .ready(let services):
+            MainView(
+                chatViewModel: services.chatViewModel,
+                conversationListViewModel: services.conversationListViewModel,
+                lifecycleManager: services.lifecycleManager,
+                inferenceService: services.inferenceService,
+                memoryBudgeter: services.memoryBudgeter,
+                downloadManager: services.downloadManager,
+                modelsViewModel: services.modelsViewModel,
+                onboardingManager: OnboardingManager()
+            )
+            .task {
+                // Unit-test hosts execute the app entry point; avoid racing test-owned fixtures.
+                guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
+                ModelMigrationService.migrateIfNeeded()
+                ModelManagerService.ensureModelsDirectory()
+                await services.conversationListViewModel.loadConversations()
+                if CommandLine.arguments.contains("--uitesting") {
+                    await services.lifecycleManager.autoLoadFirstModel()
                 }
             }
-            .onChange(of: scenePhase) { _, newPhase in
-                guard newPhase == .background else { return }
-                Task {
-                    await persistence.flushPendingWrites()
+        case .failed(let failure):
+            StoreRecoveryView(
+                failure: failure,
+                diagnosticsURL: runtime.diagnosticsURL,
+                onRetry: runtime.retry,
+                onExportDiagnostics: runtime.exportDiagnostics,
+                onReset: runtime.prepareReset
+            )
+        case .quarantining:
+            ProgressView("Copying local history for recovery…")
+        case .awaitingResetConfirmation(let artifact):
+            VStack(spacing: 20) {
+                Image(systemName: "externaldrive.badge.checkmark").font(.largeTitle)
+                Text("Recovery Copy Created").font(.title2.bold())
+                Text("A byte-for-byte recovery copy was created. Resetting will now remove the original local history and create a new store.")
+                    .multilineTextAlignment(.center)
+                HStack {
+                    Button("Cancel", action: runtime.cancelReset)
+                    Button("Confirm Reset", role: .destructive) { runtime.confirmReset(artifact) }
                 }
             }
+            .padding()
+        case .resetting:
+            ProgressView("Resetting local history…")
         }
     }
 }
@@ -214,11 +137,12 @@ struct MainView: View {
                         if chatViewModel.needsModelRedirect {
                             showModelsFromPicker = true
                         } else if let model = chatViewModel.selectedModel {
-                            let id = await conversationListViewModel.createConversation(
+                            if let id = await conversationListViewModel.createConversation(
                                 modelID: model.id
-                            )
-                            await chatViewModel.loadConversation(id)
-                            print("[NEWCONV] Conversation \(id) created")
+                            ) {
+                                await chatViewModel.loadConversation(id)
+                                print("[NEWCONV] Conversation \(id) created")
+                            }
                         }
                     }
                 },
@@ -245,10 +169,11 @@ struct MainView: View {
                         if chatViewModel.needsModelRedirect {
                             showModelsFromPicker = true
                         } else if let model = chatViewModel.selectedModel {
-                            let id = await conversationListViewModel.createConversation(
+                            if let id = await conversationListViewModel.createConversation(
                                 modelID: model.id
-                            )
-                            await chatViewModel.loadConversation(id)
+                            ) {
+                                await chatViewModel.loadConversation(id)
+                            }
                         }
                     }
                 }, hasModels: hasModels)
@@ -381,7 +306,7 @@ struct SettingsView: View {
                         LabeledContent("Type", value: model.modelType.rawValue.capitalized)
 
                         Button("Unload Model", role: .destructive) {
-                            lifecycleManager.unloadCurrentModel()
+                            Task { await lifecycleManager.unloadCurrentModel() }
                         }
                     } else {
                         Text("No model loaded")
@@ -471,7 +396,7 @@ struct SettingsView: View {
                 presenting: modelToDelete
             ) { model in
                 Button("Delete \(model.displayName)", role: .destructive) {
-                    deleteModel(model)
+                    Task { await deleteModel(model) }
                 }
                 Button("Cancel", role: .cancel) {
                     modelToDelete = nil
@@ -492,10 +417,11 @@ struct SettingsView: View {
         ModelManagerService.formattedDiskUsage()
     }
 
-    private func deleteModel(_ model: AIModel) {
-        // Unload if currently active.
+    @MainActor
+    private func deleteModel(_ model: AIModel) async {
+        // Never remove an mmap-backed file until the engine has finished unloading it.
         if lifecycleManager.activeModel?.id == model.id {
-            lifecycleManager.unloadCurrentModel()
+            await lifecycleManager.unloadCurrentModel()
         }
         downloadManager.deleteModel(model)
         storageRefreshID = UUID()

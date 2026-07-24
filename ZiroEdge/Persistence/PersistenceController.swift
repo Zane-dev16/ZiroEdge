@@ -11,14 +11,36 @@ import Foundation
 import CoreData
 import os
 
+typealias PersistenceMutationError = PersistenceFailure
+
+enum PersistenceConfiguration: Sendable {
+    case production
+    case inMemory
+    case store(URL)
+
+    var storeURL: URL? {
+        switch self {
+        case .production: PersistenceController.productionStoreURL
+        case .inMemory: nil
+        case .store(let url): url.standardizedFileURL
+        }
+    }
+}
+
 struct ConversationPayload: Sendable, Identifiable {
     let id: UUID
     let title: String
     let modelID: String
     let updatedAt: Date?
     let createdAt: Date?
+    let systemPrompt: String?
+    let temperature: Double
+    let topP: Double
+    let topK: Int32
     let messageCount: Int
     let isBranch: Bool
+    let parentBranchID: UUID?
+    let branchPointMessageID: UUID?
 }
 
 // MARK: - Persistence Controller
@@ -32,8 +54,21 @@ actor PersistenceController {
 
     private let logger = Logger(subsystem: "com.zanish-labs.ziroedge", category: "persistence")
 
-    /// The persistent container.
+    /// The persistent container. It is exposed only after every store description has loaded.
     let container: NSPersistentContainer
+    private let faultInjector: any PersistenceFaultInjecting
+    private let recoveryJournalURL: URL?
+
+    private struct RecoveryJournal: Codable, Sendable {
+        enum TerminalState: String, Codable, Sendable { case streaming, completed, cancelled }
+        let messageID: UUID
+        let conversationID: UUID
+        let createdAt: Date
+        let targetContent: String
+        let terminalState: TerminalState
+    }
+
+    private var recoveryJournal: RecoveryJournal?
 
     /// Background writer context — actor-isolated. All writes go here.
     private lazy var writerContext: NSManagedObjectContext = {
@@ -51,42 +86,112 @@ actor PersistenceController {
     /// Flush thresholds.
     private let flushTokenCount = 20       // Flush every 20 tokens
     private let flushIntervalMs: UInt64 = 500  // Or every 500ms, whichever first
+    private let maximumBufferedBytes = 1_048_576
     private var lastFlushTime: [UUID: UInt64] = [:]
 
     // MARK: - Initialization
 
-    init(inMemory: Bool = false) {
-        // Try to load from bundle first. If not found (e.g. in test targets),
-        // create the model programmatically.
+    private init(configuration: PersistenceConfiguration, faultInjector: any PersistenceFaultInjecting) {
+        let model: NSManagedObjectModel
         if let modelURL = Bundle.main.url(forResource: "ZiroEdge", withExtension: "momd")
             ?? Bundle.main.url(forResource: "ZiroEdge", withExtension: "mom"),
-           let model = NSManagedObjectModel(contentsOf: modelURL) {
-            container = NSPersistentContainer(name: "ZiroEdge", managedObjectModel: model)
+           let bundledModel = NSManagedObjectModel(contentsOf: modelURL) {
+            model = bundledModel
         } else {
-            // Programmatic model creation for test targets.
-            let model = Self.createManagedModel()
-            container = NSPersistentContainer(name: "ZiroEdge", managedObjectModel: model)
+            model = Self.createManagedModel()
+        }
+        container = NSPersistentContainer(name: "ZiroEdge", managedObjectModel: model)
+        self.faultInjector = faultInjector
+        if let storeURL = configuration.storeURL {
+            self.recoveryJournalURL = storeURL.deletingLastPathComponent()
+                .appendingPathComponent(".\(storeURL.lastPathComponent).stream-recovery.json")
+        } else {
+            self.recoveryJournalURL = nil
         }
 
-        if inMemory {
+        switch configuration {
+        case .production:
+            break
+        case .inMemory:
             let description = NSPersistentStoreDescription()
             description.type = NSInMemoryStoreType
             container.persistentStoreDescriptions = [description]
-        }
-
-        container.loadPersistentStores { [logger] description, error in
-            if let error {
-                logger.error("Core Data failed to load: \(error.localizedDescription, privacy: .public)")
-                fatalError("Core Data failed to load: \(error)")
-            }
-            logger.info("Core Data store loaded: \(description.url?.absoluteString ?? "in-memory", privacy: .public)")
+        case .store(let url):
+            let description = NSPersistentStoreDescription(url: url)
+            description.shouldMigrateStoreAutomatically = true
+            description.shouldInferMappingModelAutomatically = true
+            container.persistentStoreDescriptions = [description]
         }
 
         container.viewContext.automaticallyMergesChangesFromParent = true
         container.viewContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
         container.viewContext.name = "view"
-        // View context is read-only — set it to refresh on save notifications.
         container.viewContext.shouldDeleteInaccessibleFaults = true
+    }
+
+    /// Opens every configured store before returning a usable controller.
+    static func open(
+        configuration: PersistenceConfiguration = .production,
+        faultInjector: any PersistenceFaultInjecting = NoopPersistenceFaultInjector()
+    ) async -> Result<PersistenceController, PersistenceFailure> {
+        let controller = PersistenceController(configuration: configuration, faultInjector: faultInjector)
+        if let injected = faultInjector.fault(for: .loadStore) {
+            return .failure(.map(injected, operation: .loadStore))
+        }
+
+        let loadResult: Result<PersistenceController, PersistenceFailure> = await withCheckedContinuation { continuation in
+            let lock = NSLock()
+            var remaining = controller.container.persistentStoreDescriptions.count
+            var firstFailure: PersistenceFailure?
+            controller.container.loadPersistentStores { _, error in
+                lock.lock()
+                if let error, firstFailure == nil { firstFailure = .map(error, operation: .loadStore) }
+                remaining -= 1
+                let isFinished = remaining == 0
+                let failure = firstFailure
+                lock.unlock()
+                guard isFinished else { return }
+                continuation.resume(returning: failure.map(Result.failure) ?? .success(controller))
+            }
+        }
+        if case .success = loadResult {
+            switch await controller.restoreRecoveryJournal() {
+            case .success:
+                break
+            case .failure(let failure):
+                return .failure(failure)
+            }
+        }
+        return loadResult
+    }
+
+    /// In-memory compatibility initializer for previews and legacy tests only.
+    /// It never falls back to a disk store and never terminates the process.
+    init(inMemory: Bool) {
+        precondition(inMemory, "Use await PersistenceController.open() for disk-backed stores")
+        let controller = PersistenceController(configuration: .inMemory, faultInjector: NoopPersistenceFaultInjector())
+        self.container = controller.container
+        self.faultInjector = controller.faultInjector
+        self.recoveryJournalURL = nil
+        let semaphore = DispatchSemaphore(value: 0)
+        container.loadPersistentStores { _, _ in semaphore.signal() }
+        semaphore.wait()
+    }
+
+    static var productionStoreURL: URL {
+        NSPersistentContainer.defaultDirectoryURL().appendingPathComponent("ZiroEdge.sqlite")
+    }
+
+    /// Closes loaded stores for deterministic recovery tests and orderly teardown.
+    func closePersistentStores() -> Result<Void, PersistenceFailure> {
+        do {
+            for store in container.persistentStoreCoordinator.persistentStores {
+                try container.persistentStoreCoordinator.remove(store)
+            }
+            return .success(())
+        } catch {
+            return .failure(.map(error, operation: .loadStore))
+        }
     }
 
     // MARK: - Main Context (Read-Only for UI)
@@ -98,455 +203,667 @@ actor PersistenceController {
 
     // MARK: - Conversation CRUD
 
-    /// Create a new conversation. Returns the conversation ID.
     func createConversation(
         id: UUID = UUID(),
         title: String = "New Conversation",
         modelID: String,
         systemPrompt: String? = nil
-    ) -> UUID {
-        let context = writerContext
-        context.performAndWait {
-            CDConversation.create(
-                in: context,
-                id: id,
-                title: title,
-                modelID: modelID,
-                systemPrompt: systemPrompt
-            )
-            saveContext(context, operation: "createConversation")
-        }
-        return id
+    ) throws -> UUID {
+        try createConversationResult(id: id, title: title, modelID: modelID, systemPrompt: systemPrompt).get()
     }
 
-    /// Delete a conversation and all its messages.
-    func deleteConversation(id: UUID) {
+    func createConversationResult(
+        id: UUID = UUID(),
+        title: String = "New Conversation",
+        modelID: String,
+        systemPrompt: String? = nil
+    ) -> Result<UUID, PersistenceMutationError> {
         let context = writerContext
-        context.performAndWait {
-            let request = CDConversation.fetchRequest()
-            request.predicate = NSPredicate(format: "id == %@", id as CVarArg)
-            request.fetchLimit = 1
-
-            do {
-                if let conversation = try context.fetch(request).first {
-                    context.delete(conversation)
-                    saveContext(context, operation: "deleteConversation")
-                }
-            } catch {
-                logger.error("Failed to fetch conversation for deletion: \(error.localizedDescription, privacy: .public)")
+        let injector = faultInjector
+        let result: Result<UUID, PersistenceFailure> = context.performAndWait {
+            CDConversation.create(in: context, id: id, title: title, modelID: modelID, systemPrompt: systemPrompt)
+            switch Self.saveContext(context, faultInjector: injector) {
+            case .success: return .success(id)
+            case .failure(let failure): context.rollback(); return .failure(failure)
             }
         }
+        logFailure(result, operation: "createConversation")
+        return result
     }
 
-    /// Update conversation title.
-    func updateConversationTitle(id: UUID, title: String) {
-        let context = writerContext
-        context.performAndWait {
-            let request = CDConversation.fetchRequest()
-            request.predicate = NSPredicate(format: "id == %@", id as CVarArg)
-            request.fetchLimit = 1
-
-            do {
-                if let conversation = try context.fetch(request).first {
-                    conversation.title = title
-                    conversation.updatedAt = Date()
-                    saveContext(context, operation: "updateConversationTitle")
-                }
-            } catch {
-                logger.error("Failed to fetch conversation for title update: \(error.localizedDescription, privacy: .public)")
-            }
+    @discardableResult
+    func deleteConversation(id: UUID) -> Result<Void, PersistenceFailure> {
+        mutateConversation(id: id, operation: "deleteConversation") { context, conversation in
+            context.delete(conversation)
         }
     }
 
-    /// Update a conversation title only when it still matches the expected value.
+    @discardableResult
+    func updateConversationTitle(id: UUID, title: String) -> Result<Void, PersistenceFailure> {
+        mutateConversation(id: id, operation: "updateConversationTitle") { _, conversation in
+            conversation.title = title
+            conversation.updatedAt = Date()
+        }
+    }
+
+    @discardableResult
     func updateConversationTitleIfStill(
         id: UUID,
         newTitle: String,
         expectedCurrentTitle: String
-    ) {
+    ) -> Result<Void, PersistenceFailure> {
+        mutateConversation(id: id, operation: "updateConversationTitleIfStill") { _, conversation in
+            guard conversation.title == expectedCurrentTitle else { return }
+            conversation.title = newTitle
+            conversation.updatedAt = Date()
+        }
+    }
+
+    @discardableResult
+    func updateConversationSampling(
+        id: UUID,
+        temperature: Double,
+        topP: Double,
+        topK: Int32
+    ) -> Result<Void, PersistenceFailure> {
+        mutateConversation(id: id, operation: "updateConversationSampling") { _, conversation in
+            conversation.temperature = temperature
+            conversation.topP = topP
+            conversation.topK = topK
+            conversation.updatedAt = Date()
+        }
+    }
+
+    @discardableResult
+    func updateConversationSystemPrompt(
+        id: UUID,
+        systemPrompt: String?
+    ) -> Result<Void, PersistenceFailure> {
+        mutateConversation(id: id, operation: "updateConversationSystemPrompt") { _, conversation in
+            conversation.systemPrompt = systemPrompt
+            conversation.updatedAt = Date()
+        }
+    }
+
+    private func mutateConversation(
+        id: UUID,
+        operation: String,
+        mutation: (NSManagedObjectContext, CDConversation) -> Void
+    ) -> Result<Void, PersistenceFailure> {
         let context = writerContext
-        context.performAndWait {
+        let injector = faultInjector
+        let result: Result<Void, PersistenceFailure> = context.performAndWait {
             let request = CDConversation.fetchRequest()
             request.predicate = NSPredicate(format: "id == %@", id as CVarArg)
             request.fetchLimit = 1
-
             do {
-                guard let conversation = try context.fetch(request).first,
-                      conversation.title == expectedCurrentTitle else {
-                    return
-                }
-                conversation.title = newTitle
-                conversation.updatedAt = Date()
-                saveContext(context, operation: "updateConversationTitleIfStill")
-            } catch {
-                logger.error("Failed to fetch conversation for conditional title update: \(error.localizedDescription, privacy: .public)")
-            }
-        }
-    }
-
-    /// Update conversation sampling config.
-    func updateConversationSampling(id: UUID, temperature: Double, topP: Double, topK: Int32) {
-        let context = writerContext
-        context.performAndWait {
-            let request = CDConversation.fetchRequest()
-            request.predicate = NSPredicate(format: "id == %@", id as CVarArg)
-            request.fetchLimit = 1
-
-            do {
-                if let conversation = try context.fetch(request).first {
-                    conversation.temperature = temperature
-                    conversation.topP = topP
-                    conversation.topK = topK
-                    conversation.updatedAt = Date()
-                    saveContext(context, operation: "updateConversationSampling")
+                guard let conversation = try context.fetch(request).first else { return .failure(.notFound()) }
+                mutation(context, conversation)
+                switch Self.saveContext(context, faultInjector: injector) {
+                case .success: return .success(())
+                case .failure(let failure): context.rollback(); return .failure(failure)
                 }
             } catch {
-                logger.error("Failed to fetch conversation for sampling update: \(error.localizedDescription, privacy: .public)")
+                context.rollback()
+                return .failure(.map(error, operation: .fetch))
             }
         }
-    }
-
-    /// Update conversation system prompt.
-    func updateConversationSystemPrompt(id: UUID, systemPrompt: String?) {
-        let context = writerContext
-        context.performAndWait {
-            let request = CDConversation.fetchRequest()
-            request.predicate = NSPredicate(format: "id == %@", id as CVarArg)
-            request.fetchLimit = 1
-
-            do {
-                if let conversation = try context.fetch(request).first {
-                    conversation.systemPrompt = systemPrompt
-                    conversation.updatedAt = Date()
-                    saveContext(context, operation: "updateConversationSystemPrompt")
-                }
-            } catch {
-                logger.error("Failed to fetch conversation for system prompt update: \(error.localizedDescription, privacy: .public)")
-            }
-        }
-    }
-
-    // MARK: - Message CRUD
-
-    /// Insert a complete message (user or system message — not streaming).
-    func insertMessage(
-        conversationID: UUID,
-        role: MessageRole,
-        content: String,
-        imageData: Data? = nil
-    ) -> UUID? {
-        let context = writerContext
-        var messageID: UUID?
-
-        context.performAndWait {
-            let request = CDConversation.fetchRequest()
-            request.predicate = NSPredicate(format: "id == %@", conversationID as CVarArg)
-            request.fetchLimit = 1
-
-            do {
-                guard let conversation = try context.fetch(request).first else {
-                    logger.error("Conversation not found: \(conversationID, privacy: .public)")
-                    return
-                }
-
-                let nextIndex = Int32(conversation.messageCount)
-                let message = CDChatMessage.create(
-                    in: context,
-                    conversation: conversation,
-                    role: role,
-                    content: content,
-                    imageData: imageData,
-                    sequenceIndex: nextIndex
-                )
-                messageID = message.id
-                saveContext(context, operation: "insertMessage")
-            } catch {
-                logger.error("Failed to fetch conversation for message insert: \(error.localizedDescription, privacy: .public)")
-            }
-        }
-
-        return messageID
-    }
-
-    // MARK: - Streaming Support
-
-    /// Begin a streaming assistant message. Returns the message ID.
-    /// The message starts with `isStreaming = true` and empty content.
-    func beginStreamingMessage(conversationID: UUID) -> UUID? {
-        let context = writerContext
-        var messageID: UUID?
-
-        context.performAndWait {
-            let request = CDConversation.fetchRequest()
-            request.predicate = NSPredicate(format: "id == %@", conversationID as CVarArg)
-            request.fetchLimit = 1
-
-            do {
-                guard let conversation = try context.fetch(request).first else {
-                    logger.error("Conversation not found for streaming: \(conversationID, privacy: .public)")
-                    return
-                }
-
-                let nextIndex = Int32(conversation.messageCount)
-                let message = CDChatMessage.create(
-                    in: context,
-                    conversation: conversation,
-                    role: .assistant,
-                    content: "",
-                    sequenceIndex: nextIndex,
-                    isStreaming: true
-                )
-                messageID = message.id
-
-                // Initialize buffer for this message.
-                if let id = messageID {
-                    tokenBuffer[id] = ""
-                    bufferFlushCount[id] = 0
-                    lastFlushTime[id] = currentTimeMs()
-                }
-
-                saveContext(context, operation: "beginStreamingMessage")
-            } catch {
-                logger.error("Failed to begin streaming message: \(error.localizedDescription, privacy: .public)")
-            }
-        }
-
-        return messageID
-    }
-
-    /// Buffer tokens during streaming. Flushes to Core Data periodically.
-    /// This is called on every token — must be fast.
-    func bufferTokens(messageID: UUID, tokens: String) {
-        // Accumulate in buffer.
-        tokenBuffer[messageID, default: ""] += tokens
-        bufferFlushCount[messageID, default: 0] += 1
-
-        let count = bufferFlushCount[messageID] ?? 0
-        let lastFlush = lastFlushTime[messageID] ?? 0
-        let now = currentTimeMs()
-        let elapsed = now - lastFlush
-
-        // Flush if we hit the token count threshold or the time threshold.
-        if count >= flushTokenCount || elapsed >= flushIntervalMs {
-            flushBuffer(messageID: messageID)
-        }
-    }
-
-    /// Finalize a streaming message by appending buffered tokens and clearing
-    /// `isStreaming` in a single save.
-    func endStreamingMessage(messageID: UUID) {
-        let buffered = tokenBuffer[messageID] ?? ""
-        let context = writerContext
-        var didSave = false
-
-        context.performAndWait {
-            let request = CDChatMessage.fetchRequest()
-            request.predicate = NSPredicate(format: "id == %@", messageID as CVarArg)
-            request.fetchLimit = 1
-
-            do {
-                if let message = try context.fetch(request).first {
-                    message.appendTokens(buffered)
-                    message.isStreaming = false
-                    didSave = saveContext(context, operation: "endStreamingMessage")
-                    if !didSave {
-                        context.rollback()
-                    }
-                }
-            } catch {
-                logger.error("Failed to end streaming message: \(error.localizedDescription, privacy: .public)")
-            }
-        }
-
-        if didSave {
-            clearBufferState(messageID: messageID)
-        }
-    }
-
-    /// Cancel a streaming message by appending buffered tokens and marking it
-    /// cancelled in a single save.
-    func cancelStreamingMessage(messageID: UUID) {
-        let buffered = tokenBuffer[messageID] ?? ""
-        let context = writerContext
-        var didSave = false
-
-        context.performAndWait {
-            let request = CDChatMessage.fetchRequest()
-            request.predicate = NSPredicate(format: "id == %@", messageID as CVarArg)
-            request.fetchLimit = 1
-
-            do {
-                if let message = try context.fetch(request).first {
-                    message.appendTokens(buffered)
-                    message.isStreaming = false
-                    let current = message.content ?? ""
-                    message.content = current + "\n\n_[Generation cancelled]_"
-                    didSave = saveContext(context, operation: "cancelStreamingMessage")
-                    if !didSave {
-                        context.rollback()
-                    }
-                }
-            } catch {
-                logger.error("Failed to cancel streaming message: \(error.localizedDescription, privacy: .public)")
-            }
-        }
-
-        if didSave {
-            clearBufferState(messageID: messageID)
-        }
-    }
-
-    /// Persist all buffered streaming tokens before the app is suspended.
-    func flushPendingWrites() {
-        for messageID in Array(tokenBuffer.keys) {
-            flushBuffer(messageID: messageID)
-        }
-    }
-
-    /// Flush the token buffer for a specific message to Core Data.
-    private func flushBuffer(messageID: UUID) {
-        guard let buffered = tokenBuffer[messageID], !buffered.isEmpty else { return }
-
-        let context = writerContext
-        var didSave = false
-        context.performAndWait {
-            let request = CDChatMessage.fetchRequest()
-            request.predicate = NSPredicate(format: "id == %@", messageID as CVarArg)
-            request.fetchLimit = 1
-
-            do {
-                if let message = try context.fetch(request).first {
-                    message.appendTokens(buffered)
-                    didSave = saveContext(context, operation: "flushBuffer")
-                    if !didSave {
-                        context.rollback()
-                    }
-                }
-            } catch {
-                logger.error("Failed to flush token buffer: \(error.localizedDescription, privacy: .public)")
-            }
-        }
-
-        if didSave {
-            tokenBuffer[messageID] = ""
-            bufferFlushCount[messageID] = 0
-            lastFlushTime[messageID] = currentTimeMs()
-        }
+        logFailure(result, operation: operation)
+        return result
     }
 
 }
 
 extension PersistenceController {
+    // MARK: - Message CRUD
+
+    func insertMessage(
+        conversationID: UUID,
+        role: MessageRole,
+        content: String,
+        imageData: Data? = nil,
+        attachments: [Data]? = nil
+    ) -> UUID? {
+        try? insertMessageResult(
+            conversationID: conversationID,
+            role: role,
+            content: content,
+            imageData: imageData,
+            attachments: attachments
+        ).get()
+    }
+
+    func insertMessageResult(
+        conversationID: UUID,
+        role: MessageRole,
+        content: String,
+        imageData: Data? = nil,
+        attachments: [Data]? = nil
+    ) -> Result<UUID, PersistenceMutationError> {
+        let context = writerContext
+        let injector = faultInjector
+        let result: Result<UUID, PersistenceFailure> = context.performAndWait {
+            let request = CDConversation.fetchRequest()
+            request.predicate = NSPredicate(format: "id == %@", conversationID as CVarArg)
+            request.fetchLimit = 1
+            do {
+                guard let conversation = try context.fetch(request).first else { return .failure(.notFound()) }
+                let message = CDChatMessage.create(
+                    in: context,
+                    conversation: conversation,
+                    role: role,
+                    content: content,
+                    imageData: attachments.map(MessageAttachmentCodec.encode) ?? imageData,
+                    sequenceIndex: Int32(conversation.messageCount)
+                )
+                guard let id = message.id else { context.rollback(); return .failure(.notFound(operation: .save)) }
+                switch Self.saveContext(context, faultInjector: injector) {
+                case .success: return .success(id)
+                case .failure(let failure): context.rollback(); return .failure(failure)
+                }
+            } catch {
+                context.rollback()
+                return .failure(.map(error, operation: .fetch))
+            }
+        }
+        logFailure(result, operation: "insertMessage")
+        return result
+    }
+
+    // MARK: - Streaming Support
+
+    func beginStreamingMessage(conversationID: UUID) -> UUID? {
+        try? beginStreamingMessageResult(conversationID: conversationID).get()
+    }
+
+    func beginStreamingMessageResult(conversationID: UUID) -> Result<UUID, PersistenceFailure> {
+        guard recoveryJournal == nil, tokenBuffer.isEmpty else { return .failure(.recoveryBufferFull) }
+        let context = writerContext
+        let injector = faultInjector
+        let createdAt = Date()
+        let result: Result<UUID, PersistenceFailure> = context.performAndWait {
+            let request = CDConversation.fetchRequest()
+            request.predicate = NSPredicate(format: "id == %@", conversationID as CVarArg)
+            request.fetchLimit = 1
+            do {
+                guard let conversation = try context.fetch(request).first else { return .failure(.notFound()) }
+                let message = CDChatMessage.create(
+                    in: context,
+                    conversation: conversation,
+                    role: .assistant,
+                    content: "",
+                    sequenceIndex: Int32(conversation.messageCount),
+                    isStreaming: true
+                )
+                message.createdAt = createdAt
+                guard let id = message.id else { context.rollback(); return .failure(.notFound(operation: .save)) }
+                switch Self.saveContext(context, faultInjector: injector) {
+                case .success: return .success(id)
+                case .failure(let failure): context.rollback(); return .failure(failure)
+                }
+            } catch {
+                context.rollback()
+                return .failure(.map(error, operation: .fetch))
+            }
+        }
+        guard case .success(let messageID) = result else {
+            logFailure(result, operation: "beginStreamingMessage")
+            return result
+        }
+        let journal = RecoveryJournal(
+            messageID: messageID,
+            conversationID: conversationID,
+            createdAt: createdAt,
+            targetContent: "",
+            terminalState: .streaming
+        )
+        do {
+            try persistRecoveryJournal(journal)
+            recoveryJournal = journal
+            tokenBuffer[messageID] = ""
+            bufferFlushCount[messageID] = 0
+            lastFlushTime[messageID] = currentTimeMs()
+            return .success(messageID)
+        } catch {
+            // Compensate: the streaming row was saved but the journal is missing.
+            // Terminalize the row so the next stream can begin without a false recovery-buffer-full.
+            compensateStreamingBegin(messageID: messageID)
+            return .failure(.map(error, operation: .journalWrite))
+        }
+    }
+
+    /// Marks a freshly-created streaming row as interrupted when the recovery journal
+    /// could not be persisted. This prevents a durable streaming row with no
+    /// RecoveryHandle from blocking future streams.
+    private func compensateStreamingBegin(messageID: UUID) {
+        let context = writerContext
+        let injector = faultInjector
+        context.performAndWait {
+            let request = CDChatMessage.fetchRequest()
+            request.predicate = NSPredicate(format: "id == %@", messageID as CVarArg)
+            request.fetchLimit = 1
+            guard let message = try? context.fetch(request).first,
+                  message.isStreaming else { return }
+            message.isStreaming = false
+            message.content = "_[Generation was interrupted]_"
+            _ = Self.saveContext(context, faultInjector: injector)
+        }
+    }
+
+    /// Atomically journals the canonical target before acknowledging generated bytes.
+    @discardableResult
+    func bufferTokens(messageID: UUID, tokens: String) -> Result<Void, PersistenceMutationError> {
+        guard var journal = recoveryJournal, journal.messageID == messageID else { return .failure(.notFound()) }
+        let target = journal.targetContent + tokens
+        guard target.utf8.count <= maximumBufferedBytes else { return .failure(.recoveryBufferFull) }
+        journal = RecoveryJournal(
+            messageID: journal.messageID,
+            conversationID: journal.conversationID,
+            createdAt: journal.createdAt,
+            targetContent: target,
+            terminalState: .streaming
+        )
+        do {
+            try persistRecoveryJournal(journal)
+        } catch {
+            return .failure(.map(error, operation: .save))
+        }
+        recoveryJournal = journal
+        tokenBuffer[messageID] = target
+        bufferFlushCount[messageID, default: 0] += 1
+        let now = currentTimeMs()
+        let elapsed = now - (lastFlushTime[messageID] ?? 0)
+        if bufferFlushCount[messageID, default: 0] >= flushTokenCount || elapsed >= flushIntervalMs {
+            return flushBuffer(messageID: messageID)
+        }
+        return .success(())
+    }
+
+    @discardableResult
+    func endStreamingMessage(messageID: UUID) -> Result<Void, PersistenceMutationError> {
+        finalizeStreamingMessage(messageID: messageID, terminalState: .completed)
+    }
+
+    @discardableResult
+    func cancelStreamingMessage(messageID: UUID) -> Result<Void, PersistenceMutationError> {
+        finalizeStreamingMessage(messageID: messageID, terminalState: .cancelled)
+    }
+
+    private func finalizeStreamingMessage(
+        messageID: UUID,
+        terminalState: RecoveryJournal.TerminalState
+    ) -> Result<Void, PersistenceFailure> {
+        guard var journal = recoveryJournal, journal.messageID == messageID else {
+            return messageTerminalState(messageID: messageID)
+        }
+        var target = journal.targetContent
+        if terminalState == .cancelled {
+            let marker = "_[Generation cancelled]_"
+            if !target.contains(marker) { target = target.isEmpty ? marker : target + "\n\n" + marker }
+        }
+        journal = RecoveryJournal(
+            messageID: journal.messageID,
+            conversationID: journal.conversationID,
+            createdAt: journal.createdAt,
+            targetContent: target,
+            terminalState: terminalState
+        )
+        do { try persistRecoveryJournal(journal) } catch { return .failure(.map(error, operation: .save)) }
+        recoveryJournal = journal
+        tokenBuffer[messageID] = target
+        return applyRecoveryJournal(journal)
+    }
+
+    private func messageTerminalState(messageID: UUID) -> Result<Void, PersistenceFailure> {
+        let context = writerContext
+        return context.performAndWait {
+            let request = CDChatMessage.fetchRequest()
+            request.predicate = NSPredicate(format: "id == %@", messageID as CVarArg)
+            request.fetchLimit = 1
+            do {
+                guard let message = try context.fetch(request).first else { return .failure(.notFound()) }
+                return message.isStreaming ? .failure(.notFound(operation: .save)) : .success(())
+            } catch { return .failure(.map(error, operation: .fetch)) }
+        }
+    }
+
+    func recoveryHandle(messageID: UUID) -> RecoveryHandle? {
+        guard let journal = recoveryJournal, journal.messageID == messageID else { return nil }
+        return RecoveryHandle(
+            id: journal.messageID,
+            conversationID: journal.conversationID,
+            messageID: journal.messageID,
+            createdAt: journal.createdAt
+        )
+    }
+
+    func retryStreamingSave(_ handle: RecoveryHandle) -> Result<Void, PersistenceFailure> {
+        guard let journal = recoveryJournal, journal.messageID == handle.messageID else {
+            return messageTerminalState(messageID: handle.messageID)
+        }
+        if journal.terminalState == .streaming {
+            let finalized = RecoveryJournal(
+                messageID: journal.messageID,
+                conversationID: journal.conversationID,
+                createdAt: journal.createdAt,
+                targetContent: journal.targetContent,
+                terminalState: .completed
+            )
+            do { try persistRecoveryJournal(finalized) } catch { return .failure(.map(error, operation: .save)) }
+            recoveryJournal = finalized
+            tokenBuffer[finalized.messageID] = finalized.targetContent
+            return applyRecoveryJournal(finalized)
+        }
+        return applyRecoveryJournal(journal)
+    }
+
+    func exportPartialResponse(_ handle: RecoveryHandle) -> Result<Data, PersistenceFailure> {
+        do {
+            if let injected = faultInjector.fault(for: .export) { throw injected }
+            guard let journal = recoveryJournal, journal.messageID == handle.messageID else {
+                return .failure(.notFound(operation: .export))
+            }
+            let export = PartialResponseExport(
+                recoveryID: handle.id,
+                conversationID: handle.conversationID,
+                messageID: handle.messageID,
+                createdAt: handle.createdAt,
+                role: MessageRole.assistant.rawValue,
+                content: journal.targetContent,
+                terminalState: journal.terminalState.rawValue,
+                attachments: []
+            )
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            return .success(try encoder.encode(export))
+        } catch {
+            return .failure(.map(error, operation: .export))
+        }
+    }
+
+    func discardRecovery(_ handle: RecoveryHandle) -> Result<Void, PersistenceFailure> {
+        guard let journal = recoveryJournal, journal.messageID == handle.messageID else {
+            return .failure(.notFound(operation: .save))
+        }
+        let discarded = RecoveryJournal(
+            messageID: journal.messageID,
+            conversationID: journal.conversationID,
+            createdAt: journal.createdAt,
+            targetContent: "_[Partial response discarded]_",
+            terminalState: .cancelled
+        )
+        do { try persistRecoveryJournal(discarded) } catch { return .failure(.map(error, operation: .save)) }
+        recoveryJournal = discarded
+        tokenBuffer[handle.messageID] = discarded.targetContent
+        return applyRecoveryJournal(discarded)
+    }
+
+    func streamingRecoverySnapshot(messageID: UUID) -> Data? {
+        guard recoveryJournal?.messageID == messageID else { return nil }
+        return recoveryJournal?.targetContent.data(using: .utf8)
+    }
+
+    func flushPendingWrites() -> [UUID: PersistenceFailure] {
+        guard let messageID = recoveryJournal?.messageID else { return [:] }
+        if case .failure(let failure) = flushBuffer(messageID: messageID) { return [messageID: failure] }
+        return [:]
+    }
+
+    private func flushBuffer(messageID: UUID) -> Result<Void, PersistenceFailure> {
+        guard let journal = recoveryJournal, journal.messageID == messageID else { return .success(()) }
+        let context = writerContext
+        let injector = faultInjector
+        let result: Result<Void, PersistenceFailure> = context.performAndWait {
+            let request = CDChatMessage.fetchRequest()
+            request.predicate = NSPredicate(format: "id == %@", messageID as CVarArg)
+            request.fetchLimit = 1
+            do {
+                guard let message = try context.fetch(request).first else { return .failure(.notFound()) }
+                message.content = journal.targetContent
+                switch Self.saveContext(context, faultInjector: injector) {
+                case .success: return .success(())
+                case .failure(let failure): context.rollback(); return .failure(failure)
+                }
+            } catch {
+                context.rollback()
+                return .failure(.map(error, operation: .fetch))
+            }
+        }
+        if case .success = result {
+            bufferFlushCount[messageID] = 0
+            lastFlushTime[messageID] = currentTimeMs()
+        }
+        logFailure(result, operation: "flushBuffer")
+        return result
+    }
+
+    private func applyRecoveryJournal(_ journal: RecoveryJournal) -> Result<Void, PersistenceFailure> {
+        let context = writerContext
+        let injector = faultInjector
+        let result: Result<Void, PersistenceFailure> = context.performAndWait {
+            let request = CDChatMessage.fetchRequest()
+            request.predicate = NSPredicate(format: "id == %@", journal.messageID as CVarArg)
+            request.fetchLimit = 1
+            do {
+                guard let message = try context.fetch(request).first else { return .failure(.notFound()) }
+                message.content = journal.targetContent
+                message.isStreaming = journal.terminalState == .streaming
+                switch Self.saveContext(context, faultInjector: injector) {
+                case .success: return .success(())
+                case .failure(let failure): context.rollback(); return .failure(failure)
+                }
+            } catch {
+                context.rollback()
+                return .failure(.map(error, operation: .fetch))
+            }
+        }
+        if case .success = result, journal.terminalState != .streaming { clearRecoveryState(messageID: journal.messageID) }
+        logFailure(result, operation: "applyRecoveryJournal")
+        return result
+    }
+
+    @discardableResult
+    func restoreRecoveryJournal() -> Result<Void, PersistenceFailure> {
+        guard let url = recoveryJournalURL else { return .success(()) }
+        guard FileManager.default.fileExists(atPath: url.path) else { return .success(()) }
+
+        // Read the journal file.
+        let data: Data
+        do {
+            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+            let size = (attributes[.size] as? NSNumber)?.intValue ?? 0
+            guard size <= 1_048_576 else {
+                preserveCorruptJournal(at: url, reason: "oversized (\(size) bytes)")
+                return .success(())
+            }
+            if let injected = faultInjector.fault(for: .journalRestore) { throw injected }
+            data = try Data(contentsOf: url)
+        } catch let error as PersistenceFailure {
+            return .failure(error)
+        } catch {
+            return .failure(.map(error, operation: .journalRestore))
+        }
+
+        // Decode the journal.
+        let journal: RecoveryJournal
+        do {
+            journal = try JSONDecoder().decode(RecoveryJournal.self, from: data)
+        } catch {
+            preserveCorruptJournal(at: url, reason: "malformed JSON")
+            return .success(())
+        }
+
+        // Validate content size.
+        guard journal.targetContent.utf8.count <= maximumBufferedBytes else {
+            preserveCorruptJournal(at: url, reason: "target content exceeds maximum")
+            return .success(())
+        }
+
+        recoveryJournal = journal
+        tokenBuffer[journal.messageID] = journal.targetContent
+        bufferFlushCount[journal.messageID] = 0
+        lastFlushTime[journal.messageID] = currentTimeMs()
+        return .success(())
+    }
+
+    /// Rename a corrupt recovery journal so it is preserved for diagnostics
+    /// but does not block startup.
+    private func preserveCorruptJournal(at url: URL, reason: String) {
+        logger.warning("Preserving corrupt recovery journal (\(reason, privacy: .public))")
+        let preserved = url.appendingPathExtension("corrupt-\(Int(Date().timeIntervalSince1970))")
+        try? FileManager.default.moveItem(at: url, to: preserved)
+    }
+
+    private func persistRecoveryJournal(_ journal: RecoveryJournal) throws {
+        guard let url = recoveryJournalURL else { return }
+        if let injected = faultInjector.fault(for: .journalWrite) { throw injected }
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        try encoder.encode(journal).write(to: url, options: [.atomic])
+    }
+
+    private func clearRecoveryState(messageID: UUID) {
+        tokenBuffer.removeValue(forKey: messageID)
+        bufferFlushCount.removeValue(forKey: messageID)
+        lastFlushTime.removeValue(forKey: messageID)
+        recoveryJournal = nil
+        if let recoveryJournalURL {
+            if faultInjector.fault(for: .journalRemove) == nil {
+                try? FileManager.default.removeItem(at: recoveryJournalURL)
+            }
+        }
+    }
+}
+
+
+extension PersistenceController {
     // MARK: - Fetch Helpers
 
-    /// Fetch all conversations, sorted by most recently updated.
+    /// Compatibility read for non-UI tests. User-visible code uses the typed result below.
     func fetchConversations() -> [ConversationPayload] {
+        (try? fetchConversationsResult().get()) ?? []
+    }
+
+    func fetchConversationsResult() -> Result<[ConversationPayload], PersistenceFailure> {
         let context = viewContext
-        var results: [ConversationPayload] = []
+        var result: Result<[ConversationPayload], PersistenceFailure> = .success([])
         context.performAndWait {
             let request = CDConversation.fetchRequest()
             request.sortDescriptors = [NSSortDescriptor(key: "updatedAt", ascending: false)]
             do {
+                if let injected = faultInjector.fault(for: .fetch) { throw injected }
                 let objects = try context.fetch(request)
-                results = objects.map { conversation in
-                    ConversationPayload(
-                        id: conversation.id ?? UUID(),
-                        title: conversation.title ?? "Untitled",
-                        modelID: conversation.modelID ?? "",
-                        updatedAt: conversation.updatedAt,
-                        createdAt: conversation.createdAt,
-                        messageCount: conversation.messageCount,
-                        isBranch: conversation.isBranch
-                    )
+                var payloads: [ConversationPayload] = []
+                for conversation in objects {
+                    guard let id = conversation.id, let title = conversation.title, let modelID = conversation.modelID else {
+                        result = .failure(PersistenceFailure(category: .corruptData, operation: .fetch, domain: "ZiroEdge.Persistence", code: 422))
+                        return
+                    }
+                    payloads.append(ConversationPayload(
+                        id: id, title: title, modelID: modelID,
+                        updatedAt: conversation.updatedAt, createdAt: conversation.createdAt,
+                        systemPrompt: conversation.systemPrompt, temperature: conversation.temperature,
+                        topP: conversation.topP, topK: conversation.topK,
+                        messageCount: conversation.messageCount, isBranch: conversation.isBranch,
+                        parentBranchID: conversation.parentBranchID,
+                        branchPointMessageID: conversation.branchPointMessageID
+                    ))
                 }
+                result = .success(payloads)
             } catch {
-                logger.error("Failed to fetch conversations: \(error.localizedDescription, privacy: .public)")
+                result = .failure(.map(error, operation: .fetch))
             }
         }
-        return results
+        return result
     }
 
-    /// Fetch messages for a conversation, sorted by sequence index.
+    /// Compatibility read for non-UI tests. User-visible code uses the typed result below.
     func fetchMessages(conversationID: UUID) -> [ChatMessagePayload] {
+        (try? fetchMessagesResult(conversationID: conversationID).get()) ?? []
+    }
+
+    func fetchMessagesResult(conversationID: UUID) -> Result<[ChatMessagePayload], PersistenceFailure> {
         let context = viewContext
-        var results: [ChatMessagePayload] = []
+        var result: Result<[ChatMessagePayload], PersistenceFailure> = .success([])
         context.performAndWait {
             let request = CDChatMessage.fetchRequest()
             request.predicate = NSPredicate(format: "conversation.id == %@", conversationID as CVarArg)
             request.sortDescriptors = [NSSortDescriptor(key: "sequenceIndex", ascending: true)]
             do {
+                if let injected = faultInjector.fault(for: .fetch) { throw injected }
                 let objects = try context.fetch(request)
-                results = objects.map { message in
-                    ChatMessagePayload(
-                        id: message.id ?? UUID(),
-                        role: message.messageRole,
-                        content: message.content ?? "",
-                        imageData: message.imageData,
-                        sequenceIndex: message.sequenceIndex,
-                        isStreaming: message.isStreaming,
+                var payloads: [ChatMessagePayload] = []
+                for message in objects {
+                    guard let id = message.id, let role = message.validatedMessageRole else {
+                        result = .failure(PersistenceFailure(category: .corruptData, operation: .fetch, domain: "ZiroEdge.Persistence", code: 422))
+                        return
+                    }
+                    payloads.append(ChatMessagePayload(
+                        id: id, role: role, content: message.content ?? "",
+                        attachments: MessageAttachmentCodec.decode(message.imageData),
+                        sequenceIndex: message.sequenceIndex, isStreaming: message.isStreaming,
                         createdAt: message.createdAt
-                    )
+                    ))
                 }
+                result = .success(payloads)
             } catch {
-                logger.error("Failed to fetch messages: \(error.localizedDescription, privacy: .public)")
+                result = .failure(.map(error, operation: .fetch))
             }
         }
-        return results
+        return result
     }
 
-    /// Recover any messages left in streaming state (e.g. after a crash).
-    /// Called on app launch.
-    func recoverIncompleteStreams() {
+    /// Replays the durable journal idempotently, then marks any legacy incomplete rows interrupted.
+    @discardableResult
+    func recoverIncompleteStreams() -> Result<Void, PersistenceFailure> {
+        if let journal = recoveryJournal {
+            let replay: RecoveryJournal
+            if journal.terminalState == .streaming {
+                let marker = journal.targetContent.isEmpty
+                    ? "_[Generation was interrupted]_"
+                    : journal.targetContent + "\n\n_[Interrupted — app was closed]_"
+                replay = RecoveryJournal(
+                    messageID: journal.messageID,
+                    conversationID: journal.conversationID,
+                    createdAt: journal.createdAt,
+                    targetContent: marker,
+                    terminalState: .completed
+                )
+                do { try persistRecoveryJournal(replay) } catch { return .failure(.map(error, operation: .save)) }
+                recoveryJournal = replay
+                tokenBuffer[replay.messageID] = replay.targetContent
+            } else {
+                replay = journal
+            }
+            if case .failure(let failure) = applyRecoveryJournal(replay) { return .failure(failure) }
+        }
+
         let context = writerContext
-        context.performAndWait {
+        let injector = faultInjector
+        let result: Result<Void, PersistenceFailure> = context.performAndWait {
             let request = CDChatMessage.fetchRequest()
             request.predicate = NSPredicate(format: "isStreaming == YES")
-
             do {
                 let incomplete = try context.fetch(request)
                 for message in incomplete {
                     message.isStreaming = false
                     let current = message.content ?? ""
-                    if !current.isEmpty {
-                        message.content = current + "\n\n_[Interrupted — app was closed]_"
-                    } else {
-                        message.content = "_[Generation was interrupted]_"
-                    }
-                    let messageID = message.id?.uuidString ?? "unknown"
-                    logger.info("Recovered incomplete message: \(messageID, privacy: .public)")
+                    message.content = current.isEmpty
+                        ? "_[Generation was interrupted]_"
+                        : current + "\n\n_[Interrupted — app was closed]_"
                 }
-                if !incomplete.isEmpty {
-                    saveContext(context, operation: "recoverIncompleteStreams")
+                switch Self.saveContext(context, faultInjector: injector) {
+                case .success: return .success(())
+                case .failure(let failure): context.rollback(); return .failure(failure)
                 }
             } catch {
-                logger.error("Failed to recover incomplete streams: \(error.localizedDescription, privacy: .public)")
+                context.rollback()
+                return .failure(.map(error, operation: .fetch))
             }
         }
-    }
-
-    /// Delete conversations that have zero messages (stale "New Conversation" entries).
-    /// Called on app launch to clean up abandoned conversations.
-    func purgeEmptyConversations() {
-        let context = writerContext
-        context.performAndWait {
-            let request = CDConversation.fetchRequest()
-            request.predicate = NSPredicate(format: "messages.@count == 0")
-
-            do {
-                let empties = try context.fetch(request)
-                if empties.isEmpty { return }
-
-                for conversation in empties {
-                    context.delete(conversation)
-                    let conversationID = conversation.id?.uuidString ?? "unknown"
-                    logger.info("Purged empty conversation: \(conversationID, privacy: .public)")
-                }
-                saveContext(context, operation: "purgeEmptyConversations")
-                logger.info("Purged \(empties.count, privacy: .public) empty conversation(s)")
-            } catch {
-                logger.error("Failed to purge empty conversations: \(error.localizedDescription, privacy: .public)")
-            }
-        }
+        logFailure(result, operation: "recoverIncompleteStreams")
+        return result
     }
 
     // MARK: - Stress Test Support
@@ -554,6 +871,7 @@ extension PersistenceController {
     /// Generate test data for the 5,000-message stress test.
     func generateStressTestData(conversationCount: Int = 10, messagesPerConversation: Int = 500) {
         let context = writerContext
+        let injector = faultInjector
         context.performAndWait {
             for convIndex in 0..<conversationCount {
                 let conversation = CDConversation.create(
@@ -576,64 +894,66 @@ extension PersistenceController {
                 }
 
                 // Save every conversation to avoid massive context.
-                saveContext(context, operation: "stressTestConversation\(convIndex)")
+                _ = Self.saveContext(context, faultInjector: injector)
             }
         }
     }
 
     // MARK: - Branching
 
-    /// Branch a conversation from a specific message. Creates a new conversation
-    /// with all messages up to (and including) the branch point.
     func branchConversation(sourceID: UUID, fromMessageID: UUID, newTitle: String) -> UUID? {
-        let context = writerContext
-        var newConversationID: UUID?
+        try? branchConversationResult(sourceID: sourceID, fromMessageID: fromMessageID, newTitle: newTitle).get()
+    }
 
-        context.performAndWait {
+    func branchConversationResult(
+        sourceID: UUID,
+        fromMessageID: UUID,
+        newTitle: String
+    ) -> Result<UUID, PersistenceFailure> {
+        let context = writerContext
+        let injector = faultInjector
+        let result: Result<UUID, PersistenceFailure> = context.performAndWait {
             let request = CDConversation.fetchRequest()
             request.predicate = NSPredicate(format: "id == %@", sourceID as CVarArg)
             request.fetchLimit = 1
-
             do {
-                guard let source = try context.fetch(request).first else { return }
-
-                // Find the branch point message index.
-                let sourceMessages = source.sortedMessages
-                guard let branchIndex = sourceMessages.firstIndex(where: { $0.id == fromMessageID }) else { return }
-
-                // Create new conversation.
-                let newConversation = CDConversation.create(
+                guard let source = try context.fetch(request).first,
+                      let branchIndex = source.sortedMessages.firstIndex(where: { $0.id == fromMessageID }) else {
+                    return .failure(.notFound())
+                }
+                let conversation = CDConversation.create(
                     in: context,
                     title: newTitle,
                     modelID: source.modelID ?? "llama3.2-3b-q4",
                     systemPrompt: source.systemPrompt
                 )
-                newConversation.parentBranchID = sourceID
-                newConversation.branchPointMessageID = fromMessageID
-                newConversation.temperature = source.temperature
-                newConversation.topP = source.topP
-                newConversation.topK = source.topK
-                newConversationID = newConversation.id
-
-                // Copy messages up to branch point.
-                for (index, message) in sourceMessages[...branchIndex].enumerated() {
+                conversation.parentBranchID = sourceID
+                conversation.branchPointMessageID = fromMessageID
+                conversation.temperature = source.temperature
+                conversation.topP = source.topP
+                conversation.topK = source.topK
+                guard let id = conversation.id else { context.rollback(); return .failure(.notFound(operation: .save)) }
+                for (index, message) in source.sortedMessages[...branchIndex].enumerated() {
                     CDChatMessage.create(
                         in: context,
-                        conversation: newConversation,
+                        conversation: conversation,
                         role: message.messageRole,
                         content: message.content ?? "",
                         imageData: message.imageData,
                         sequenceIndex: Int32(index)
                     )
                 }
-
-                saveContext(context, operation: "branchConversation")
+                switch Self.saveContext(context, faultInjector: injector) {
+                case .success: return .success(id)
+                case .failure(let failure): context.rollback(); return .failure(failure)
+                }
             } catch {
-                logger.error("Failed to branch conversation: \(error.localizedDescription, privacy: .public)")
+                context.rollback()
+                return .failure(.map(error, operation: .fetch))
             }
         }
-
-        return newConversationID
+        logFailure(result, operation: "branchConversation")
+        return result
     }
 
     // MARK: - Programmatic Model Creation
@@ -733,34 +1053,26 @@ extension PersistenceController {
 
     // MARK: - Helpers
 
-    @discardableResult
-    private func saveContext(_ context: NSManagedObjectContext, operation: String) -> Bool {
-        guard context.hasChanges else { return true }
+    private nonisolated static func saveContext(
+        _ context: NSManagedObjectContext,
+        faultInjector: any PersistenceFaultInjecting
+    ) -> Result<Void, PersistenceFailure> {
+        guard context.hasChanges else { return .success(()) }
         do {
+            if let injected = faultInjector.fault(for: .save) { throw injected }
             try context.save()
-            return true
+            return .success(())
         } catch {
-            let description = error.localizedDescription
-            logger.error("Core Data save failed (\(operation, privacy: .public)): \(description, privacy: .public)")
-            return false
+            return .failure(.map(error, operation: .save))
         }
     }
 
-    private func clearBufferState(messageID: UUID) {
-        tokenBuffer.removeValue(forKey: messageID)
-        bufferFlushCount.removeValue(forKey: messageID)
-        lastFlushTime.removeValue(forKey: messageID)
+    private func logFailure<T>(_ result: Result<T, PersistenceFailure>, operation: String) {
+        guard case .failure(let failure) = result else { return }
+        logger.error("Core Data operation failed (\(operation, privacy: .public)): \(failure.sanitizedDiagnostic, privacy: .public)")
     }
 
     private func currentTimeMs() -> UInt64 {
         UInt64(Date().timeIntervalSince1970 * 1000)
     }
-}
-
-// MARK: - Shared Instance
-
-extension PersistenceController {
-    /// Shared instance for the app. Use `PersistenceController(inMemory: true)` for previews/tests.
-    @MainActor
-    static let shared = PersistenceController()
 }

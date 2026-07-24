@@ -15,7 +15,7 @@ import os
 /// interact with the model through this protocol. No llama types leak.
 protocol InferenceServiceProtocol: Sendable {
     func loadModel(_ model: AIModel, baseURL: URL, mmprojURL: URL?) async throws
-    func unloadModel()
+    func unloadModel() async
     var isModelLoaded: Bool { get async }
     var loadedModelID: String? { get async }
 
@@ -39,7 +39,7 @@ protocol InferenceServiceProtocol: Sendable {
 
 /// Production implementation of InferenceServiceProtocol.
 /// Manages the lifecycle of the underlying LlamaEngine.
-actor InferenceService {
+actor InferenceService: InferenceServiceProtocol {
 
     private let logger = Logger(subsystem: "com.zanish-labs.ziroedge", category: "inference")
 
@@ -124,8 +124,10 @@ actor InferenceService {
         logger.info("Model loaded successfully: \(model.id, privacy: .public)")
     }
 
-    func unloadModel() {
+    func unloadModel() async {
         unloadInternal()
+        await pendingUnload?.value
+        pendingUnload = nil
     }
 
     private func unloadInternal() {

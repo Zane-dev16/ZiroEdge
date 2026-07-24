@@ -12,7 +12,7 @@ protocol ModelDownloadStatusProvider: AnyObject {
     func status(for model: AIModel) -> ModelDownloadStatus
 }
 
-extension DownloadManager: ModelDownloadStatusProvider {}
+extension DownloadManager: @preconcurrency ModelDownloadStatusProvider {}
 
 @MainActor
 final class ChatViewModel: ObservableObject {
@@ -25,6 +25,8 @@ final class ChatViewModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var showError: Bool = false
     @Published var streamingText: String = ""
+    @Published private(set) var hasPersistenceRecovery = false
+    @Published private(set) var recoveryExportURL: URL?
 
     // MARK: - Chat UX State
 
@@ -45,8 +47,8 @@ final class ChatViewModel: ObservableObject {
     /// Warning message when context window auto-truncates old messages.
     @Published var truncationWarning: String?
 
-    /// Cancellation guard: prevents onComplete from firing after cancelStream.
-    private var streamCancelled = false
+    /// Identity of the generation allowed to mutate streaming UI.
+    private var activeGenerationID: UUID?
 
     // MARK: - Model Selection
 
@@ -150,20 +152,34 @@ final class ChatViewModel: ObservableObject {
         loadGeneration += 1
         let myGeneration = loadGeneration
 
-        let fetched = await persistence.fetchMessages(conversationID: conversationID)
+        let result = await persistence.fetchMessagesResult(conversationID: conversationID)
         guard loadGeneration == myGeneration else { return }
 
-        messages = fetched
+        switch result {
+        case .success(let fetched):
+            messages = fetched
+            errorMessage = nil
+        case .failure(let failure):
+            // Keep the previous transcript visible; an unavailable store is not an empty chat.
+            errorMessage = failure.localizedDescription
+        }
         truncationWarning = nil
         // Token count reset happens via resetTokenCount() when appropriate
     }
 
-    func createNewConversation(modelID: String? = nil) async -> UUID {
+    func createNewConversation(modelID: String? = nil) async -> UUID? {
         let resolvedModelID = modelID ?? selectedModel?.id ?? ModelRegistry.llama32_3B.id
-        let id = await persistence.createConversation(
+        let result = await persistence.createConversationResult(
             title: "New Conversation",
             modelID: resolvedModelID
         )
+        guard case .success(let id) = result else {
+            if case .failure(let error) = result {
+                errorMessage = error.localizedDescription
+                showError = true
+            }
+            return nil
+        }
         await loadConversation(id)
         return id
     }
@@ -213,40 +229,53 @@ final class ChatViewModel: ObservableObject {
         let firstUserMessage = text
         let imagesToSend = hasImages ? pendingImages : []
 
-        guard await persistence.insertMessage(
-            conversationID: conversationID, role: .user, content: text,
-            imageData: hasImages ? pendingImages.first : nil
-        ) != nil else {
-            errorMessage = "Failed to save message."; showError = true; return
+        let insertResult = await persistence.insertMessageResult(
+            conversationID: conversationID,
+            role: .user,
+            content: text,
+            attachments: imagesToSend
+        )
+        if case .failure(let error) = insertResult {
+            inputText = text
+            errorMessage = error.localizedDescription
+            showError = true
+            return
         }
 
-        messages.append(ChatMessagePayload(role: .user, content: text, imageData: hasImages ? pendingImages.first : nil))
-        let history = messages.map { ChatMessagePayload(role: $0.role, content: $0.content, imageData: $0.imageData) }
+        messages.append(ChatMessagePayload(role: .user, content: text, attachments: imagesToSend))
+        let history = messages.map {
+            ChatMessagePayload(role: $0.role, content: $0.content, attachments: $0.attachments)
+        }
 
         isStreaming = true; streamingText = ""; errorMessage = nil; visionWarning = nil
-        streamCancelled = false
+        let generationID = UUID()
+        activeGenerationID = generationID
 
         await startStreaming(
+            generationID: generationID,
             conversationID: conversationID, history: history, images: imagesToSend,
             hasImages: hasImages, isFirstExchange: isFirstExchange,
-            firstUserMessage: firstUserMessage, streamCancelled: &streamCancelled
+            firstUserMessage: firstUserMessage
         )
         clearImages()
     }
 
     private func startStreaming(
+        generationID: UUID,
         conversationID: UUID, history: [ChatMessagePayload], images: [Data],
-        hasImages: Bool, isFirstExchange: Bool, firstUserMessage: String,
-        streamCancelled: Bool
+        hasImages: Bool, isFirstExchange: Bool, firstUserMessage: String
     ) async {
         let onToken: @Sendable (String) -> Void = { [weak self] token in
             Task { @MainActor [weak self] in
-                self?.streamingText += token; self?.tokenCount += 1
+                guard let self, self.activeGenerationID == generationID else { return }
+                self.streamingText += token
+                self.tokenCount += 1
             }
         }
         let onComplete: @Sendable () -> Void = { [weak self] in
             Task { @MainActor [weak self] in
-                guard let self, !streamCancelled else { return }
+                guard let self, self.activeGenerationID == generationID else { return }
+                self.activeGenerationID = nil
                 self.isStreaming = false
                 let trimmed = self.streamingText.trimmingCharacters(in: .newlines)
                 if !trimmed.isEmpty {
@@ -263,10 +292,13 @@ final class ChatViewModel: ObservableObject {
         }
         let onError: @Sendable (Error) -> Void = { [weak self] error in
             Task { @MainActor [weak self] in
-                guard let self else { return }
-                self.isStreaming = false; self.streamingText = ""
+                guard let self, self.activeGenerationID == generationID else { return }
+                self.activeGenerationID = nil
+                self.isStreaming = false
+                self.hasPersistenceRecovery = await self.sessionActor.recoveryHandle != nil
+                if !self.hasPersistenceRecovery { self.streamingText = "" }
                 self.errorMessage = error.localizedDescription; self.showError = true
-                await self.loadConversation(conversationID)
+                if !self.hasPersistenceRecovery { await self.loadConversation(conversationID) }
             }
         }
 
@@ -286,26 +318,80 @@ final class ChatViewModel: ObservableObject {
     }
 
     func cancelStream() async {
-        streamCancelled = true
+        activeGenerationID = nil
         await sessionActor.cancel()
         isStreaming = false
-        streamingText = ""
-        if let conversationID = activeConversationID {
-            await loadConversation(conversationID)
+        hasPersistenceRecovery = await sessionActor.recoveryHandle != nil
+        if !hasPersistenceRecovery {
+            streamingText = ""
+            if let conversationID = activeConversationID { await loadConversation(conversationID) }
         }
+    }
+
+    func retryPersistenceRecovery() async {
+        switch await sessionActor.retryRecoverySave() {
+        case .success:
+            hasPersistenceRecovery = false
+            streamingText = ""
+            errorMessage = nil
+            showError = false
+            if let activeConversationID { await loadConversation(activeConversationID) }
+        case .failure(let failure):
+            errorMessage = failure.localizedDescription
+            showError = true
+        }
+    }
+
+    func exportPersistenceRecovery() async {
+        switch await sessionActor.exportRecovery() {
+        case .success(let data):
+            do {
+                let url = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("ZiroEdge-partial-response-\(UUID().uuidString).json")
+                try data.write(to: url, options: .atomic)
+                recoveryExportURL = url
+            } catch {
+                errorMessage = PersistenceFailure.map(error, operation: .export).localizedDescription
+                showError = true
+            }
+        case .failure(let failure):
+            errorMessage = failure.localizedDescription
+            showError = true
+        }
+    }
+
+    func discardPersistenceRecovery() async {
+        switch await sessionActor.discardRecovery() {
+        case .success:
+            hasPersistenceRecovery = false
+            streamingText = ""
+            recoveryExportURL = nil
+            if let activeConversationID { await loadConversation(activeConversationID) }
+        case .failure(let failure):
+            errorMessage = failure.localizedDescription
+            showError = true
+        }
+    }
+
+    func presentBackgroundPersistenceFailure(_ failure: PersistenceFailure) {
+        errorMessage = failure.localizedDescription
+        showError = true
     }
 
     // MARK: - Branching
 
     func branchFromMessage(_ messageID: UUID) async {
         guard let sourceID = activeConversationID else { return }
-        let newID = await persistence.branchConversation(
+        switch await persistence.branchConversationResult(
             sourceID: sourceID,
             fromMessageID: messageID,
             newTitle: "Branched Conversation"
-        )
-        if let newID {
+        ) {
+        case .success(let newID):
             await loadConversation(newID)
+        case .failure(let failure):
+            errorMessage = failure.localizedDescription
+            showError = true
         }
     }
 
@@ -325,14 +411,18 @@ final class ChatViewModel: ObservableObject {
         )
 
         // Update only if the user has not renamed the conversation while the title was generated.
-        await persistence.updateConversationTitleIfStill(
+        switch await persistence.updateConversationTitleIfStill(
             id: conversationID,
             newTitle: title,
             expectedCurrentTitle: "New Conversation"
-        )
-
-        // Reload sidebar.
-        await conversationListViewModel?.loadConversations()
+        ) {
+        case .success:
+            await conversationListViewModel?.loadConversations()
+        case .failure(let failure):
+            errorMessage = failure.localizedDescription
+            showError = true
+            return
+        }
 
         logger.info("Title updated to: \(title, privacy: .public)")
     }
@@ -362,6 +452,9 @@ final class ChatViewModel: ObservableObject {
         UIPasteboard.general.string = message.content
     }
 
+}
+
+extension ChatViewModel {
     // MARK: - Image Attachment
 
     /// Maximum image dimension (width or height) in pixels.

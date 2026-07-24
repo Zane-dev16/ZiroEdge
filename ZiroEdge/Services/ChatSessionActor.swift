@@ -1,45 +1,34 @@
 // ChatSessionActor.swift
 // ZiroEdge — Privacy-first local AI assistant
 //
-// Manages a single inference session. Actor-isolated for thread safety.
-// Handles token streaming, cooperative cancellation, and Core Data batch flushing.
+// Manages one inference session with generation-scoped, awaited cancellation.
 
 import Foundation
 import os
 
 actor ChatSessionActor {
 
-    // MARK: - Properties
+    private enum StreamKind {
+        case text
+        case vision([Data])
+    }
 
     private let logger = Logger(subsystem: "com.zanish-labs.ziroedge", category: "chat-session")
-    private let inferenceService: InferenceService
+    private let inferenceService: any InferenceServiceProtocol
     private let persistence: PersistenceController
 
-    /// Current streaming task.
     private var currentStream: Task<Void, Never>?
-
-    /// Cancellation flag.
-    private var isCancelled = false
-
-    /// Whether a stream is active.
-    private(set) var isStreaming = false
-
-    /// The message ID being streamed into.
+    private var activeGenerationID: UUID?
     private var activeMessageID: UUID?
-
-    /// Token count for context window tracking.
+    private(set) var recoveryHandle: RecoveryHandle?
+    private(set) var isStreaming = false
     private var processedTokenCount = 0
 
-    // MARK: - Initialization
-
-    init(inferenceService: InferenceService, persistence: PersistenceController) {
+    init(inferenceService: any InferenceServiceProtocol, persistence: PersistenceController) {
         self.inferenceService = inferenceService
         self.persistence = persistence
     }
 
-    // MARK: - Stream Management
-
-    /// Start streaming a response. Cancels any in-progress stream.
     func startStream(
         conversationID: UUID,
         messages: [ChatMessagePayload],
@@ -48,106 +37,19 @@ actor ChatSessionActor {
         onToken: @Sendable @escaping (String) -> Void,
         onComplete: @Sendable @escaping () -> Void,
         onError: @Sendable @escaping (Error) -> Void
-    ) {
-        // Cancel existing stream.
-        cancelInternal()
-
-        isCancelled = false
-        isStreaming = true
-
-        // Begin streaming message in Core Data.
-        let infService = inferenceService
-        let persist = persistence
-        let selfRef = self
-
-        currentStream = Task { [weak self] in
-            guard let self else {
-                await MainActor.run { onComplete() }
-                return
-            }
-
-            // Create the streaming message.
-            let messageID = await persist.beginStreamingMessage(conversationID: conversationID)
-
-            guard let messageID else {
-                await MainActor.run { onError(ChatSessionError.persistenceFailure) }
-                await selfRef.setStreaming(false)
-                return
-            }
-
-            await selfRef.setActiveMessageID(messageID)
-
-            do {
-                let stream = try await infService.streamChat(
-                    messages: messages,
-                    systemPrompt: systemPrompt,
-                    sampling: sampling
-                )
-
-                var tokenBatch = ""
-                var lastBatchTime = Date()
-                let batchInterval: TimeInterval = 0.5
-
-                for try await token in stream {
-                    // Check cancellation.
-                    let cancelled = await selfRef.getIsCancelled()
-                    if Task.isCancelled || cancelled {
-                        await persist.cancelStreamingMessage(messageID: messageID)
-                        await MainActor.run { onComplete() }
-                        await selfRef.setStreaming(false)
-                        await selfRef.setActiveMessageID(nil)
-                        return
-                    }
-
-                    // Buffer token for persistence and batch UI updates.
-                    await persist.bufferTokens(messageID: messageID, tokens: token)
-                    tokenBatch += token
-
-                    let now = Date()
-                    if tokenBatch.count >= 20 || now.timeIntervalSince(lastBatchTime) >= batchInterval {
-                        let batch = tokenBatch
-                        tokenBatch = ""
-                        lastBatchTime = now
-                        await MainActor.run { onToken(batch) }
-                        await selfRef.incrementTokenCount()
-                    }
-                }
-
-                // Flush any remaining UI tokens.
-                if !tokenBatch.isEmpty {
-                    await MainActor.run { onToken(tokenBatch) }
-                }
-
-                // Stream completed.
-                await persist.endStreamingMessage(messageID: messageID)
-                await selfRef.setActiveMessageID(nil)
-                await selfRef.setStreaming(false)
-                await MainActor.run { onComplete() }
-
-            } catch {
-                let cancelled = await selfRef.getIsCancelled()
-                if Task.isCancelled || cancelled {
-                    await persist.cancelStreamingMessage(messageID: messageID)
-                    await MainActor.run { onComplete() }
-                } else {
-                    self.logger.error("Stream error: \(error.localizedDescription, privacy: .public)")
-                    await persist.cancelStreamingMessage(messageID: messageID)
-                    await MainActor.run { onError(error) }
-                }
-                await selfRef.setActiveMessageID(nil)
-                await selfRef.setStreaming(false)
-            }
-        }
+    ) async {
+        await start(
+            kind: .text,
+            conversationID: conversationID,
+            messages: messages,
+            systemPrompt: systemPrompt,
+            sampling: sampling,
+            onToken: onToken,
+            onComplete: onComplete,
+            onError: onError
+        )
     }
 
-    /// Cancel the current stream.
-    func cancel() {
-        cancelInternal()
-    }
-
-    // MARK: - Vision Stream
-
-    /// Start streaming a vision response with images. Cancels any in-progress stream.
     func startVisionStream(
         conversationID: UUID,
         messages: [ChatMessagePayload],
@@ -157,148 +59,209 @@ actor ChatSessionActor {
         onToken: @Sendable @escaping (String) -> Void,
         onComplete: @Sendable @escaping () -> Void,
         onError: @Sendable @escaping (Error) -> Void
-    ) {
-        // Cancel existing stream.
-        cancelInternal()
+    ) async {
+        await start(
+            kind: .vision(images),
+            conversationID: conversationID,
+            messages: messages,
+            systemPrompt: systemPrompt,
+            sampling: sampling,
+            onToken: onToken,
+            onComplete: onComplete,
+            onError: onError
+        )
+    }
 
-        isCancelled = false
+    private func start(
+        kind: StreamKind,
+        conversationID: UUID,
+        messages: [ChatMessagePayload],
+        systemPrompt: String?,
+        sampling: SamplingConfig,
+        onToken: @Sendable @escaping (String) -> Void,
+        onComplete: @Sendable @escaping () -> Void,
+        onError: @Sendable @escaping (Error) -> Void
+    ) async {
+        await cancelInternal()
+        guard recoveryHandle == nil else {
+            await MainActor.run { onError(PersistenceFailure.recoveryBufferFull) }
+            return
+        }
+
+        let generationID = UUID()
+        activeGenerationID = generationID
         isStreaming = true
-
-        let infService = inferenceService
-        let persist = persistence
-        let selfRef = self
-        let capturedImages = images
+        let inferenceService = self.inferenceService
+        let persistence = self.persistence
 
         currentStream = Task { [weak self] in
-            guard let self else {
-                await MainActor.run { onComplete() }
+            guard let self else { return }
+            let beginResult = await persistence.beginStreamingMessageResult(conversationID: conversationID)
+            guard case .success(let messageID) = beginResult else {
+                if await self.finishIfCurrent(generationID), case .failure(let failure) = beginResult {
+                    await MainActor.run { onError(failure) }
+                }
                 return
             }
 
-            // Create the streaming message.
-            let messageID = await persist.beginStreamingMessage(conversationID: conversationID)
-
-            guard let messageID else {
-                await MainActor.run { onError(ChatSessionError.persistenceFailure) }
-                await selfRef.setStreaming(false)
+            guard await self.register(messageID: messageID, for: generationID) else {
+                await persistence.cancelStreamingMessage(messageID: messageID)
                 return
             }
-
-            await selfRef.setActiveMessageID(messageID)
 
             do {
-                let stream = try await infService.streamVisionChat(
-                    messages: messages,
-                    images: capturedImages,
-                    systemPrompt: systemPrompt,
-                    sampling: sampling
-                )
+                let stream: AsyncThrowingStream<String, Error>
+                switch kind {
+                case .text:
+                    stream = try await inferenceService.streamChat(
+                        messages: messages,
+                        systemPrompt: systemPrompt,
+                        sampling: sampling
+                    )
+                case .vision(let images):
+                    stream = try await inferenceService.streamVisionChat(
+                        messages: messages,
+                        images: images,
+                        systemPrompt: systemPrompt,
+                        sampling: sampling
+                    )
+                }
 
                 var tokenBatch = ""
                 var lastBatchTime = Date()
-                let batchInterval: TimeInterval = 0.5
-
                 for try await token in stream {
-                    // Check cancellation.
-                    let cancelled = await selfRef.getIsCancelled()
-                    if Task.isCancelled || cancelled {
-                        await persist.cancelStreamingMessage(messageID: messageID)
-                        await MainActor.run { onComplete() }
-                        await selfRef.setStreaming(false)
-                        await selfRef.setActiveMessageID(nil)
-                        return
-                    }
-
-                    // Buffer token for persistence and batch UI updates.
-                    await persist.bufferTokens(messageID: messageID, tokens: token)
+                    guard !Task.isCancelled, await self.isCurrent(generationID) else { return }
+                    let buffering = await persistence.bufferTokens(messageID: messageID, tokens: token)
+                    if case .failure(let error) = buffering { throw error }
                     tokenBatch += token
 
                     let now = Date()
-                    if tokenBatch.count >= 20 || now.timeIntervalSince(lastBatchTime) >= batchInterval {
+                    if tokenBatch.count >= 20 || now.timeIntervalSince(lastBatchTime) >= 0.5 {
                         let batch = tokenBatch
                         tokenBatch = ""
                         lastBatchTime = now
                         await MainActor.run { onToken(batch) }
-                        await selfRef.incrementTokenCount()
+                        await self.incrementTokenCount()
                     }
                 }
 
-                // Flush any remaining UI tokens.
+                guard !Task.isCancelled, await self.isCurrent(generationID) else { return }
                 if !tokenBatch.isEmpty {
-                    await MainActor.run { onToken(tokenBatch) }
+                    let finalBatch = tokenBatch
+                    await MainActor.run { onToken(finalBatch) }
                 }
-
-                // Stream completed.
-                await persist.endStreamingMessage(messageID: messageID)
-                await selfRef.setActiveMessageID(nil)
-                await selfRef.setStreaming(false)
-                await MainActor.run { onComplete() }
-
+                let finalization = await persistence.endStreamingMessage(messageID: messageID)
+                if await self.finishIfCurrent(generationID) {
+                    switch finalization {
+                    case .success:
+                        await MainActor.run { onComplete() }
+                    case .failure(let error):
+                        await self.retainRecovery(messageID: messageID)
+                        await MainActor.run { onError(error) }
+                    }
+                }
             } catch {
-                let cancelled = await selfRef.getIsCancelled()
-                if Task.isCancelled || cancelled {
-                    await persist.cancelStreamingMessage(messageID: messageID)
-                    await MainActor.run { onComplete() }
+                guard await self.isCurrent(generationID) else { return }
+                self.logger.error("Stream error: \(error.localizedDescription, privacy: .public)")
+                if error is PersistenceFailure {
+                    // A failed flush owns unsaved bytes; do not consume them via cancellation.
+                    await self.retainRecovery(messageID: messageID)
                 } else {
-                    self.logger.error("Vision stream error: \(error.localizedDescription, privacy: .public)")
-                    await persist.cancelStreamingMessage(messageID: messageID)
+                    let cancelResult = await persistence.cancelStreamingMessage(messageID: messageID)
+                    if case .failure = cancelResult {
+                        // Cancellation finalization failed; retain recovery so the UI can
+                        // reach retry/export/discard instead of silently deadlocking.
+                        await self.retainRecovery(messageID: messageID)
+                    }
+                }
+                if await self.finishIfCurrent(generationID) {
                     await MainActor.run { onError(error) }
                 }
-                await selfRef.setActiveMessageID(nil)
-                await selfRef.setStreaming(false)
             }
         }
     }
 
-    // MARK: - Actor-isolated helpers
+    func retryRecoverySave() async -> Result<Void, PersistenceFailure> {
+        guard let recoveryHandle else { return .failure(.notFound(operation: .save)) }
+        let result = await persistence.retryStreamingSave(recoveryHandle)
+        if case .success = result { self.recoveryHandle = nil }
+        return result
+    }
 
-    private func cancelInternal() {
-        isCancelled = true
-        currentStream?.cancel()
+    func exportRecovery() async -> Result<Data, PersistenceFailure> {
+        guard let recoveryHandle else { return .failure(.notFound(operation: .export)) }
+        return await persistence.exportPartialResponse(recoveryHandle)
+    }
+
+    func discardRecovery() async -> Result<Void, PersistenceFailure> {
+        guard let recoveryHandle else { return .failure(.notFound(operation: .save)) }
+        let result = await persistence.discardRecovery(recoveryHandle)
+        if case .success = result { self.recoveryHandle = nil }
+        return result
+    }
+
+    private func retainRecovery(messageID: UUID) async {
+        recoveryHandle = await persistence.recoveryHandle(messageID: messageID)
+    }
+
+    /// Cancels producer and consumer, then finalizes the captured message once.
+    func cancel() async {
+        await cancelInternal()
+    }
+
+    private func cancelInternal() async {
+        guard activeGenerationID != nil || currentStream != nil || activeMessageID != nil else { return }
+
+        // Invalidate first so stale callbacks/tasks cannot mutate a newer generation.
+        activeGenerationID = nil
+        let task = currentStream
+        let messageID = activeMessageID
         currentStream = nil
-
-        if let messageID = activeMessageID {
-            Task {
-                await persistence.cancelStreamingMessage(messageID: messageID)
-            }
-            activeMessageID = nil
-        }
-
+        activeMessageID = nil
         isStreaming = false
+
+        task?.cancel()
+        await inferenceService.cancelCurrentStream()
+        if let messageID {
+            let result = await persistence.cancelStreamingMessage(messageID: messageID)
+            if case .failure(let error) = result {
+                await retainRecovery(messageID: messageID)
+                logger.error("Cancellation persistence failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+        await task?.value
     }
 
-    /// Set streaming state (called from Task context).
-    private func setStreaming(_ value: Bool) {
-        isStreaming = value
+    private func register(messageID: UUID, for generationID: UUID) -> Bool {
+        guard activeGenerationID == generationID else { return false }
+        activeMessageID = messageID
+        return true
     }
 
-    /// Set active message ID.
-    private func setActiveMessageID(_ value: UUID?) {
-        activeMessageID = value
+    private func isCurrent(_ generationID: UUID) -> Bool {
+        activeGenerationID == generationID
     }
 
-    /// Get cancellation state.
-    private func getIsCancelled() -> Bool {
-        isCancelled
+    @discardableResult
+    private func finishIfCurrent(_ generationID: UUID) -> Bool {
+        guard activeGenerationID == generationID else { return false }
+        activeGenerationID = nil
+        activeMessageID = nil
+        currentStream = nil
+        isStreaming = false
+        return true
     }
 
-    /// Increment token count.
     private func incrementTokenCount() {
         processedTokenCount += 1
     }
 
-    // MARK: - Context Window
-
-    var tokenCount: Int {
-        processedTokenCount
-    }
+    var tokenCount: Int { processedTokenCount }
 
     func resetTokenCount() {
         processedTokenCount = 0
     }
 }
-
-// MARK: - Errors
 
 enum ChatSessionError: Error, LocalizedError {
     case persistenceFailure

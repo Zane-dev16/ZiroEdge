@@ -108,6 +108,10 @@ struct ChatView: View {
 
             Divider()
 
+            if viewModel.hasPersistenceRecovery {
+                persistenceRecoveryBanner
+            }
+
             // Error banner.
             if viewModel.showError, let error = viewModel.errorMessage {
                 errorBanner(error)
@@ -349,9 +353,34 @@ struct ChatView: View {
         return "No Model"
     }
 
+}
+
+private extension ChatView {
     // MARK: - Error Banner
 
-    private func errorBanner(_ message: String) -> some View {
+    var persistenceRecoveryBanner: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("This response is safely retained but not yet saved.")
+                .font(.caption)
+            HStack {
+                Button("Retry Save") { Task { await viewModel.retryPersistenceRecovery() } }
+                Button("Export Partial") { Task { await viewModel.exportPersistenceRecovery() } }
+                if let url = viewModel.recoveryExportURL {
+                    ShareLink(item: url) { Text("Share Export") }
+                }
+                Button("Discard", role: .destructive) {
+                    Task { await viewModel.discardPersistenceRecovery() }
+                }
+            }
+            .font(.caption)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(Color.orange.opacity(0.12))
+        .accessibilityIdentifier("persistenceRecoveryBanner")
+    }
+
+    func errorBanner(_ message: String) -> some View {
         HStack {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.red)
@@ -372,7 +401,7 @@ struct ChatView: View {
 
     // MARK: - Truncation Warning Banner
 
-    private func truncationBanner(_ message: String) -> some View {
+    func truncationBanner(_ message: String) -> some View {
         HStack {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.orange)
@@ -392,7 +421,7 @@ struct ChatView: View {
 
     // MARK: - Vision Warning Banner
 
-    private func visionWarningBanner(_ message: String) -> some View {
+    func visionWarningBanner(_ message: String) -> some View {
         HStack {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.orange)

@@ -29,7 +29,7 @@ final class MockInferenceServiceForTitle: InferenceServiceProtocol, @unchecked S
         loadedModelID = model.id
     }
 
-    func unloadModel() {
+    func unloadModel() async {
         isModelLoaded = false
         loadedModelID = nil
     }
