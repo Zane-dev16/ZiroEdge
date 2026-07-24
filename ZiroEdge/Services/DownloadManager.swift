@@ -307,8 +307,8 @@ final class DownloadManager: NSObject, ObservableObject {
         }
 
         downloadTask.task?.cancel(byProducingResumeData: { [weak self] data in
-            guard let self else { return }
-            DispatchQueue.main.async {
+            Task { @MainActor [weak self] in
+                guard let downloadTask = self?.activeTasks[key] else { return }
                 downloadTask.resumeData = data
                 if let data {
                     try? data.write(to: downloadTask.resumeDataURL)

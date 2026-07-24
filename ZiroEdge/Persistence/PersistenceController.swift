@@ -317,6 +317,7 @@ actor PersistenceController {
 extension PersistenceController {
     // MARK: - Message CRUD
 
+    @discardableResult
     func insertMessage(
         conversationID: UUID,
         role: MessageRole,

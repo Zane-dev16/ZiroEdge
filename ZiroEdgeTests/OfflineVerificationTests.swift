@@ -406,7 +406,7 @@ final class OfflineConversationPersistenceTests: XCTestCase {
         )
 
         // Begin a streaming message (isStreaming = true in Core Data).
-        let msgID = await persistence.beginStreamingMessage(conversationID: convID)!
+        _ = await persistence.beginStreamingMessage(conversationID: convID)
 
         // Simulate crash recovery (app was killed before streaming completed).
         await persistence.recoverIncompleteStreams()
@@ -895,6 +895,6 @@ final class OfflineFlowIntegrationTests: XCTestCase {
         XCTAssertEqual(messages[0].content, "What is 2+2?")
         XCTAssertEqual(messages[1].role, .assistant)
         XCTAssertEqual(messages[1].content, "2+2 equals 4.")
-        XCTAssertFalse(messages[1].isStreaming ?? true)
+        XCTAssertFalse(messages[1].isStreaming)
     }
 }

@@ -112,7 +112,7 @@ actor InferenceService: InferenceServiceProtocol {
         // Create the engine.
         print("[INFERENCE-LOAD] Creating LlamaEngine...")
         let startTime = Date()
-        let newEngine = try await LlamaEngine(config: engineConfig)
+        let newEngine = try LlamaEngine(config: engineConfig)
         let elapsed = Date().timeIntervalSince(startTime)
         print("[INFERENCE-LOAD] Engine created in \(String(format: "%.1f", elapsed))s")
         engine = newEngine

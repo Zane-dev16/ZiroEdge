@@ -221,7 +221,7 @@ final class PersistenceTests: XCTestCase {
         )
 
         // Begin streaming message.
-        let msgID = await persistence.beginStreamingMessage(conversationID: convID)!
+        _ = await persistence.beginStreamingMessage(conversationID: convID)
 
         // Verify it's streaming.
         let messages1 = await persistence.fetchMessages(conversationID: convID)

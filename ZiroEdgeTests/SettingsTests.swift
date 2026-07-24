@@ -66,7 +66,6 @@ final class SettingsTests: XCTestCase {
         let testData = TestModelFixtures.gguf(count: 512)
         let model = TestModelFixtures.text(data: testData)
         try TestModelFixtures.install(testData, for: model)
-        let basePath = ModelManagerService.baseModelPath(for: model)
 
         XCTAssertTrue(ModelManagerService.isBaseDownloaded(model), "Model should be downloaded")
 
