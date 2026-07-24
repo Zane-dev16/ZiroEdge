@@ -26,6 +26,8 @@ final class AppRuntime: ObservableObject {
 
     @Published private(set) var state: State = .loading(attempt: 1)
     @Published private(set) var diagnosticsURL: URL?
+    @Published private(set) var diagnosticsExportError: String?
+    @Published private(set) var postResetMessage: String?
 
     private let configuration: PersistenceConfiguration
     private let faultInjector: any PersistenceFaultInjecting
@@ -33,6 +35,7 @@ final class AppRuntime: ObservableObject {
     private var openTask: Task<Void, Never>?
     private var attempt = 0
     private var lastFailure: PersistenceFailure?
+    private var isCompletingReset = false
 
     init(
         configuration: PersistenceConfiguration = .production,
@@ -65,8 +68,10 @@ final class AppRuntime: ObservableObject {
                 .appendingPathComponent("ZiroEdge-persistence-diagnostics.txt")
             try Data(failure.sanitizedDiagnostic.utf8).write(to: url, options: .atomic)
             diagnosticsURL = url
+            diagnosticsExportError = nil
         } catch {
             diagnosticsURL = nil
+            diagnosticsExportError = "Could not save diagnostics. Check available storage."
         }
     }
 
@@ -98,6 +103,7 @@ final class AppRuntime: ObservableObject {
               expected == artifact,
               let storeURL = configuration.storeURL else { return }
         state = .resetting
+        isCompletingReset = true
         Task {
             switch await recoveryCoordinator.destroyStore(
                 at: storeURL,
@@ -106,6 +112,7 @@ final class AppRuntime: ObservableObject {
             case .success:
                 await openStore()
             case .failure(let failure):
+                isCompletingReset = false
                 lastFailure = failure
                 state = .failed(failure)
             }
@@ -125,7 +132,16 @@ final class AppRuntime: ObservableObject {
             case .success:
                 lastFailure = nil
                 diagnosticsURL = nil
+                diagnosticsExportError = nil
                 state = .ready(makeServices(persistence: persistence))
+                if isCompletingReset {
+                    isCompletingReset = false
+                    postResetMessage = "Local history reset successfully. You can start a new conversation."
+                    Task { [weak self] in
+                        try? await Task.sleep(for: .seconds(4))
+                        self?.postResetMessage = nil
+                    }
+                }
             case .failure(let failure):
                 lastFailure = failure
                 state = .failed(failure)
