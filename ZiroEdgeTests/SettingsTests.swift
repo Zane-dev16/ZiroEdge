@@ -6,6 +6,7 @@
 import XCTest
 @testable import ZiroEdge
 
+@MainActor
 final class SettingsTests: XCTestCase {
 
     // MARK: - Storage Calculation
@@ -62,14 +63,11 @@ final class SettingsTests: XCTestCase {
     // MARK: - Model Deletion
 
     func testDeleteModelRemovesFiles() throws {
-        let model = ModelRegistry.llama32_3B
-        ModelManagerService.ensureModelsDirectory()
-
+        let testData = TestModelFixtures.gguf(count: 512)
+        let model = TestModelFixtures.text(data: testData)
+        try TestModelFixtures.install(testData, for: model)
         let basePath = ModelManagerService.baseModelPath(for: model)
-        let testData = Data(repeating: 0xEF, count: 512)
-        try testData.write(to: basePath)
 
-        // Verify file exists.
         XCTAssertTrue(ModelManagerService.isBaseDownloaded(model), "Model should be downloaded")
 
         // Delete via ModelManagerService.
@@ -81,21 +79,18 @@ final class SettingsTests: XCTestCase {
     }
 
     func testDeleteModelViaDownloadManager() throws {
-        let model = ModelRegistry.llama32_3B
-        ModelManagerService.ensureModelsDirectory()
-
-        let basePath = ModelManagerService.baseModelPath(for: model)
-        let testData = Data(repeating: 0x12, count: 4096)
-        try testData.write(to: basePath)
+        let testData = TestModelFixtures.gguf(count: 4096)
+        let model = TestModelFixtures.text(data: testData)
+        try TestModelFixtures.install(testData, for: model)
 
         let downloadManager = DownloadManager()
-        XCTAssertTrue(downloadManager.status(for: model).isReady, "Model should appear as downloaded")
+        XCTAssertTrue(ModelManagerService.isFullyDownloaded(model))
 
         // Delete via DownloadManager (this is what SettingsView uses).
         downloadManager.deleteModel(model)
 
         XCTAssertFalse(ModelManagerService.isBaseDownloaded(model), "Model files should be removed")
-        XCTAssertFalse(downloadManager.status(for: model).isReady, "Download status should reflect deletion")
+        XCTAssertFalse(ModelManagerService.isFullyDownloaded(model), "Download status should reflect deletion")
     }
 
     func testDeleteModelUpdatesDiskUsage() throws {
@@ -146,26 +141,12 @@ final class SettingsTests: XCTestCase {
 
     // MARK: - Download Status Integration
 
-    func testDownloadedModelsFilterWorks() throws {
-        let model = ModelRegistry.llama32_3B
-        ModelManagerService.deleteModel(model)
-
-        let downloadManager = DownloadManager()
-
-        // Before download, model should not be ready.
-        let statusBefore = downloadManager.status(for: model)
-        XCTAssertFalse(statusBefore.isReady, "Model should not be ready before download")
-
-        // Simulate a downloaded file.
-        ModelManagerService.ensureModelsDirectory()
-        let basePath = ModelManagerService.baseModelPath(for: model)
-        try Data(repeating: 0x56, count: 256).write(to: basePath)
-        downloadManager.updateStatusesFromDisk()
-
-        let statusAfter = downloadManager.status(for: model)
-        XCTAssertTrue(statusAfter.isReady, "Model should be ready after file exists on disk")
-
-        // Clean up.
-        ModelManagerService.deleteModel(model)
+    func testDownloadedModelsFilterUsesVerifiedFixture() throws {
+        let data = TestModelFixtures.gguf(count: 256)
+        let model = TestModelFixtures.text(data: data)
+        defer { ModelManagerService.deleteModel(model) }
+        XCTAssertFalse(ModelManagerService.isFullyDownloaded(model))
+        try TestModelFixtures.install(data, for: model)
+        XCTAssertTrue(ModelManagerService.isFullyDownloaded(model))
     }
 }

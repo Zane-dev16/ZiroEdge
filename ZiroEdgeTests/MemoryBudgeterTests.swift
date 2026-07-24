@@ -1,112 +1,47 @@
-// MemoryBudgeterTests.swift
-// ZiroEdgeTests
-//
-// Tests for MemoryBudgeter: RAM checking, model fit, recommendations.
-
 import XCTest
 @testable import ZiroEdge
 
 final class MemoryBudgeterTests: XCTestCase {
+    private let model = AIModel(
+        id: "memory-fixture", displayName: "Fixture", description: "Fixture", modelType: .text,
+        baseURL: URL(string: "https://example.com/model.gguf")!, mmprojURL: nil,
+        baseFileSizeBytes: 2_000_000_000, mmprojFileSizeBytes: nil,
+        baseSHA256: String(repeating: "a", count: 64), mmprojSHA256: nil,
+        quantization: "Q4", config: .llama32, minimumDeviceRAM: 0,
+        license: LicenseInfo(name: "Test", url: URL(string: "https://example.com")!, copyright: "Test")
+    )
 
-    var budgeter: MemoryBudgeter!
-
-    override func setUp() async throws {
-        budgeter = MemoryBudgeter()
+    func testRecommendationProceedWithFixedMetrics() async {
+        let budgeter = MemoryBudgeter(metrics: FixedMemoryMetricsProvider(available: 4_000_000_000, total: 8_000_000_000))
+        let result = await budgeter.recommendation(for: model)
+        guard case .proceed = result else { return XCTFail("Expected proceed, got \(result)") }
+        let canLoad = await budgeter.canLoad(model)
+        XCTAssertTrue(canLoad)
     }
 
-    func testAvailableRAMIsNonZero() async throws {
-        let ram = await budgeter.availableRAM()
-        XCTAssertGreaterThan(ram, 0, "availableRAM should return > 0 on a real device")
+    func testRecommendationUnloadCurrentFirstWithFixedMetrics() async {
+        let budgeter = MemoryBudgeter(metrics: FixedMemoryMetricsProvider(available: 2_500_000_000, total: 8_000_000_000))
+        let result = await budgeter.recommendation(for: model)
+        guard case .unloadCurrentFirst = result else { return XCTFail("Expected unloadCurrentFirst, got \(result)") }
     }
 
-    func testTotalDeviceRAMIsNonZero() async throws {
-        let total = await budgeter.totalDeviceRAM()
-        XCTAssertGreaterThan(total, 0, "totalDeviceRAM should return > 0")
+    func testRecommendationInsufficientWithFixedMetrics() async {
+        let budgeter = MemoryBudgeter(metrics: FixedMemoryMetricsProvider(available: 1_000_000_000, total: 128_000_000_000))
+        let result = await budgeter.recommendation(for: model)
+        guard case .insufficientRAM = result else { return XCTFail("Expected insufficientRAM, got \(result)") }
+        let canLoad = await budgeter.canLoad(model)
+        XCTAssertFalse(canLoad)
     }
 
-    func testAvailableRAMIsLessThanTotal() async throws {
+    func testSystemMetricsSmoke() async throws {
+        let budgeter = MemoryBudgeter()
         let available = await budgeter.availableRAM()
         let total = await budgeter.totalDeviceRAM()
-        XCTAssertLessThanOrEqual(available, total, "Available should be <= total")
-    }
-
-    func testCanLoadSmallModelOnDevice() async throws {
-        // On a real device with 6GB+ RAM, check the recommendation.
-        // We can't guarantee enough FREE RAM (other apps may be using it),
-        // so we just verify the budgeter returns a valid recommendation.
-        let total = await budgeter.totalDeviceRAM()
-        guard total > 6_000_000_000 else {
-            throw XCTSkip("Device has less than 6GB RAM, skipping fit check")
-        }
-
-        let recommendation = await budgeter.recommendation(for: ModelRegistry.llama32_3B)
-        // Should be one of the valid recommendations.
-        switch recommendation {
-        case .proceed, .unloadCurrentFirst, .insufficientRAM:
-            break // All valid — depends on current free RAM.
-        }
-        // The key check: on a 6GB+ device, the budgeter should not
-        // report insufficientRAM if there's enough free memory.
-        let available = await budgeter.availableRAM()
-        let modelSize = UInt64(ModelRegistry.llama32_3B.totalFileSizeBytes)
-        if available > modelSize + 1_500_000_000 {
-            // If there IS enough free RAM, canLoad should be true.
-            let canLoad = await budgeter.canLoad(ModelRegistry.llama32_3B)
-            XCTAssertTrue(canLoad, "Should be able to load when enough RAM is free")
-        }
-    }
-
-    func testCannotLoadHugeModel() async throws {
-        // Create a fake model that requires 999TB of RAM.
-        let hugeModel = AIModel(
-            id: "fake-huge",
-            displayName: "Huge",
-            description: "Fake",
-            modelType: .text,
-            baseURL: URL(string: "https://example.com/fake.gguf")!,
-            mmprojURL: nil,
-            baseFileSizeBytes: 999_000_000_000_000,
-            mmprojFileSizeBytes: nil,
-            baseSHA256: "",
-            mmprojSHA256: nil,
-            quantization: "Q4_K_M",
-            config: .llama32,
-            minimumDeviceRAM: 999_000_000_000_000,
-            license: LicenseInfo(
-                name: "Test",
-                url: URL(string: "https://example.com")!,
-                copyright: "Test"
-            )
-        )
-
-        let canLoad = await budgeter.canLoad(hugeModel)
-        XCTAssertFalse(canLoad, "A 999TB model should not fit on any device")
-    }
-
-    func testRecommendationProceed() async throws {
-        let total = await budgeter.totalDeviceRAM()
-        guard total > 6_000_000_000 else {
-            throw XCTSkip("Device has less than 6GB RAM")
-        }
-
-        let recommendation = await budgeter.recommendation(for: ModelRegistry.llama32_3B)
-        // Should be .proceed or .unloadCurrentFirst depending on current state.
-        switch recommendation {
-        case .proceed, .unloadCurrentFirst:
-            break // Both are acceptable.
-        case .insufficientRAM:
-            XCTFail("Should not be insufficientRAM for a 2GB model on 6GB+ device")
-        }
-    }
-
-    func testFormattedRAMStrings() async throws {
-        let available = await budgeter.formattedAvailableRAM()
-        let total = await budgeter.formattedTotalRAM()
-
-        XCTAssertFalse(available.isEmpty)
-        XCTAssertFalse(total.isEmpty)
-        // Should contain "MB" or "GB"
-        XCTAssertTrue(available.contains("MB") || available.contains("GB"))
-        XCTAssertTrue(total.contains("MB") || total.contains("GB"))
+        XCTAssertGreaterThan(total, 0)
+        XCTAssertLessThanOrEqual(available, total)
+        let formattedAvailable = await budgeter.formattedAvailableRAM()
+        let formattedTotal = await budgeter.formattedTotalRAM()
+        XCTAssertFalse(formattedAvailable.isEmpty)
+        XCTAssertFalse(formattedTotal.isEmpty)
     }
 }

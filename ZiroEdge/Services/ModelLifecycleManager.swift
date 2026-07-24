@@ -77,6 +77,11 @@ final class ModelLifecycleManager: ObservableObject {
     /// Load a model. Checks memory budget first. Unloads current model if needed.
     func loadModel(_ model: AIModel) async {
         print("[LOAD] loadModel(\(model.id)) — currentState=\(currentState)")
+        guard case .ready = ModelManagerService.availability(for: model) else {
+            logger.error("Refusing to load unavailable or unverified model: \(model.id, privacy: .public)")
+            currentState = .loadFailed
+            return
+        }
         // Don't reload if already loaded.
         if let active = activeModel, active.id == model.id, currentState == .loaded {
             print("[LOAD] SKIP: already loaded")
@@ -212,10 +217,9 @@ enum ModelManagerService {
 
     private static let logger = Logger(subsystem: "com.zanish-labs.ziroedge", category: "model-manager")
 
-    /// Base directory for model storage.
+    /// Managed installed-model library. Documents/Models remains legacy input only.
     static var modelsDirectory: URL {
-        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        return documents.appendingPathComponent("Models", isDirectory: true)
+        managedStorageDirectory.appendingPathComponent("Installed", isDirectory: true)
     }
 
     /// File path for a model's base .gguf.
@@ -231,6 +235,7 @@ enum ModelManagerService {
     /// Whether the base model file exists on disk AND passes basic validation.
     /// Bogus files (wrong magic, size mismatch, etc.) are removed automatically.
     static func isBaseDownloaded(_ model: AIModel) -> Bool {
+        guard isValidSHA256(model.baseSHA256) else { return false }
         let path = baseModelPath(for: model)
         guard FileManager.default.fileExists(atPath: path.path) else { return false }
         guard verifyGGUFHeader(fileURL: path) else {
@@ -251,6 +256,7 @@ enum ModelManagerService {
     /// Always returns true for text-only models.
     static func isMMProjDownloaded(_ model: AIModel) -> Bool {
         guard model.requiresMMProj else { return true }
+        guard let hash = model.mmprojSHA256, isValidSHA256(hash) else { return false }
         let path = mmprojModelPath(for: model)
         guard FileManager.default.fileExists(atPath: path.path) else { return false }
         guard verifyGGUFHeader(fileURL: path) else {
@@ -323,8 +329,12 @@ enum ModelManagerService {
 
     /// Verify SHA-256 of a downloaded file.
     static func verifySHA256(fileURL: URL, expected: String) -> Bool {
-        guard let hex = computeSHA256(fileURL: fileURL) else { return false }
-        return hex == expected.lowercased()
+        guard isValidSHA256(expected), let hex = computeSHA256(fileURL: fileURL) else { return false }
+        return hex == expected
+    }
+
+    static func isValidSHA256(_ value: String) -> Bool {
+        value.count == 64 && value.allSatisfy { $0.isHexDigit && !$0.isUppercase }
     }
 
     /// Delete a model's files from disk.
@@ -365,8 +375,9 @@ extension ModelManagerService {
 
     /// Comprehensive model availability check for an AIModel.
     static func availability(for model: AIModel) -> ModelAvailability {
-        // Missing catalog metadata → unavailable.
-        guard !model.baseSHA256.isEmpty else {
+        // Missing or malformed integrity metadata is a catalog configuration error.
+        guard isValidSHA256(model.baseSHA256),
+              !model.requiresMMProj || model.mmprojSHA256.map(isValidSHA256) == true else {
             return .unavailable
         }
 
@@ -380,10 +391,12 @@ extension ModelManagerService {
             issues.append(.missingGGUFHeader)
         } else {
             // SHA-256 check.
-            if let actualSHA = computeSHA256(fileURL: basePath), !model.baseSHA256.isEmpty {
-                if actualSHA != model.baseSHA256.lowercased() {
-                    issues.append(.sha256Mismatch)
-                }
+            guard let actualSHA = computeSHA256(fileURL: basePath) else {
+                issues.append(.sha256Mismatch)
+                return .repairNeeded(issues: issues)
+            }
+            if actualSHA != model.baseSHA256 {
+                issues.append(.sha256Mismatch)
             }
             // Size check.
             if let attrs = try? FileManager.default.attributesOfItem(atPath: basePath.path),
@@ -401,9 +414,12 @@ extension ModelManagerService {
                 issues.append(.missing(artifact: .mmproj))
             } else if !verifyGGUFHeader(fileURL: mmprojPath) {
                 issues.append(.missingGGUFHeader)
-            } else if let expectedSHA = model.mmprojSHA256, !expectedSHA.isEmpty {
-                if let actualSHA = computeSHA256(fileURL: mmprojPath),
-                   actualSHA != expectedSHA.lowercased() {
+            } else if let expectedSHA = model.mmprojSHA256 {
+                guard let actualSHA = computeSHA256(fileURL: mmprojPath) else {
+                    issues.append(.sha256Mismatch)
+                    return .repairNeeded(issues: issues)
+                }
+                if actualSHA != expectedSHA {
                     issues.append(.sha256Mismatch)
                 }
             }
@@ -513,10 +529,17 @@ extension ModelManagerService {
         let expectedSize = artifact == .base
             ? model.baseFileSizeBytes
             : model.mmprojFileSizeBytes ?? 0
-        if expectedSize > 0 && fileSize < expectedSize / 2 {
-            issues.append(
-                "File size (\(fileSize) bytes) is less than half of expected (\(expectedSize) bytes)"
-            )
+        if expectedSize > 0 && fileSize != expectedSize {
+            issues.append("File size does not match catalog metadata")
+        }
+
+        let expectedHash = artifact == .base ? model.baseSHA256 : model.mmprojSHA256 ?? ""
+        guard isValidSHA256(expectedHash) else {
+            issues.append("Catalog SHA-256 metadata is invalid")
+            return issues
+        }
+        if !verifySHA256(fileURL: url, expected: expectedHash) {
+            issues.append("SHA-256 does not match catalog metadata")
         }
 
         return issues

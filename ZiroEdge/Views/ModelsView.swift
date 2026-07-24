@@ -46,7 +46,7 @@ struct ModelsView: View {
         }
         .confirmationDialog("Delete Model", isPresented: $viewModel.showingDeleteConfirmation) {
             Button("Delete", role: .destructive) {
-                viewModel.confirmDelete()
+                Task { await viewModel.confirmDelete() }
             }
             Button("Cancel", role: .cancel) {}
         } message: {

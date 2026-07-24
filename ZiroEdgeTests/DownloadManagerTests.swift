@@ -7,6 +7,7 @@
 import XCTest
 @testable import ZiroEdge
 
+@MainActor
 final class DownloadManagerTests: XCTestCase {
 
     var downloadManager: DownloadManager!
@@ -301,15 +302,10 @@ final class DownloadManagerTests: XCTestCase {
 
     // MARK: - Delete Model
 
-    func testDeleteModelClearsStatus() {
-        let model = ModelRegistry.llama32_3B
-        ModelManagerService.ensureModelsDirectory()
-
-        // Create a fake model file
-        let basePath = ModelManagerService.baseModelPath(for: model)
-        FileManager.default.createFile(atPath: basePath.path, contents: Data("fake-model".utf8))
-
-        downloadManager.updateStatusesFromDisk()
+    func testDeleteModelClearsStatus() throws {
+        let data = TestModelFixtures.gguf()
+        let model = TestModelFixtures.text(data: data)
+        try TestModelFixtures.install(data, for: model)
         XCTAssertTrue(ModelManagerService.isBaseDownloaded(model))
 
         downloadManager.deleteModel(model)

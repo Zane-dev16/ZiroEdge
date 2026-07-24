@@ -7,7 +7,13 @@ import XCTest
 import CryptoKit
 @testable import ZiroEdge
 
+@MainActor
 final class ModelArtifactVerificationTests: XCTestCase {
+
+    override func setUp() {
+        super.setUp()
+        ModelMigrationService.ensureManagedDirectories()
+    }
 
     func testAuthenticationBodyAtBothGemmaDestinationsIsNotInstalled() throws {
         let model = ModelRegistry.gemma4_e2b
@@ -103,6 +109,28 @@ final class ModelArtifactVerificationTests: XCTestCase {
         guard case .unavailable = ModelManagerService.availability(for: invalid) else {
             return XCTFail("Missing catalog metadata must be unavailable")
         }
+    }
+
+    @MainActor
+    func testPromotionRejectsMissingSHA256() throws {
+        let invalid = makeCatalogModel(baseSHA256: "")
+        let task = DownloadTask(model: invalid, artifact: .base)
+        defer { ModelManagerService.deleteModel(invalid) }
+        try validGGUFData(length: 16).write(to: task.stagingURL)
+
+        let result = DownloadManager().verifyAndPromote(task: task)
+
+        guard case .failure(.invalidCatalogMetadata) = result else {
+            return XCTFail("Promotion must reject an artifact without a valid SHA-256")
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: task.destinationURL.path))
+    }
+
+    func testSHA256MetadataMustBeLowercase64Hex() {
+        XCTAssertTrue(ModelManagerService.isValidSHA256(String(repeating: "a", count: 64)))
+        XCTAssertFalse(ModelManagerService.isValidSHA256(""))
+        XCTAssertFalse(ModelManagerService.isValidSHA256(String(repeating: "A", count: 64)))
+        XCTAssertFalse(ModelManagerService.isValidSHA256(String(repeating: "g", count: 64)))
     }
 
     private func makeRuntimeModel(

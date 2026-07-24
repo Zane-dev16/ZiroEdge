@@ -53,6 +53,7 @@ enum DownloadError: Sendable, Error, Hashable {
     case diskSpaceInsufficient
     case sha256Mismatch
     case fileCorrupted
+    case invalidCatalogMetadata
     case cancelled
     case unknown
 
@@ -74,6 +75,8 @@ enum DownloadError: Sendable, Error, Hashable {
             return "File integrity check failed"
         case .fileCorrupted:
             return "Downloaded file is corrupted"
+        case .invalidCatalogMetadata:
+            return "Model catalog integrity metadata is invalid"
         case .cancelled:
             return "Download was cancelled"
         case .unknown:
@@ -166,7 +169,7 @@ struct ModelDownloadStatus: Sendable, Hashable {
     var overallProgress: Double {
         let baseProgress: Double
         switch baseState {
-        case .downloading(let p): baseProgress = p
+        case .downloading(let progress): baseProgress = progress
         case .downloaded: baseProgress = 1.0
         default: baseProgress = 0.0
         }
@@ -177,7 +180,7 @@ struct ModelDownloadStatus: Sendable, Hashable {
 
         let mmprojProgress: Double
         switch mmproj {
-        case .downloading(let p): mmprojProgress = p
+        case .downloading(let progress): mmprojProgress = progress
         case .downloaded: mmprojProgress = 1.0
         default: mmprojProgress = 0.0
         }

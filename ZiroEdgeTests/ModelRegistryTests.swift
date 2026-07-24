@@ -255,6 +255,9 @@ final class ModelRegistryTests: XCTestCase {
 final class ChatFlowDiagnosticTest: XCTestCase {
 
     func testChatUIFlowLoadsModel() async throws {
+        guard ModelRegistry.allModels.contains(where: ModelManagerService.isFullyDownloaded) else {
+            throw XCTSkip("Requires a locally installed model that passes catalog SHA-256 verification")
+        }
         print("[CHATFLOW-TEST] === Starting chat UI flow diagnostic ===")
         
         // Step 1: Create the same objects the chat UI uses
@@ -287,6 +290,9 @@ final class ChatFlowDiagnosticTest: XCTestCase {
 
     /// Full chat flow: autoLoad -> send message -> capture response
     func testFullChatFlowWithResponse() async throws {
+        guard ModelRegistry.allModels.contains(where: ModelManagerService.isFullyDownloaded) else {
+            throw XCTSkip("Requires a verified GGUF artifact and real inference runtime")
+        }
         print("[FULLFLOW] === Starting full chat flow ===")
         
         let inference = InferenceService()

@@ -7,10 +7,48 @@
 import Foundation
 import os
 
+protocol MemoryMetricsProviding: Sendable {
+    func availableRAM() -> UInt64
+    func totalRAM() -> UInt64
+}
+
+struct FixedMemoryMetricsProvider: MemoryMetricsProviding {
+    let available: UInt64
+    let total: UInt64
+    func availableRAM() -> UInt64 { available }
+    func totalRAM() -> UInt64 { total }
+}
+
+struct SystemMemoryMetricsProvider: MemoryMetricsProviding {
+    func availableRAM() -> UInt64 {
+        var stats = vm_statistics64()
+        var count = UInt32(MemoryLayout<vm_statistics64>.size / MemoryLayout<integer_t>.size)
+        let result = withUnsafeMutablePointer(to: &stats) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { intPtr in
+                host_statistics64(mach_host_self(), HOST_VM_INFO64, intPtr, &count)
+            }
+        }
+        guard result == KERN_SUCCESS else { return 0 }
+        return (UInt64(stats.free_count) + UInt64(stats.inactive_count) + UInt64(stats.purgeable_count))
+            * UInt64(vm_kernel_page_size)
+    }
+
+    func totalRAM() -> UInt64 {
+        var size: UInt64 = 0
+        var sizeSize = MemoryLayout<UInt64>.size
+        return sysctlbyname("hw.memsize", &size, &sizeSize, nil, 0) == 0 ? size : 0
+    }
+}
+
 /// Memory budget checker. Reports available RAM and recommends whether a model can load.
 actor MemoryBudgeter {
 
     private let logger = Logger(subsystem: "com.zanish-labs.ziroedge", category: "memory")
+    private let metrics: any MemoryMetricsProviding
+
+    init(metrics: any MemoryMetricsProviding = SystemMemoryMetricsProvider()) {
+        self.metrics = metrics
+    }
 
     /// Headroom required beyond the model's file size for working set (KV cache, activations, etc.).
     /// Spec says: model.fileSize + 1.5 GB headroom.
@@ -21,46 +59,14 @@ actor MemoryBudgeter {
     /// Returns actual free + inactive + purgeable pages in bytes.
     /// This is the real available memory, not what UIKit reports.
     func availableRAM() -> UInt64 {
-        var stats = vm_statistics64()
-        var count = UInt32(MemoryLayout<vm_statistics64>.size / MemoryLayout<integer_t>.size)
-
-        let result = withUnsafeMutablePointer(to: &stats) { pointer in
-            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { intPtr in
-                host_statistics64(mach_host_self(), HOST_VM_INFO64, intPtr, &count)
-            }
-        }
-
-        guard result == KERN_SUCCESS else {
-            logger.error("host_statistics64 failed with code \(result)")
-            return 0
-        }
-
-        let pageSize = UInt64(vm_kernel_page_size)
-
-        // Free pages: completely unused.
-        let freePages = UInt64(stats.free_count)
-        // Inactive pages: recently used but reclaimable by the OS.
-        let inactivePages = UInt64(stats.inactive_count)
-        // Purgeable pages: marked for eviction (compressed or file-backed).
-        let purgeablePages = UInt64(stats.purgeable_count)
-
-        let available = (freePages + inactivePages + purgeablePages) * pageSize
-
-        logger.info("RAM: free=\(freePages * pageSize / 1_048_576)MB inactive=\(inactivePages * pageSize / 1_048_576)MB purgeable=\(purgeablePages * pageSize / 1_048_576)MB available=\(available / 1_048_576)MB")
-
+        let available = metrics.availableRAM()
+        logger.info("RAM available=\(available / 1_048_576)MB")
         return available
     }
 
     /// Total physical device RAM in bytes.
     func totalDeviceRAM() -> UInt64 {
-        var size: UInt64 = 0
-        var sizeSize = MemoryLayout<UInt64>.size
-        let result = sysctlbyname("hw.memsize", &size, &sizeSize, nil, 0)
-        guard result == 0 else {
-            logger.error("sysctlbyname hw.memsize failed")
-            return 0
-        }
-        return size
+        metrics.totalRAM()
     }
 
     // MARK: - Model Fit Check

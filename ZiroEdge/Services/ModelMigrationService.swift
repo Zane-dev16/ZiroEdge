@@ -313,6 +313,11 @@ extension ModelMigrationService {
         let sourceExists = fileManager.fileExists(atPath: source.path)
         let destinationExists = fileManager.fileExists(atPath: destination.path)
 
+        // Never delete or move when a path regression aliases legacy and managed storage.
+        if sameResource(source, destination) {
+            return destinationExists
+        }
+
         if !sourceExists {
             if entry.kind == .installed,
                let model = model(for: entry, in: modelsByID),
@@ -366,6 +371,19 @@ extension ModelMigrationService {
         } catch {
             return false
         }
+    }
+
+    private static func sameResource(_ lhs: URL, _ rhs: URL) -> Bool {
+        let left = lhs.resolvingSymlinksInPath().standardizedFileURL
+        let right = rhs.resolvingSymlinksInPath().standardizedFileURL
+        if left == right { return true }
+        guard fileManager.fileExists(atPath: left.path), fileManager.fileExists(atPath: right.path) else {
+            return false
+        }
+        let keys: Set<URLResourceKey> = [.fileResourceIdentifierKey]
+        let leftID = try? left.resourceValues(forKeys: keys).fileResourceIdentifier as? AnyHashable
+        let rightID = try? right.resourceValues(forKeys: keys).fileResourceIdentifier as? AnyHashable
+        return leftID != nil && leftID == rightID
     }
 
     private static func model(for entry: MigrationEntry, in modelsByID: [String: AIModel]) -> AIModel? {

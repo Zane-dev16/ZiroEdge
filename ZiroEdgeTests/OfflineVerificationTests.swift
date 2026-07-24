@@ -29,6 +29,8 @@ final class MockInferenceService: InferenceServiceProtocol, @unchecked Sendable 
     // Configurable behavior
     var loadModelError: Error?
     var streamChunks: [String] = ["Hello", " world", "!"]
+    var keepsStreamOpen = false
+    private var producerTask: Task<Void, Never>?
 
     var isModelLoaded: Bool {
         get async { _isModelLoaded }
@@ -47,7 +49,7 @@ final class MockInferenceService: InferenceServiceProtocol, @unchecked Sendable 
         _loadedModelID = model.id
     }
 
-    func unloadModel() {
+    func unloadModel() async {
         unloadModelCallCount += 1
         _isModelLoaded = false
         _loadedModelID = nil
@@ -59,14 +61,7 @@ final class MockInferenceService: InferenceServiceProtocol, @unchecked Sendable 
         sampling: SamplingConfig
     ) async throws -> AsyncThrowingStream<String, Error> {
         streamChatCallCount += 1
-        return AsyncThrowingStream { continuation in
-            Task {
-                for chunk in streamChunks {
-                    continuation.yield(chunk)
-                }
-                continuation.finish()
-            }
-        }
+        return makeStream()
     }
 
     func streamVisionChat(
@@ -76,10 +71,17 @@ final class MockInferenceService: InferenceServiceProtocol, @unchecked Sendable 
         sampling: SamplingConfig
     ) async throws -> AsyncThrowingStream<String, Error> {
         streamVisionChatCallCount += 1
+        return makeStream()
+    }
+
+    private func makeStream() -> AsyncThrowingStream<String, Error> {
+        let chunks = streamChunks
+        let stayOpen = keepsStreamOpen
         return AsyncThrowingStream { continuation in
-            Task {
-                for chunk in streamChunks {
-                    continuation.yield(chunk)
+            producerTask = Task {
+                for chunk in chunks { continuation.yield(chunk) }
+                while stayOpen && !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 10_000_000)
                 }
                 continuation.finish()
             }
@@ -88,6 +90,75 @@ final class MockInferenceService: InferenceServiceProtocol, @unchecked Sendable 
 
     func cancelCurrentStream() async {
         cancelCallCount += 1
+        producerTask?.cancel()
+        await producerTask?.value
+        producerTask = nil
+    }
+}
+
+// MARK: - Cancellation Reliability Tests
+
+final class ChatSessionCancellationTests: XCTestCase {
+
+    func testTextCancellationStopsProducerAndFinalizesExactlyOnce() async throws {
+        try await assertCancellation(vision: false)
+    }
+
+    func testVisionCancellationStopsProducerAndFinalizesExactlyOnce() async throws {
+        try await assertCancellation(vision: true)
+    }
+
+    private func assertCancellation(vision: Bool) async throws {
+        let persistence = PersistenceController(inMemory: true)
+        let conversationID = try await persistence.createConversation(title: "Cancel", modelID: "test")
+        let inference = MockInferenceService()
+        inference.streamChunks = ["partial"]
+        inference.keepsStreamOpen = true
+        let session = ChatSessionActor(inferenceService: inference, persistence: persistence)
+
+        if vision {
+            await session.startVisionStream(
+                conversationID: conversationID,
+                messages: [],
+                images: [Data([1])],
+                systemPrompt: nil,
+                sampling: .default,
+                onToken: { _ in },
+                onComplete: {},
+                onError: { _ in }
+            )
+        } else {
+            await session.startStream(
+                conversationID: conversationID,
+                messages: [],
+                systemPrompt: nil,
+                sampling: .default,
+                onToken: { _ in },
+                onComplete: {},
+                onError: { _ in }
+            )
+        }
+
+        for _ in 0..<100 {
+            if await persistence.fetchMessages(conversationID: conversationID).first?.isStreaming == true {
+                break
+            }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        await session.cancel()
+        await session.cancel()
+
+        let messages = await persistence.fetchMessages(conversationID: conversationID)
+        XCTAssertEqual(inference.cancelCallCount, 1)
+        XCTAssertEqual(messages.count, 1)
+        XCTAssertFalse(messages[0].isStreaming)
+        XCTAssertEqual(
+            messages[0].content.components(separatedBy: "_[Generation cancelled]_" ).count,
+            2
+        )
+        let sessionIsStreaming = await session.isStreaming
+        XCTAssertFalse(sessionIsStreaming)
     }
 }
 
@@ -131,17 +202,13 @@ final class OfflineModelLoadingTests: XCTestCase {
         }
     }
 
-    func testModelPathsAreInDocumentsDirectory() {
-        // Model paths must be in the app's Documents directory (not a network URL).
-        let documentsDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].path
-
-        for model in ModelRegistry.allModels {
-            let baseURL = ModelManagerService.baseModelPath(for: model)
-            XCTAssertTrue(
-                baseURL.path.hasPrefix(documentsDir),
-                "Model base path must be in Documents: \(baseURL.path)"
-            )
-        }
+    func testModelPathsAreInManagedApplicationSupport() {
+        let applicationSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        XCTAssertTrue(ModelManagerService.modelsDirectory.path.hasPrefix(applicationSupport.path))
+        XCTAssertNotEqual(
+            ModelManagerService.modelsDirectory.standardizedFileURL,
+            ModelManagerService.legacyModelsDirectory.standardizedFileURL
+        )
     }
 
     func testModelPathsDoNotContainNetworkSchemes() {
@@ -176,60 +243,26 @@ final class OfflineModelLoadingTests: XCTestCase {
         }
     }
 
-    func testIsBaseDownloadedUsesLocalFileManager() {
-        // ModelManagerService.isBaseDownloaded uses FileManager — no network.
-        let model = ModelRegistry.llama32_3B
-        ModelManagerService.ensureModelsDirectory()
-
-        // Create a fake model file.
-        let path = ModelManagerService.baseModelPath(for: model)
-        FileManager.default.createFile(atPath: path.path, contents: Data("fake".utf8))
-        defer { try? FileManager.default.removeItem(at: path) }
+    func testIsBaseDownloadedUsesVerifiedLocalFixture() throws {
+        let data = TestModelFixtures.gguf()
+        let model = TestModelFixtures.text(data: data)
+        defer { ModelManagerService.deleteModel(model) }
+        try TestModelFixtures.install(data, for: model)
 
         XCTAssertTrue(ModelManagerService.isBaseDownloaded(model))
-
-        // Remove and verify.
-        try? FileManager.default.removeItem(at: path)
+        try FileManager.default.removeItem(at: ModelManagerService.baseModelPath(for: model))
         XCTAssertFalse(ModelManagerService.isBaseDownloaded(model))
     }
 
-    func testIsFullyDownloadedRequiresBothFiles() {
-        // For vision models, both base and mmproj must exist locally.
-        let visionModel = AIModel(
-            id: "test-vision-offline",
-            displayName: "Vision Test",
-            description: "Test",
-            modelType: .vision,
-            baseURL: URL(string: "https://example.com/base.gguf")!,
-            mmprojURL: URL(string: "https://example.com/mmproj.gguf")!,
-            baseFileSizeBytes: 100,
-            mmprojFileSizeBytes: 50,
-            baseSHA256: "",
-            mmprojSHA256: "",
-            quantization: "Q4",
-            config: .llama32,
-            minimumDeviceRAM: 0,
+    func testMissingIntegrityMetadataFailsClosed() {
+        let invalid = AIModel(
+            id: "test-vision-offline", displayName: "Vision Test", description: "Test", modelType: .vision,
+            baseURL: URL(string: "https://example.com/base.gguf")!, mmprojURL: URL(string: "https://example.com/mmproj.gguf")!,
+            baseFileSizeBytes: 16, mmprojFileSizeBytes: 16, baseSHA256: "", mmprojSHA256: "",
+            quantization: "Q4", config: .llama32, minimumDeviceRAM: 0,
             license: LicenseInfo(name: "Test", url: URL(string: "https://example.com")!, copyright: "Test")
         )
-        ModelManagerService.ensureModelsDirectory()
-
-        let basePath = ModelManagerService.baseModelPath(for: visionModel)
-        let mmprojPath = ModelManagerService.mmprojModelPath(for: visionModel)
-        defer {
-            try? FileManager.default.removeItem(at: basePath)
-            try? FileManager.default.removeItem(at: mmprojPath)
-        }
-
-        // Neither downloaded.
-        XCTAssertFalse(ModelManagerService.isFullyDownloaded(visionModel))
-
-        // Only base downloaded.
-        FileManager.default.createFile(atPath: basePath.path, contents: Data("base".utf8))
-        XCTAssertFalse(ModelManagerService.isFullyDownloaded(visionModel))
-
-        // Both downloaded.
-        FileManager.default.createFile(atPath: mmprojPath.path, contents: Data("mmproj".utf8))
-        XCTAssertTrue(ModelManagerService.isFullyDownloaded(visionModel))
+        XCTAssertFalse(ModelManagerService.isFullyDownloaded(invalid))
     }
 }
 
@@ -255,7 +288,7 @@ final class OfflineConversationPersistenceTests: XCTestCase {
 
     func testCreateAndFetchConversationOffline() async throws {
         // Create and fetch conversation — pure local operation.
-        let id = await persistence.createConversation(
+        let id = try await persistence.createConversation(
             title: "Offline Chat",
             modelID: "llama3.2-3b-q4"
         )
@@ -268,7 +301,7 @@ final class OfflineConversationPersistenceTests: XCTestCase {
 
     func testInsertAndFetchMessagesOffline() async throws {
         // Insert and fetch messages — pure local operation.
-        let convID = await persistence.createConversation(
+        let convID = try await persistence.createConversation(
             title: "Offline Messages",
             modelID: "llama3.2-3b-q4"
         )
@@ -279,14 +312,14 @@ final class OfflineConversationPersistenceTests: XCTestCase {
         let messages = await persistence.fetchMessages(conversationID: convID)
         XCTAssertEqual(messages.count, 2)
         XCTAssertEqual(messages[0].content, "Hello offline")
-        XCTAssertEqual(messages[0].role, "user")
+        XCTAssertEqual(messages[0].role, .user)
         XCTAssertEqual(messages[1].content, "Hi! I work offline too.")
-        XCTAssertEqual(messages[1].role, "assistant")
+        XCTAssertEqual(messages[1].role, .assistant)
     }
 
     func testStreamingPersistenceOffline() async throws {
         // Streaming lifecycle — pure local Core Data writes.
-        let convID = await persistence.createConversation(
+        let convID = try await persistence.createConversation(
             title: "Offline Streaming",
             modelID: "llama3.2-3b-q4"
         )
@@ -304,12 +337,12 @@ final class OfflineConversationPersistenceTests: XCTestCase {
         let messages = await persistence.fetchMessages(conversationID: convID)
         XCTAssertEqual(messages.count, 1)
         XCTAssertFalse(messages.first?.isStreaming ?? true)
-        XCTAssertTrue(messages.first?.content?.contains("Streaming offline!") ?? false)
+        XCTAssertTrue(messages.first?.content.contains("Streaming offline!") ?? false)
     }
 
     func testConversationPersistenceAfterSimulatedRelaunch() async throws {
         // Simulate creating conversations, then fetching them (as on relaunch).
-        let convID = await persistence.createConversation(
+        let convID = try await persistence.createConversation(
             title: "Persisted Chat",
             modelID: "llama3.2-3b-q4"
         )
@@ -328,7 +361,7 @@ final class OfflineConversationPersistenceTests: XCTestCase {
     }
 
     func testDeleteConversationOffline() async throws {
-        let convID = await persistence.createConversation(
+        let convID = try await persistence.createConversation(
             title: "To Delete Offline",
             modelID: "llama3.2-3b-q4"
         )
@@ -341,7 +374,7 @@ final class OfflineConversationPersistenceTests: XCTestCase {
     }
 
     func testUpdateConversationTitleOffline() async throws {
-        let convID = await persistence.createConversation(
+        let convID = try await persistence.createConversation(
             title: "Original Title",
             modelID: "llama3.2-3b-q4"
         )
@@ -355,7 +388,7 @@ final class OfflineConversationPersistenceTests: XCTestCase {
     func testMultipleConversationsOffline() async throws {
         // Create multiple conversations — all local.
         for index in 0..<5 {
-            let _ = await persistence.createConversation(
+            let _ = try await persistence.createConversation(
                 title: "Conversation \(index)",
                 modelID: "llama3.2-3b-q4"
             )
@@ -367,7 +400,7 @@ final class OfflineConversationPersistenceTests: XCTestCase {
 
     func testCrashRecoveryOffline() async throws {
         // Crash recovery must work without network.
-        let convID = await persistence.createConversation(
+        let convID = try await persistence.createConversation(
             title: "Crash Recovery",
             modelID: "llama3.2-3b-q4"
         )
@@ -449,7 +482,7 @@ final class OfflineInferencePathTests: XCTestCase {
         let localURL = ModelManagerService.baseModelPath(for: model)
 
         try await mockService.loadModel(model, baseURL: localURL, mmprojURL: nil)
-        mockService.unloadModel()
+        await mockService.unloadModel()
 
         let loaded = await mockService.isModelLoaded
         XCTAssertFalse(loaded)
@@ -586,49 +619,26 @@ final class OfflineModelsPageTests: XCTestCase {
         XCTAssertEqual(modelsViewModel.allModels.count, ModelRegistry.allModels.count)
     }
 
-    func testDownloadedModelsDetectedOffline() {
-        // Create a fake downloaded model file.
-        let model = ModelRegistry.llama32_3B
-        ModelManagerService.ensureModelsDirectory()
-        let path = ModelManagerService.baseModelPath(for: model)
-        FileManager.default.createFile(atPath: path.path, contents: Data("fake-gguf".utf8))
-        defer { try? FileManager.default.removeItem(at: path) }
-
-        // Refresh disk status — should detect the file without network.
-        downloadManager.updateStatusesFromDisk()
-
-        let status = downloadManager.status(for: model)
-        XCTAssertTrue(status.isReady, "Model should be detected as downloaded from local disk")
+    func testDownloadedFixtureDetectedOffline() throws {
+        let data = TestModelFixtures.gguf()
+        let model = TestModelFixtures.text(data: data)
+        defer { ModelManagerService.deleteModel(model) }
+        try TestModelFixtures.install(data, for: model)
+        XCTAssertTrue(ModelManagerService.isFullyDownloaded(model))
+        XCTAssertGreaterThan(ModelManagerService.diskUsage(for: model), 0)
     }
 
-    func testModelsPageShowsDownloadedStateWithoutNetwork() {
-        // Simulate a downloaded model.
-        let model = ModelRegistry.llama32_3B
-        ModelManagerService.ensureModelsDirectory()
-        let path = ModelManagerService.baseModelPath(for: model)
-        FileManager.default.createFile(atPath: path.path, contents: Data("fake-gguf".utf8))
-        defer { try? FileManager.default.removeItem(at: path) }
-
+    func testProductionPlaceholderDoesNotAppearDownloaded() {
         downloadManager.updateStatusesFromDisk()
-
-        // ModelsViewModel should report the model as downloaded.
-        XCTAssertTrue(modelsViewModel.isDownloaded(model))
-        XCTAssertTrue(modelsViewModel.hasInstalledModels)
-        XCTAssertEqual(modelsViewModel.installedModels.count, 1)
+        XCTAssertFalse(modelsViewModel.isDownloaded(ModelRegistry.llama32_3B))
     }
 
-    func testDiskUsageReadableOffline() {
-        // Disk usage should be available without network.
-        let model = ModelRegistry.llama32_3B
-        ModelManagerService.ensureModelsDirectory()
-        let path = ModelManagerService.baseModelPath(for: model)
-        FileManager.default.createFile(atPath: path.path, contents: Data(repeating: 0, count: 1024))
-        defer { try? FileManager.default.removeItem(at: path) }
-
-        downloadManager.updateStatusesFromDisk()
-
-        let usage = modelsViewModel.diskUsage(for: model)
-        XCTAssertFalse(usage.isEmpty, "Disk usage should be available offline")
+    func testDiskUsageReadableOffline() throws {
+        let data = TestModelFixtures.gguf(count: 1024)
+        let model = TestModelFixtures.text(data: data)
+        defer { ModelManagerService.deleteModel(model) }
+        try TestModelFixtures.install(data, for: model)
+        XCTAssertFalse(ModelManagerService.formattedDiskUsage(for: model).isEmpty)
     }
 
     func testNoModelsDownloadedShowsEmptyState() {
@@ -667,8 +677,8 @@ final class NetworkIsolationTests: XCTestCase {
         // The models directory must be in the app's sandbox.
         let modelsDir = ModelManagerService.modelsDirectory
         XCTAssertTrue(modelsDir.isFileURL)
-        XCTAssertTrue(modelsDir.path.contains("Documents"))
-        XCTAssertTrue(modelsDir.path.contains("Models"))
+        XCTAssertTrue(modelsDir.path.contains("Application Support"))
+        XCTAssertTrue(modelsDir.path.contains("Models/Installed"))
     }
 
     func testSHA256VerificationIsLocal() {
@@ -732,14 +742,14 @@ final class OfflineFlowIntegrationTests: XCTestCase {
 
     func testRelaunchInAirplaneModeShowsExistingConversations() async throws {
         // Pre-airplane: create conversations and messages.
-        let conv1ID = await persistence.createConversation(
+        let conv1ID = try await persistence.createConversation(
             title: "Chat 1",
             modelID: "llama3.2-3b-q4"
         )
         await persistence.insertMessage(conversationID: conv1ID, role: .user, content: "Question 1")
         await persistence.insertMessage(conversationID: conv1ID, role: .assistant, content: "Answer 1")
 
-        let conv2ID = await persistence.createConversation(
+        let conv2ID = try await persistence.createConversation(
             title: "Chat 2",
             modelID: "llama3.2-3b-q4"
         )
@@ -764,7 +774,7 @@ final class OfflineFlowIntegrationTests: XCTestCase {
 
     func testColdStartShowsExistingConversationsAndCanLoadModel() async throws {
         // Setup: simulate previous session with conversations.
-        let _ = await persistence.createConversation(title: "Previous Chat", modelID: "llama3.2-3b-q4")
+        let _ = try await persistence.createConversation(title: "Previous Chat", modelID: "llama3.2-3b-q4")
 
         // Simulate cold start: conversations load from Core Data.
         let conversations = await persistence.fetchConversations()
@@ -781,7 +791,7 @@ final class OfflineFlowIntegrationTests: XCTestCase {
 
     func testNewConversationCreationOffline() async throws {
         // Create a new conversation — pure local Core Data operation.
-        let convID = await persistence.createConversation(
+        let convID = try await persistence.createConversation(
             title: "Offline New Chat",
             modelID: "llama3.2-3b-q4"
         )
@@ -806,7 +816,7 @@ final class OfflineFlowIntegrationTests: XCTestCase {
 
     func testStreamingWorksOffline() async throws {
         // Create conversation.
-        let convID = await persistence.createConversation(
+        let convID = try await persistence.createConversation(
             title: "Offline Streaming",
             modelID: "llama3.2-3b-q4"
         )
@@ -827,7 +837,7 @@ final class OfflineFlowIntegrationTests: XCTestCase {
         let messages = await persistence.fetchMessages(conversationID: convID)
         XCTAssertEqual(messages.count, 1)
         XCTAssertFalse(messages.first?.isStreaming ?? true)
-        XCTAssertTrue(messages.first?.content?.contains("I work offline!") ?? false)
+        XCTAssertTrue(messages.first?.content.contains("I work offline!") ?? false)
     }
 
     // MARK: - Scenario: Onboarding does not reappear
@@ -847,47 +857,21 @@ final class OfflineFlowIntegrationTests: XCTestCase {
 
     // MARK: - Scenario: Models page shows downloaded models
 
-    func testModelsPageShowsDownloadedModelsOffline() {
-        // Create fake downloaded model files.
-        let model = ModelRegistry.llama32_3B
-        ModelManagerService.ensureModelsDirectory()
-        let path = ModelManagerService.baseModelPath(for: model)
-        FileManager.default.createFile(atPath: path.path, contents: Data("fake-gguf".utf8))
-        defer { try? FileManager.default.removeItem(at: path) }
-
-        // Refresh disk status.
-        downloadManager.updateStatusesFromDisk()
-
-        // Verify model shows as downloaded.
-        let status = downloadManager.status(for: model)
-        XCTAssertTrue(status.isReady, "Downloaded model should show as ready offline")
-    }
-
-    // MARK: - Scenario: Downloaded model loads successfully offline
-
-    func testDownloadedModelLoadsSuccessfullyOffline() async throws {
-        // Create a fake model file.
-        let model = ModelRegistry.llama32_3B
-        ModelManagerService.ensureModelsDirectory()
-        let path = ModelManagerService.baseModelPath(for: model)
-        FileManager.default.createFile(atPath: path.path, contents: Data("fake-gguf".utf8))
-        defer { try? FileManager.default.removeItem(at: path) }
-
-        // Verify file exists locally.
+    func testVerifiedFixtureIsAvailableOffline() throws {
+        let data = TestModelFixtures.gguf()
+        let model = TestModelFixtures.text(data: data)
+        defer { ModelManagerService.deleteModel(model) }
+        try TestModelFixtures.install(data, for: model)
         XCTAssertTrue(ModelManagerService.isBaseDownloaded(model))
-
-        // Model loading should work from local file path.
-        // (In real app, LlamaEngine loads from this path. No network involved.)
-        let localURL = ModelManagerService.baseModelPath(for: model)
-        XCTAssertTrue(localURL.isFileURL)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: localURL.path))
+        XCTAssertTrue(ModelManagerService.isFullyDownloaded(model))
+        XCTAssertTrue(ModelManagerService.baseModelPath(for: model).isFileURL)
     }
 
     // MARK: - Scenario: Chat works offline
 
     func testChatWorksOffline() async throws {
         // Create conversation.
-        let convID = await persistence.createConversation(
+        let convID = try await persistence.createConversation(
             title: "Offline Chat",
             modelID: "llama3.2-3b-q4"
         )
@@ -907,9 +891,9 @@ final class OfflineFlowIntegrationTests: XCTestCase {
         // Verify conversation state.
         let messages = await persistence.fetchMessages(conversationID: convID)
         XCTAssertEqual(messages.count, 2)
-        XCTAssertEqual(messages[0].role, "user")
+        XCTAssertEqual(messages[0].role, .user)
         XCTAssertEqual(messages[0].content, "What is 2+2?")
-        XCTAssertEqual(messages[1].role, "assistant")
+        XCTAssertEqual(messages[1].role, .assistant)
         XCTAssertEqual(messages[1].content, "2+2 equals 4.")
         XCTAssertFalse(messages[1].isStreaming ?? true)
     }

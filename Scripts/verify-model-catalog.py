@@ -24,7 +24,7 @@ class CatalogArtifact(TypedDict):
 
 ROOT = Path(__file__).resolve().parents[1]
 CATALOG = ROOT / "ZiroEdge" / "Models" / "AIModel.swift"
-SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 def parse_size(match: re.Match[str], label: str) -> int:
@@ -46,7 +46,7 @@ def extract_catalog() -> list[CatalogArtifact]:
         model_type = re.search(r"modelType:\s*\.(\w+)", block)
         base_url = re.search(r'baseURL:\s*URL\(string:\s*"([^"]+)"\)', block)
         base_size = re.search(r"baseFileSizeBytes:\s*([0-9_]+)", block)
-        base_hash = re.search(r'baseSHA256:\s*"([^"]+)"', block)
+        base_hash = re.search(r'baseSHA256:\s*"([^"]*)"', block)
         if (
             model_id is None
             or model_type is None
@@ -71,7 +71,7 @@ def extract_catalog() -> list[CatalogArtifact]:
         if model_type.group(1) == "vision":
             projector_url = re.search(r'mmprojURL:\s*URL\(string:\s*"([^"]+)"\)', block)
             projector_size = re.search(r"mmprojFileSizeBytes:\s*([0-9_]+)", block)
-            projector_hash = re.search(r'mmprojSHA256:\s*"([^"]+)"', block)
+            projector_hash = re.search(r'mmprojSHA256:\s*"([^"]*)"', block)
             if (
                 projector_url is None
                 or projector_size is None
@@ -123,7 +123,7 @@ def validate_metadata(artifacts: list[CatalogArtifact]) -> None:
         digest = str(artifact["sha256"])
         if not SHA256_RE.fullmatch(digest):
             raise ValueError(
-                f"invalid SHA-256 for {artifact['model']} {artifact['kind']}"
+                f"invalid SHA-256 for {artifact['model']} {artifact['kind']} sha256"
             )
 
         suffix = "-mmproj.gguf" if artifact["kind"] == "mmproj" else ".gguf"

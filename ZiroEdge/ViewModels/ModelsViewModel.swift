@@ -158,14 +158,14 @@ final class ModelsViewModel: ObservableObject {
     }
 
     /// Confirm deletion.
-    func confirmDelete() {
+    func confirmDelete() async {
         guard let model = pendingDeleteModel else { return }
+        // The engine may mmap the artifact. Finish unloading before deleting it.
+        if lifecycleManager.activeModel?.id == model.id {
+            await lifecycleManager.unloadCurrentModel()
+        }
         downloadManager.deleteModel(model)
         showingDeleteConfirmation = false
         pendingDeleteModel = nil
-        // Unload if this was the active model
-        if lifecycleManager.activeModel?.id == model.id {
-            lifecycleManager.unloadCurrentModel()
-        }
     }
 }
