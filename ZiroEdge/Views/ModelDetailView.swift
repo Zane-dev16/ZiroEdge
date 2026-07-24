@@ -11,6 +11,20 @@ struct ModelDetailView: View {
 
     var body: some View {
         List {
+            Section {
+                VStack(alignment: .leading, spacing: ZiroTheme.Spacing.medium) {
+                    Image(systemName: model.modelType == .vision ? "eye.circle.fill" : "text.bubble.fill")
+                        .font(.largeTitle)
+                        .foregroundStyle(Color.accentColor)
+                        .symbolRenderingMode(.hierarchical)
+                        .accessibilityHidden(true)
+                    Text(model.description)
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.vertical, ZiroTheme.Spacing.small)
+            }
             metadataSection
             downloadSection
             if viewModel.isDownloaded(model) {
@@ -42,12 +56,43 @@ struct ModelDetailView: View {
         Section("Download") {
             let status = viewModel.status(for: model)
 
-            switch status.baseState {
+            switch status.displayState {
             case .notDownloaded:
+                if status.isRepairNeeded || ModelManagerService.isRepairNeeded(for: model) {
+                    Label("This model needs repair. Downloading again will replace damaged files.", systemImage: "wrench.and.screwdriver")
+                        .font(.subheadline)
+                        .foregroundStyle(.orange)
+                }
                 downloadButton
 
             case .downloading(let progress):
                 downloadingRow(progress: progress)
+
+            case .paused(let progress):
+                VStack(alignment: .leading, spacing: ZiroTheme.Spacing.small) {
+                    ProgressView(value: progress) {
+                        Text("Paused")
+                    } currentValueLabel: {
+                        Text("\(Int(progress * 100))%")
+                    }
+                    .accessibilityValue("\(Int(progress * 100)) percent complete")
+
+                    HStack(spacing: ZiroTheme.Spacing.medium) {
+                        Button {
+                            viewModel.resumeDownload(for: model)
+                        } label: {
+                            Label("Resume Download", systemImage: "play.fill")
+                        }
+                        .buttonStyle(.borderedProminent)
+
+                        Button(role: .destructive) {
+                            viewModel.cancelDownload(for: model)
+                        } label: {
+                            Label("Cancel", systemImage: "xmark.circle.fill")
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
 
             case .verifying:
                 HStack {
@@ -99,17 +144,20 @@ struct ModelDetailView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 4)
         }
-        .buttonStyle(.borderedProminent)
+        .buttonStyle(ZiroPrimaryButtonStyle())
+        .accessibilityHint("Downloads the model for offline use")
     }
 
     private func downloadingRow(progress: Double) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 ProgressView(value: progress) {
-                    Text("Downloading...")
+                    Text("Downloading…")
                 } currentValueLabel: {
                     Text("\(Int(progress * 100))%")
                 }
+                .accessibilityLabel("Downloading \(model.displayName)")
+                .accessibilityValue("\(Int(progress * 100)) percent complete")
             }
 
             HStack(spacing: 16) {

@@ -10,7 +10,6 @@ import CryptoKit
 import os
 
 // MARK: - Download Task Wrapper
-
 /// Internal wrapper tracking a single artifact download.
 final class DownloadTask {
     let model: AIModel
@@ -94,7 +93,6 @@ final class DownloadTask {
 }
 
 // MARK: - Network Monitor
-
 /// Simple cellular data detector using NWPathMonitor.
 final class NetworkMonitor: ObservableObject {
     @Published private(set) var isOnCellular = false
@@ -296,24 +294,24 @@ final class DownloadManager: NSObject, ObservableObject {
         let key = "\(model.id)-\(artifact)"
         guard let downloadTask = activeTasks[key] else { return }
 
+        downloadTask.isPaused = true
+        downloadTask.state = .paused(progress: downloadTask.progress)
+
         if downloadTask.isChunked {
-            downloadTask.isPaused = true
             downloadTask.chunkTask?.cancel()
             downloadTask.chunkTask = nil
             closeChunkFile(for: downloadTask)
-            downloadTask.state = .notDownloaded
             print("[DL-CHUNK] \(key): paused at offset \(downloadTask.currentChunkOffset)")
             return
         }
 
         downloadTask.task?.cancel(byProducingResumeData: { [weak self] data in
             Task { @MainActor [weak self] in
-                guard let downloadTask = self?.activeTasks[key] else { return }
-                downloadTask.resumeData = data
-                if let data {
-                    try? data.write(to: downloadTask.resumeDataURL)
-                }
-                downloadTask.state = .notDownloaded
+                guard let self, let pausedTask = self.activeTasks[key], pausedTask.isPaused else { return }
+                pausedTask.resumeData = data
+                if let data { try? data.write(to: pausedTask.resumeDataURL) }
+                pausedTask.state = .paused(progress: pausedTask.progress)
+                self.updateStatus(model: model)
             }
         })
     }
@@ -622,9 +620,10 @@ extension DownloadManager {
             return
         }
 
+        task.isPaused = false
+        task.isCancelled = false
+
         if task.isChunked {
-            task.isPaused = false
-            task.isCancelled = false
             task.state = .downloading(progress: task.progress)
             updateStatus(model: model)
             print("[DL-CHUNK] \(key): resuming chunked download")
@@ -953,8 +952,13 @@ extension DownloadManager: URLSessionDownloadDelegate, URLSessionDataDelegate {
             if let resumeData = nsError?.userInfo[NSURLSessionDownloadTaskResumeData] as? Data {
                 downloadTask.resumeData = resumeData
                 try? resumeData.write(to: downloadTask.resumeDataURL)
-                downloadTask.state = .notDownloaded
-                print("[DL-COMP] \(key): paused with resume data (\(resumeData.count) bytes)")
+            }
+
+            if downloadTask.isPaused {
+                downloadTask.state = .paused(progress: downloadTask.progress)
+                print("[DL-COMP] \(key): paused at \(Int(downloadTask.progress * 100))%")
+                updateStatus(model: downloadTask.model)
+                return
             } else if error != nil {
                 downloadTask.state = .failed(error: .networkError)
                 cleanupPartialFiles(for: downloadTask.model)

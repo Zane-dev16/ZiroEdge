@@ -12,8 +12,7 @@ final class ModelsViewModel: ObservableObject {
 
     // MARK: - Published State
 
-    @Published var showingCellularWarning = false
-    @Published var showingStorageWarning = false
+    @Published var showingDownloadWarning = false
     @Published var pendingDownloadModel: AIModel?
     @Published var showingDeleteConfirmation = false
     @Published var pendingDeleteModel: AIModel?
@@ -87,53 +86,38 @@ final class ModelsViewModel: ObservableObject {
         return ByteCountFormatter.string(fromByteCount: total, countStyle: .file)
     }
 
-    /// Initiate download with appropriate warnings.
+    /// Initiate a download, presenting one consolidated confirmation for all risks.
     func initiateDownload(for model: AIModel) {
-        // Check cellular
+        if downloadManager.networkMonitor.isOnCellular || !downloadManager.hasSufficientStorage(for: model) {
+            pendingDownloadModel = model
+            showingDownloadWarning = true
+            return
+        }
+        downloadManager.startDownload(for: model)
+    }
+
+    var pendingDownloadWarningMessage: String {
+        guard let model = pendingDownloadModel else { return "Review the download details before continuing." }
+        var concerns: [String] = []
         if downloadManager.networkMonitor.isOnCellular {
-            pendingDownloadModel = model
-            showingCellularWarning = true
-            return
+            concerns.append("You are using cellular data for a \(model.formattedSize) download.")
         }
-
-        // Check storage
         if !downloadManager.hasSufficientStorage(for: model) {
-            pendingDownloadModel = model
-            showingStorageWarning = true
-            return
+            concerns.append("Only \(downloadManager.formattedAvailableSpace()) is available, less than the recommended \(model.formattedSize).")
         }
-
-        downloadManager.startDownload(for: model)
+        return concerns.joined(separator: "\n\n")
     }
 
-    /// Proceed with download after cellular warning.
-    func confirmCellularDownload() {
+    func confirmPendingDownload() {
         guard let model = pendingDownloadModel else { return }
-        showingCellularWarning = false
-
-        // Also check storage
-        if !downloadManager.hasSufficientStorage(for: model) {
-            showingStorageWarning = true
-            return
-        }
-
+        showingDownloadWarning = false
         downloadManager.startDownload(for: model)
         pendingDownloadModel = nil
     }
 
-    /// Proceed with download after storage warning.
-    func confirmStorageDownload() {
-        guard let model = pendingDownloadModel else { return }
-        showingStorageWarning = false
-        downloadManager.startDownload(for: model)
-        pendingDownloadModel = nil
-    }
-
-    /// Cancel pending download warnings.
     func cancelPendingDownload() {
         pendingDownloadModel = nil
-        showingCellularWarning = false
-        showingStorageWarning = false
+        showingDownloadWarning = false
     }
 
     /// Pause a download.

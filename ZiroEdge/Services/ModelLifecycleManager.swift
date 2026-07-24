@@ -38,6 +38,8 @@ final class ModelLifecycleManager: ObservableObject {
     @Published private(set) var currentState: ModelState = .unloaded
     @Published private(set) var activeModel: AIModel?
     @Published var showMemoryWarning = false
+    @Published var showInsufficientMemoryWarning = false
+    @Published private(set) var insufficientMemoryMessage: String?
 
     // MARK: - Dependencies
 
@@ -110,9 +112,11 @@ final class ModelLifecycleManager: ObservableObject {
 
         case .insufficientRAM:
             let available = await memoryBudgeter.formattedAvailableRAM()
-            logger.warning("RAM is tight for \(model.id, privacy: .public): \(available, privacy: .public) available. Attempting load anyway...")
-            // Don't block — try to load. OS will kill us if we're wrong.
-            break
+            logger.warning("Blocking unsafe load for \(model.id, privacy: .public): \(available, privacy: .public) available")
+            insufficientMemoryMessage = "\(model.displayName) needs more working memory than the \(available) currently available. Close other apps or choose a smaller model."
+            showInsufficientMemoryWarning = true
+            currentState = activeModel == nil ? .loadFailed : .loaded
+            return
         }
 
         // Get file paths.
@@ -140,14 +144,18 @@ final class ModelLifecycleManager: ObservableObject {
         logger.info("Model unloaded: \(previousModel?.id ?? "none", privacy: .public)")
     }
 
-    /// Switch to a different model. Unloads current, loads new.
+    /// Switch to a different model, restoring the previous model if the new load fails.
     func switchToModel(_ model: AIModel) async {
-        if let active = activeModel, active.id == model.id {
-            return  // Already on this model.
-        }
+        if let active = activeModel, active.id == model.id { return }
 
+        let previousModel = activeModel
         await unloadCurrentModel()
         await loadModel(model)
+
+        if currentState != .loaded, let previousModel {
+            logger.warning("Model switch failed; restoring \(previousModel.id, privacy: .public)")
+            await loadModel(previousModel)
+        }
     }
 
     /// Whether a model is currently loaded and ready.

@@ -1,7 +1,5 @@
 // ModelsView.swift
 // ZiroEdge — Privacy-first local AI assistant
-//
-// Models page — browse, download, and manage on-device AI models.
 
 import SwiftUI
 
@@ -10,168 +8,175 @@ struct ModelsView: View {
 
     var body: some View {
         List {
-            if viewModel.hasInstalledModels {
-                installedSection
-            }
-
+            if !viewModel.hasInstalledModels { introductionSection }
+            if viewModel.hasInstalledModels { installedSection }
             availableSection
         }
-        .overlay {
-            if !viewModel.hasInstalledModels && viewModel.allModels.allSatisfy({ !viewModel.status(for: $0).isDownloading }) {
-                emptyState
-            }
-        }
+        .listStyle(.insetGrouped)
         .navigationTitle("Models")
         .navigationBarTitleDisplayMode(.large)
-        .alert("Cellular Data", isPresented: $viewModel.showingCellularWarning) {
-            Button("Download Anyway") {
-                viewModel.confirmCellularDownload()
-            }
-            Button("Cancel", role: .cancel) {
-                viewModel.cancelPendingDownload()
-            }
+        .alert("Review Download", isPresented: $viewModel.showingDownloadWarning) {
+            Button("Download Anyway") { viewModel.confirmPendingDownload() }
+            Button("Cancel", role: .cancel) { viewModel.cancelPendingDownload() }
         } message: {
-            Text("You're on cellular data. Model downloads can be large (\(viewModel.pendingDownloadModel?.formattedSize ?? "")). Continue?")
-        }
-        .alert("Low Storage", isPresented: $viewModel.showingStorageWarning) {
-            Button("Download Anyway") {
-                viewModel.confirmStorageDownload()
-            }
-            Button("Cancel", role: .cancel) {
-                viewModel.cancelPendingDownload()
-            }
-        } message: {
-            let model = viewModel.pendingDownloadModel
-            Text("This model requires \(model?.formattedSize ?? "") but only \(viewModel.downloadManager.formattedAvailableSpace()) is available. The download may fail.")
+            Text(viewModel.pendingDownloadWarningMessage)
         }
         .confirmationDialog("Delete Model", isPresented: $viewModel.showingDeleteConfirmation) {
-            Button("Delete", role: .destructive) {
-                Task { await viewModel.confirmDelete() }
-            }
+            Button("Delete", role: .destructive) { Task { await viewModel.confirmDelete() } }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Are you sure you want to delete \(viewModel.pendingDeleteModel?.displayName ?? "this model")? You'll need to download it again.")
+            Text("Delete \(viewModel.pendingDeleteModel?.displayName ?? "this model")? You can download it again later.")
         }
     }
 
-    // MARK: - Installed Models Section
+    private var introductionSection: some View {
+        Section {
+            VStack(alignment: .leading, spacing: ZiroTheme.Spacing.medium) {
+                Label("Runs entirely on your device", systemImage: "lock.shield")
+                    .font(.headline)
+                    .foregroundStyle(Color.accentColor)
+                Text("Download one model to begin. Larger models can be more capable, while smaller models load faster and use less memory.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.vertical, ZiroTheme.Spacing.small)
+        }
+    }
 
     private var installedSection: some View {
-        Section("Installed") {
+        Section("On This Device") {
             ForEach(viewModel.allModels.filter { viewModel.isDownloaded($0) }) { model in
-                NavigationLink {
-                    ModelDetailView(model: model, viewModel: viewModel)
-                } label: {
-                    HStack {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
-                            .font(.title3)
-
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(model.displayName)
-                                .font(.headline)
-                            Text("\(model.quantization) · \(viewModel.diskUsage(for: model)) used")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-
-                        Spacer()
-                    }
-                    .padding(.vertical, 4)
+                NavigationLink { ModelDetailView(model: model, viewModel: viewModel) } label: {
+                    ModelRow(
+                        model: model,
+                        subtitle: "\(model.quantization) · \(viewModel.diskUsage(for: model)) used",
+                        status: .installed
+                    )
                 }
             }
         }
     }
 
-    // MARK: - Available Models Section
-
     private var availableSection: some View {
-        Section(viewModel.hasInstalledModels ? "Available" : "All Models") {
+        Section(viewModel.hasInstalledModels ? "Available to Download" : "Choose a Model") {
             ForEach(viewModel.allModels.filter { !viewModel.isDownloaded($0) }) { model in
-                NavigationLink {
-                    ModelDetailView(model: model, viewModel: viewModel)
-                } label: {
-                    modelRow(model)
+                HStack(spacing: ZiroTheme.Spacing.small) {
+                    NavigationLink { ModelDetailView(model: model, viewModel: viewModel) } label: {
+                        modelRow(model)
+                    }
+                    if viewModel.status(for: model).isDownloading {
+                        Button { viewModel.cancelDownload(for: model) } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.title3)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel("Cancel \(model.displayName) download")
+                    }
                 }
             }
         }
     }
 
     private func modelRow(_ model: AIModel) -> some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(model.displayName)
-                    .font(.headline)
+        let status = viewModel.status(for: model)
+        return HStack(spacing: ZiroTheme.Spacing.medium) {
+            VStack(alignment: .leading, spacing: ZiroTheme.Spacing.xSmall) {
+                HStack(spacing: ZiroTheme.Spacing.small) {
+                    Text(model.displayName).font(.headline)
+                    if model.modelType == .vision {
+                        Text("VISION")
+                            .font(.caption2.weight(.bold))
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .foregroundStyle(.purple)
+                            .background(Color.purple.opacity(0.1), in: Capsule())
+                    }
+                }
+                Text(model.description)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
                 Text("\(model.formattedSize) · \(model.quantization)")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.tertiary)
             }
-
-            Spacer()
-
-            downloadIndicator(model)
+            Spacer(minLength: ZiroTheme.Spacing.small)
+            downloadIndicator(model, status: status)
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, ZiroTheme.Spacing.small)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(model.displayName), \(model.description), \(model.formattedSize), \(statusAccessibilityLabel(status))")
     }
 
     @ViewBuilder
-    private func downloadIndicator(_ model: AIModel) -> some View {
-        let status = viewModel.status(for: model)
-
-        switch status.baseState {
+    private func downloadIndicator(_ model: AIModel, status: ModelDownloadStatus) -> some View {
+        switch status.displayState {
         case .downloading(let progress):
-            VStack(spacing: 4) {
-                ProgressView(value: progress)
-                    .frame(width: 80)
+            VStack(alignment: .trailing, spacing: ZiroTheme.Spacing.xSmall) {
+                ProgressView(value: progress).frame(width: 64)
                 Text("\(Int(progress * 100))%")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .font(.caption2).foregroundStyle(.secondary).monospacedDigit()
             }
+            .accessibilityHidden(true)
+        case .paused(let progress):
+            Label("\(Int(progress * 100))%", systemImage: "pause.circle.fill")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
         case .verifying:
-            ProgressView()
-                .frame(width: 80)
+            VStack(spacing: ZiroTheme.Spacing.xSmall) {
+                ProgressView()
+                Text("Verifying").font(.caption2).foregroundStyle(.secondary)
+            }
+        case .failed:
+            Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.red)
+                .accessibilityLabel("Download failed")
         default:
-            Button {
-                viewModel.initiateDownload(for: model)
-            } label: {
+            if status.isRepairNeeded || ModelManagerService.isRepairNeeded(for: model) {
+                Text("Repair")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.orange)
+                    .accessibilityLabel("Repair \(model.displayName)")
+            } else {
                 Image(systemName: "arrow.down.circle")
                     .font(.title2)
-                    .foregroundStyle(.blue)
+                    .foregroundStyle(Color.accentColor)
+                    .accessibilityLabel("Download \(model.displayName)")
             }
-            .buttonStyle(.plain)
         }
     }
 
-    // MARK: - Empty State
+    private func statusAccessibilityLabel(_ status: ModelDownloadStatus) -> String {
+        switch status.displayState {
+        case .downloading(let progress): return "downloading, \(Int(progress * 100)) percent complete"
+        case .paused(let progress): return "paused, \(Int(progress * 100)) percent complete"
+        case .verifying: return "verifying download"
+        case .failed: return "download failed"
+        case .cancelled: return "download cancelled"
+        case .downloaded: return "installed"
+        case .notDownloaded: return "available to download"
+        }
+    }
+}
 
-    private var emptyState: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "arrow.down.circle.dotted")
-                .font(.system(size: 56))
-                .foregroundStyle(.tertiary)
+private struct ModelRow: View {
+    enum Status { case installed }
+    let model: AIModel
+    let subtitle: String
+    let status: Status
 
-            Text("No Models Installed")
-                .font(.title2.bold())
-
-            Text("Download a model to start chatting with your private AI assistant.")
-                .font(.body)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 40)
-
-            if let firstModel = viewModel.allModels.first {
-                Button {
-                    viewModel.initiateDownload(for: firstModel)
-                } label: {
-                    Label("Download \(firstModel.displayName)", systemImage: "arrow.down.circle.fill")
-                        .font(.body.weight(.medium))
-                        .padding(.horizontal, 24)
-                        .padding(.vertical, 12)
-                }
-                .buttonStyle(.borderedProminent)
-                .clipShape(Capsule())
+    var body: some View {
+        HStack(spacing: ZiroTheme.Spacing.medium) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.title3).foregroundStyle(.green).accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: ZiroTheme.Spacing.xSmall) {
+                Text(model.displayName).font(.headline)
+                Text(subtitle).font(.caption).foregroundStyle(.secondary)
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.vertical, ZiroTheme.Spacing.xSmall)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(model.displayName), installed, \(subtitle)")
     }
 }

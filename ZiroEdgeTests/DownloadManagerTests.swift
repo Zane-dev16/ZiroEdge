@@ -62,6 +62,13 @@ final class DownloadManagerTests: XCTestCase {
         XCTAssertTrue(state.isActive)
     }
 
+    func testDownloadStatePausedProperties() {
+        let state = DownloadState.paused(progress: 0.5)
+        XCTAssertFalse(state.isDownloaded)
+        XCTAssertFalse(state.isDownloading)
+        XCTAssertFalse(state.isActive)
+    }
+
     func testDownloadStateVerifyingProperties() {
         let state = DownloadState.verifying
         XCTAssertFalse(state.isDownloaded)
@@ -101,11 +108,10 @@ final class DownloadManagerTests: XCTestCase {
     }
 
     func testStateTransitionDownloadingToPaused() {
-        // Simulate pause: downloading → notDownloaded (with resume data held separately)
         var state: DownloadState = .downloading(progress: 0.5)
         XCTAssertTrue(state.isDownloading)
 
-        state = .notDownloaded  // Paused state maps to notDownloaded in our model
+        state = .paused(progress: 0.5)
         XCTAssertFalse(state.isDownloading)
         XCTAssertFalse(state.isActive)
     }
@@ -179,6 +185,14 @@ final class DownloadManagerTests: XCTestCase {
             mmprojState: .downloading(progress: 0.4)
         )
         XCTAssertEqual(status.overallProgress, 0.6, accuracy: 0.01)
+    }
+
+    func testModelDownloadStatusPreservesPausedProgress() {
+        let status = ModelDownloadStatus(
+            baseState: .paused(progress: 0.65),
+            mmprojState: nil
+        )
+        XCTAssertEqual(status.overallProgress, 0.65, accuracy: 0.01)
     }
 
     // MARK: - Storage Checking

@@ -20,6 +20,7 @@ enum ArtifactType: Sendable, Hashable {
 enum DownloadState: Sendable, Hashable {
     case notDownloaded
     case downloading(progress: Double)      // 0.0 ... 1.0
+    case paused(progress: Double)           // resumable progress retained
     case verifying                          // SHA-256 check in progress
     case downloaded                         // Verified and ready
     case failed(error: DownloadError)       // Download or verification failed
@@ -165,11 +166,30 @@ struct ModelDownloadStatus: Sendable, Hashable {
         baseState.isDownloading || (mmprojState?.isDownloading ?? false)
     }
 
+    /// A single state for catalog/detail presentation of paired artifacts.
+    var displayState: DownloadState {
+        let states = [baseState, mmprojState].compactMap { $0 }
+        if isReady { return .downloaded }
+        if isDownloading { return .downloading(progress: overallProgress) }
+        if states.contains(where: { if case .paused = $0 { true } else { false } }) {
+            return .paused(progress: overallProgress)
+        }
+        if states.contains(.verifying) { return .verifying }
+        if let failure = states.compactMap({ state -> DownloadError? in
+            if case .failed(let error) = state { return error }
+            return nil
+        }).first {
+            return .failed(error: failure)
+        }
+        if states.contains(.cancelled) { return .cancelled }
+        return .notDownloaded
+    }
+
     /// Overall progress (0.0 ... 1.0). Averages base and mmproj if both present.
     var overallProgress: Double {
         let baseProgress: Double
         switch baseState {
-        case .downloading(let progress): baseProgress = progress
+        case .downloading(let progress), .paused(let progress): baseProgress = progress
         case .downloaded: baseProgress = 1.0
         default: baseProgress = 0.0
         }
@@ -180,7 +200,7 @@ struct ModelDownloadStatus: Sendable, Hashable {
 
         let mmprojProgress: Double
         switch mmproj {
-        case .downloading(let progress): mmprojProgress = progress
+        case .downloading(let progress), .paused(let progress): mmprojProgress = progress
         case .downloaded: mmprojProgress = 1.0
         default: mmprojProgress = 0.0
         }
