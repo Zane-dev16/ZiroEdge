@@ -25,6 +25,8 @@ final class ChatViewModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var showError: Bool = false
     @Published var streamingText: String = ""
+    @Published private(set) var isLoadingConversation = false
+    @Published private(set) var activeConversationSystemPrompt: String?
     @Published private(set) var hasPersistenceRecovery = false
     @Published private(set) var recoveryExportURL: URL?
 
@@ -79,8 +81,9 @@ final class ChatViewModel: ObservableObject {
 
     // MARK: - UserDefaults Keys
 
-    private enum DefaultsKeys {
+    enum DefaultsKeys {
         static let lastUsedModelID = "lastUsedModelID"
+        static let defaultSystemPrompt = "defaultSystemPrompt"
     }
 
     // MARK: - Initialization
@@ -136,42 +139,96 @@ final class ChatViewModel: ObservableObject {
 
     /// Select a model and persist the choice. Loads it if not already loaded.
     func selectModel(_ model: AIModel) async {
+        let previousSelection = selectedModel
         selectedModel = model
-        UserDefaults.standard.set(model.id, forKey: DefaultsKeys.lastUsedModelID)
 
-        // Switch model in lifecycle manager if different from current.
         if lifecycleManager.activeModel?.id != model.id {
             isSwitchingModel = true
             await lifecycleManager.switchToModel(model)
             isSwitchingModel = false
         }
+
+        if lifecycleManager.activeModel?.id == model.id {
+            selectedModel = model
+            UserDefaults.standard.set(model.id, forKey: DefaultsKeys.lastUsedModelID)
+            UISelectionFeedbackGenerator().selectionChanged()
+        } else {
+            // Lifecycle manager may have restored the previous model after a failed switch.
+            selectedModel = lifecycleManager.activeModel ?? previousSelection
+        }
     }
 
     func loadConversation(_ conversationID: UUID) async {
-        activeConversationID = conversationID
+        let previousConversationID = activeConversationID
         loadGeneration += 1
         let myGeneration = loadGeneration
+        isLoadingConversation = true
+        truncationWarning = nil
 
-        let result = await persistence.fetchMessagesResult(conversationID: conversationID)
+        async let messagesResult = persistence.fetchMessagesResult(conversationID: conversationID)
+        async let conversationsResult = persistence.fetchConversationsResult()
+        let (messageResult, conversationResult) = await (messagesResult, conversationsResult)
         guard loadGeneration == myGeneration else { return }
 
-        switch result {
-        case .success(let fetched):
-            messages = fetched
-            errorMessage = nil
-        case .failure(let failure):
-            // Keep the previous transcript visible; an unavailable store is not an empty chat.
-            errorMessage = failure.localizedDescription
+        guard case .success(let fetched) = messageResult,
+              case .success(let conversations) = conversationResult,
+              let conversation = conversations.first(where: { $0.id == conversationID }) else {
+            isLoadingConversation = false
+            if case .failure(let failure) = messageResult {
+                errorMessage = failure.localizedDescription
+            } else if case .failure(let failure) = conversationResult {
+                errorMessage = failure.localizedDescription
+            } else {
+                errorMessage = "The selected conversation is no longer available."
+            }
+            showError = true
+            conversationListViewModel?.selectedConversationID = previousConversationID
+            return
         }
+
+        // Commit identity and content together so a failed fetch can never pair the
+        // previous transcript with the newly selected conversation.
+        activeConversationID = conversationID
+        messages = fetched
+        activeConversationSystemPrompt = conversation.systemPrompt
+        tokenCount = min(
+            contextWindowSize,
+            fetched.reduce(0) { $0 + max(1, $1.content.count / 4) }
+        )
         truncationWarning = nil
-        // Token count reset happens via resetTokenCount() when appropriate
+        errorMessage = nil
+
+        if let model = ModelRegistry.allModels.first(where: { $0.id == conversation.modelID }) {
+            if availableModels.contains(where: { $0.id == model.id }) {
+                await selectModel(model)
+            } else {
+                selectedModel = model
+                needsModelRedirect = true
+            }
+        }
+        guard loadGeneration == myGeneration else { return }
+        isLoadingConversation = false
+    }
+
+    /// Clear transient transcript state when the selected conversation disappears.
+    func clearActiveConversation() {
+        loadGeneration += 1
+        activeConversationID = nil
+        messages = []
+        streamingText = ""
+        tokenCount = 0
+        isLoadingConversation = false
+        truncationWarning = nil
+        activeConversationSystemPrompt = nil
     }
 
     func createNewConversation(modelID: String? = nil) async -> UUID? {
         let resolvedModelID = modelID ?? selectedModel?.id ?? ModelRegistry.llama32_3B.id
+        let defaultPrompt = UserDefaults.standard.string(forKey: DefaultsKeys.defaultSystemPrompt)
         let result = await persistence.createConversationResult(
             title: "New Conversation",
-            modelID: resolvedModelID
+            modelID: resolvedModelID,
+            systemPrompt: defaultPrompt?.nilIfBlank
         )
         guard case .success(let id) = result else {
             if case .failure(let error) = result {
@@ -198,9 +255,10 @@ final class ChatViewModel: ObservableObject {
         }
 
         guard !text.isEmpty || hasImages else { return nil }
+        guard !isLoadingConversation else { return nil }
 
         if selectedModel == nil { autoSelectModel() }
-        guard selectedModel != nil else { needsModelRedirect = true; return nil }
+        guard let selectedModel else { needsModelRedirect = true; return nil }
 
         if hasImages && !isVisionModel {
             visionWarning = "Vision not supported with text-only model. Switch to a vision model."
@@ -209,9 +267,13 @@ final class ChatViewModel: ObservableObject {
         guard let conversationID = activeConversationID else {
             errorMessage = "No active conversation."; showError = true; return nil
         }
-        guard lifecycleManager.isModelLoaded else {
-            errorMessage = "No model loaded. (state=\(lifecycleManager.currentState))"
-            showError = true; return nil
+        if lifecycleManager.activeModel?.id != selectedModel.id {
+            await selectModel(selectedModel)
+        }
+        guard lifecycleManager.activeModel?.id == selectedModel.id else {
+            errorMessage = "\(selectedModel.displayName) could not be loaded. Choose another downloaded model."
+            showError = true
+            return nil
         }
         return conversationID
     }
@@ -225,6 +287,7 @@ final class ChatViewModel: ObservableObject {
         ) else { return }
 
         inputText = ""
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
         let isFirstExchange = messages.isEmpty
         let firstUserMessage = text
         let imagesToSend = hasImages ? pendingImages : []
@@ -298,20 +361,22 @@ final class ChatViewModel: ObservableObject {
                 self.hasPersistenceRecovery = await self.sessionActor.recoveryHandle != nil
                 if !self.hasPersistenceRecovery { self.streamingText = "" }
                 self.errorMessage = error.localizedDescription; self.showError = true
+                UINotificationFeedbackGenerator().notificationOccurred(.error)
                 if !self.hasPersistenceRecovery { await self.loadConversation(conversationID) }
             }
         }
 
+        let systemPrompt = effectiveSystemPrompt
         if hasImages {
             await sessionActor.startVisionStream(
                 conversationID: conversationID, messages: history, images: images,
-                systemPrompt: nil, sampling: .default,
+                systemPrompt: systemPrompt, sampling: .default,
                 onToken: onToken, onComplete: onComplete, onError: onError
             )
         } else {
             await sessionActor.startStream(
                 conversationID: conversationID, messages: history,
-                systemPrompt: nil, sampling: .default,
+                systemPrompt: systemPrompt, sampling: .default,
                 onToken: onToken, onComplete: onComplete, onError: onError
             )
         }
@@ -376,6 +441,29 @@ final class ChatViewModel: ObservableObject {
     func presentBackgroundPersistenceFailure(_ failure: PersistenceFailure) {
         errorMessage = failure.localizedDescription
         showError = true
+    }
+
+    var effectiveSystemPrompt: String? {
+        activeConversationSystemPrompt?.nilIfBlank
+            ?? UserDefaults.standard.string(forKey: DefaultsKeys.defaultSystemPrompt)?.nilIfBlank
+    }
+
+    func updateSystemPrompt(_ prompt: String?) async -> Bool {
+        guard let activeConversationID else { return false }
+        let normalized = prompt?.nilIfBlank
+        switch await persistence.updateConversationSystemPrompt(
+            id: activeConversationID,
+            systemPrompt: normalized
+        ) {
+        case .success:
+            activeConversationSystemPrompt = normalized
+            await conversationListViewModel?.loadConversations()
+            return true
+        case .failure(let failure):
+            errorMessage = failure.localizedDescription
+            showError = true
+            return false
+        }
     }
 
     // MARK: - Branching
@@ -452,6 +540,13 @@ final class ChatViewModel: ObservableObject {
         UIPasteboard.general.string = message.content
     }
 
+}
+
+private extension String {
+    var nilIfBlank: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
 }
 
 extension ChatViewModel {

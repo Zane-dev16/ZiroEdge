@@ -24,9 +24,10 @@ final class ChatUXTests: XCTestCase {
     }
 
     private func makeViewModel(
-        provider: MockDownloadStatusProvider = MockDownloadStatusProvider()
+        provider: MockDownloadStatusProvider = MockDownloadStatusProvider(),
+        persistence suppliedPersistence: PersistenceController? = nil
     ) -> ChatViewModel {
-        let persistence = PersistenceController(inMemory: true)
+        let persistence = suppliedPersistence ?? PersistenceController(inMemory: true)
         let inferenceService = InferenceService()
         let memoryBudgeter = MemoryBudgeter()
         let lifecycleManager = ModelLifecycleManager(
@@ -165,6 +166,61 @@ final class ChatUXTests: XCTestCase {
         XCTAssertNil(viewModel.truncationWarning, "Warning should reset when loading a conversation")
     }
 
+    func testFailedConversationLoadKeepsPreviousIdentityAndTranscript() async throws {
+        let fetchError = NSError(
+            domain: "ChatUXTests",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "Injected fetch failure"]
+        )
+        let faults = ScriptedPersistenceFaultInjector([
+            .succeed(.fetch),
+            .succeed(.fetch),
+            .fail(.fetch, error: fetchError)
+        ])
+        let persistence = try await PersistenceController.open(
+            configuration: .inMemory,
+            faultInjector: faults
+        ).get()
+        let firstID = try await persistence.createConversation(title: "First", modelID: "test-model")
+        let secondID = try await persistence.createConversation(title: "Second", modelID: "test-model")
+        _ = await persistence.insertMessage(
+            conversationID: firstID,
+            role: .user,
+            content: "First transcript"
+        )
+        let viewModel = makeViewModel(persistence: persistence)
+
+        await viewModel.loadConversation(firstID)
+        XCTAssertEqual(viewModel.activeConversationID, firstID)
+        XCTAssertEqual(viewModel.messages.map(\.content), ["First transcript"])
+
+        await viewModel.loadConversation(secondID)
+
+        XCTAssertEqual(viewModel.activeConversationID, firstID)
+        XCTAssertEqual(viewModel.messages.map(\.content), ["First transcript"])
+        XCTAssertTrue(viewModel.showError)
+    }
+
+    func testConversationSystemPromptOverridesDefault() async throws {
+        UserDefaults.standard.set(
+            "Default instructions",
+            forKey: ChatViewModel.DefaultsKeys.defaultSystemPrompt
+        )
+        let persistence = PersistenceController(inMemory: true)
+        let conversationID = try await persistence.createConversation(
+            title: "Prompt Test",
+            modelID: "test-model"
+        )
+        let viewModel = makeViewModel(persistence: persistence)
+
+        await viewModel.loadConversation(conversationID)
+        XCTAssertEqual(viewModel.effectiveSystemPrompt, "Default instructions")
+
+        let didUpdate = await viewModel.updateSystemPrompt("Conversation instructions")
+        XCTAssertTrue(didUpdate)
+        XCTAssertEqual(viewModel.effectiveSystemPrompt, "Conversation instructions")
+    }
+
     // MARK: - Token Count Tests
 
     /// Token count starts at 0.
@@ -206,6 +262,7 @@ final class ChatUXTests: XCTestCase {
 
     override func tearDown() {
         super.tearDown()
-        UserDefaults.standard.removeObject(forKey: "lastUsedModelID")
+        UserDefaults.standard.removeObject(forKey: ChatViewModel.DefaultsKeys.lastUsedModelID)
+        UserDefaults.standard.removeObject(forKey: ChatViewModel.DefaultsKeys.defaultSystemPrompt)
     }
 }

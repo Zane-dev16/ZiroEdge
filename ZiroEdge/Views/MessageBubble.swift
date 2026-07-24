@@ -27,7 +27,7 @@ struct MessageBubble: View {
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             if message.role == .user {
-                Spacer(minLength: 60)
+                Spacer(minLength: ZiroTheme.Spacing.xLarge)
             }
 
             VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 4) {
@@ -40,8 +40,9 @@ struct MessageBubble: View {
                                     Image(uiImage: uiImage)
                                         .resizable()
                                         .scaledToFit()
-                                        .frame(maxWidth: 200, maxHeight: 200)
-                                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                                        .frame(maxWidth: 240, maxHeight: 240)
+                                        .clipShape(RoundedRectangle(cornerRadius: ZiroTheme.Radius.control))
+                                        .accessibilityLabel("Message attachment")
                                 }
                             }
                         }
@@ -53,37 +54,28 @@ struct MessageBubble: View {
                 if message.role == .user {
                     Text(message.content)
                         .font(.body)
-                        .foregroundStyle(.white)
+                        .foregroundStyle(ZiroTheme.accentForeground)
                         .padding(.horizontal, 16)
                         .padding(.vertical, 10)
                         .background(Color.accentColor)
-                        .clipShape(RoundedRectangle(cornerRadius: 18))
+                        .clipShape(RoundedRectangle(cornerRadius: ZiroTheme.Radius.bubble))
+                        .accessibilityLabel("You said: \(message.content)")
                 } else {
                     VStack(alignment: .leading, spacing: 0) {
                         if isStreaming {
-                            // Inline cursor appended to rendered text so it
-                            // appears at the end of the last line, not below it.
-                            let rendered: AttributedString = {
-                                var attributed = MarkdownRenderer.render(displayContent)
-                                var cursor = AttributedString("|")
-                                cursor.font = .body
-                                cursor.foregroundColor = Color.accentColor
-                                attributed.append(cursor)
-                                return attributed
-                            }()
-                            Text(rendered)
-                                .font(.body)
-                                .textSelection(.enabled)
+                            StreamingText(content: displayContent)
+                                .accessibilityLabel("Assistant response: \(displayContent)")
                         } else {
                             Text(markdown: displayContent)
                                 .font(.body)
                                 .textSelection(.enabled)
+                                .accessibilityLabel("Assistant said: \(displayContent)")
                         }
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 10)
-                    .background(Color(.systemGray6))
-                    .clipShape(RoundedRectangle(cornerRadius: 18))
+                    .background(ZiroTheme.elevatedBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: ZiroTheme.Radius.bubble))
                 }
 
                 // Action buttons (assistant messages only).
@@ -94,23 +86,26 @@ struct MessageBubble: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
+                        .accessibilityLabel("Copy message")
 
                         Button(action: { onBranch?() }) {
                             Image(systemName: "arrow.branch")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
+                        .accessibilityLabel("Branch from this message")
                     }
                     .padding(.horizontal, 4)
                 }
             }
 
             if message.role == .assistant {
-                Spacer(minLength: 60)
+                Spacer(minLength: ZiroTheme.Spacing.xLarge)
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 4)
+        .frame(maxWidth: 680)
+        .padding(.horizontal, ZiroTheme.Spacing.large)
+        .padding(.vertical, ZiroTheme.Spacing.xSmall)
     }
 
     /// The content to display — streaming text or final content.
@@ -124,20 +119,34 @@ struct MessageBubble: View {
 
 // MARK: - Streaming Cursor
 
-/// Pulsing cursor shown at the end of streaming text.
-struct StreamingCursor: View {
-    @State private var opacity: Double = 1.0
+/// Renders the cursor in the same attributed string so it follows the final character.
+private struct StreamingText: View {
+    let content: String
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        RoundedRectangle(cornerRadius: 1)
-            .fill(Color.accentColor)
-            .frame(width: 2, height: 16)
-            .opacity(opacity)
-            .onAppear {
-                withAnimation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true)) {
-                    opacity = 0.2
+        Group {
+            if reduceMotion {
+                renderedText(cursorVisible: true)
+            } else {
+                TimelineView(.periodic(from: .now, by: 0.6)) { context in
+                    renderedText(
+                        cursorVisible: Int(context.date.timeIntervalSinceReferenceDate / 0.6).isMultiple(of: 2)
+                    )
                 }
             }
+        }
+        .font(.body)
+        .textSelection(.enabled)
+    }
+
+    private func renderedText(cursorVisible: Bool) -> Text {
+        var attributed = MarkdownRenderer.render(content)
+        var cursor = AttributedString("|")
+        cursor.font = .body
+        cursor.foregroundColor = cursorVisible ? Color.accentColor : Color.clear
+        attributed.append(cursor)
+        return Text(attributed)
     }
 }
 
