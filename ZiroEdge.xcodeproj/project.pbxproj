@@ -31,6 +31,7 @@
 		66F76D92B9DB37CED1C2AA59 /* SmokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7DDE172A4D2ECAC5AA71B1A5 /* SmokeTests.swift */; };
 		686630E424CFE805D2DFF0DD /* AIModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32A1B26312450DA02CEE7FAB /* AIModel.swift */; };
 		6B18737E73095D7D03349865 /* PersistenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 485FDC26529D0AF9B6E09E0B /* PersistenceTests.swift */; };
+		6B453409BFCB1A50CCC640EE /* DesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C563BC0716330716D90F31C /* DesignSystem.swift */; };
 		6E284EC7281342E8F5C26AFC /* ModelPickerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A5A18C444159747CDBEDD3D /* ModelPickerTests.swift */; };
 		72281CE48FE3448A94C6CDE8 /* TestModelFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1631E6F3835369F5427EC553 /* TestModelFixtures.swift */; };
 		7567C2C0CD09466D8BC141F4 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6ADBDBAD091EDC6CCD412E3 /* ChatView.swift */; };
@@ -124,6 +125,7 @@
 		9334EC3A1F208FD70B485C18 /* InferenceService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InferenceService.swift; sourceTree = "<group>"; };
 		9A623A7B1E1E06B4160F44CA /* ModelsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelsViewModel.swift; sourceTree = "<group>"; };
 		9B97EFCBFFC3BE0B802BFD9D /* StoreRecoveryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreRecoveryView.swift; sourceTree = "<group>"; };
+		9C563BC0716330716D90F31C /* DesignSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignSystem.swift; sourceTree = "<group>"; };
 		A2802F283B93429E948CFE33 /* MarkdownRendererTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownRendererTests.swift; sourceTree = "<group>"; };
 		A35AD63865EAEAC04D551263 /* RecoveryHandle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecoveryHandle.swift; sourceTree = "<group>"; };
 		A6095A8B796761917100D204 /* CDChatMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CDChatMessage.swift; sourceTree = "<group>"; };
@@ -202,6 +204,7 @@
 			isa = PBXGroup;
 			children = (
 				C6ADBDBAD091EDC6CCD412E3 /* ChatView.swift */,
+				9C563BC0716330716D90F31C /* DesignSystem.swift */,
 				E1A40DF4E9C684D2C73CBEE7 /* LicenseView.swift */,
 				055D135A1B4377C36387DB65 /* MessageBubble.swift */,
 				387DC457818126F788BDBB8A /* ModelDetailView.swift */,
@@ -505,6 +508,7 @@
 				7567C2C0CD09466D8BC141F4 /* ChatView.swift in Sources */,
 				15557FE21A9C5AA0E6C0D7F4 /* ChatViewModel.swift in Sources */,
 				F308DB4C6A26B32606DFBBDF /* ConversationListViewModel.swift in Sources */,
+				6B453409BFCB1A50CCC640EE /* DesignSystem.swift in Sources */,
 				A63E207897851000F9975EDD /* DownloadManager.swift in Sources */,
 				FAFB727A010ED8FB1963778B /* DownloadState.swift in Sources */,
 				3AF49EDEE1F2E195EFAD49AC /* DownloadTransport.swift in Sources */,
