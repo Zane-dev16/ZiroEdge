@@ -57,9 +57,9 @@ error: Could not get lib darwin path
 ```
 
 This is an Xcode 26.6/iOS 26.5 toolchain limitation. No TSan-clean runtime claim
-is made. Normal builds succeed, but current Release/archive logs still report a
-`DownloadManager` non-`Sendable` capture warning that must be resolved before
-adopting Swift 6 language mode.
+is made. Normal builds succeed without warnings from project-owned source. The
+vendored `swift-llama-cpp` wrapper still emits Swift 6 isolation and pointer-
+lifetime warnings that must be resolved before adopting Swift 6 language mode.
 
 ### Static and metadata validation
 
