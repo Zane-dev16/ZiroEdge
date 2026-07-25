@@ -78,58 +78,61 @@ final class ModelLifecycleManager: ObservableObject {
 
     /// Load a model. Checks memory budget first. Unloads current model if needed.
     func loadModel(_ model: AIModel) async {
-        print("[LOAD] loadModel(\(model.id)) — currentState=\(currentState)")
         guard case .ready = ModelManagerService.availability(for: model) else {
             logger.error("Refusing to load unavailable or unverified model: \(model.id, privacy: .public)")
             currentState = .loadFailed
             return
         }
-        // Don't reload if already loaded.
         if let active = activeModel, active.id == model.id, currentState == .loaded {
-            print("[LOAD] SKIP: already loaded")
             logger.info("Model already loaded: \(model.id, privacy: .public)")
             return
         }
 
-        print("[LOAD] Setting state to .loading")
         currentState = .loading
+        MemoryDiagnosticRecorder.shared.capture(.beforeModelLoad)
 
-        // Check memory budget.
-        let recommendation = await memoryBudgeter.recommendation(for: model)
-        print("[LOAD] Memory recommendation: \(recommendation)")
-        switch recommendation {
-        case .proceed:
-            break  // Good to go.
+        var decision = await memoryBudgeter.decision(for: model)
+        if decision.recommendation == .unloadCurrentFirst, activeModel != nil {
+            logger.info("Unloading current model to make room for \(model.id, privacy: .public)")
+            await unloadCurrentModel()
+            // Reclaim is asynchronous. Recheck instead of assuming the unload made the load safe.
+            try? await Task.sleep(nanoseconds: 500_000_000)  // 0.5s
+            decision = await memoryBudgeter.decision(for: model)
+        }
 
-        case .unloadCurrentFirst:
-            // Unload current model to free RAM.
-            if activeModel != nil {
-                logger.info("Unloading current model to make room for \(model.id, privacy: .public)")
-                await unloadCurrentModel()
-                // Give the system a moment to reclaim memory.
-                try? await Task.sleep(nanoseconds: 500_000_000)  // 0.5s
+        if decision.recommendation != .proceed {
+            if MemoryDiagnosticRecorder.shared.unsafeLoadOverrideEnabled {
+                logger.fault("DEBUG override accepted unsafe load for \(model.id, privacy: .public): \(decision.logSummary, privacy: .public)")
+            } else {
+                logger.warning("Blocking unsafe load for \(model.id, privacy: .public): \(decision.logSummary, privacy: .public)")
+                insufficientMemoryMessage = decision.alertMessage(modelName: model.displayName)
+                showInsufficientMemoryWarning = true
+                currentState = activeModel == nil ? .loadFailed : .loaded
+                return
             }
-
-        case .insufficientRAM:
-            let available = await memoryBudgeter.formattedAvailableRAM()
-            logger.warning("Blocking unsafe load for \(model.id, privacy: .public): \(available, privacy: .public) available")
-            insufficientMemoryMessage = "\(model.displayName) needs more working memory than the \(available) currently available. Close other apps or choose a smaller model."
-            showInsufficientMemoryWarning = true
-            currentState = activeModel == nil ? .loadFailed : .loaded
-            return
         }
 
         // Get file paths.
         let baseURL = ModelManagerService.baseModelPath(for: model)
         let mmprojURL = model.requiresMMProj ? ModelManagerService.mmprojModelPath(for: model) : nil
 
-        // Load the model.
+        // Load the model, context, and optional multimodal projector.
+        let loadStarted = ContinuousClock.now
         do {
             try await inferenceService.loadModel(model, baseURL: baseURL, mmprojURL: mmprojURL)
             activeModel = model
             currentState = .loaded
+            MemoryDiagnosticRecorder.shared.capture(
+                .afterModelLoad,
+                elapsedMilliseconds: loadStarted.elapsedMilliseconds
+            )
             logger.info("Model loaded: \(model.id, privacy: .public)")
         } catch {
+            MemoryDiagnosticRecorder.shared.capture(
+                .afterModelLoad,
+                elapsedMilliseconds: loadStarted.elapsedMilliseconds,
+                error: error.localizedDescription
+            )
             logger.error("Model load failed: \(error.localizedDescription, privacy: .public)")
             currentState = .loadFailed
         }
@@ -137,10 +140,15 @@ final class ModelLifecycleManager: ObservableObject {
 
     /// Unload the current model, freeing memory.
     func unloadCurrentModel() async {
+        let unloadStarted = ContinuousClock.now
         await inferenceService.unloadModel()
         let previousModel = activeModel
         activeModel = nil
         currentState = .unloaded
+        MemoryDiagnosticRecorder.shared.capture(
+            .afterUnload,
+            elapsedMilliseconds: unloadStarted.elapsedMilliseconds
+        )
         logger.info("Model unloaded: \(previousModel?.id ?? "none", privacy: .public)")
     }
 
@@ -167,6 +175,7 @@ final class ModelLifecycleManager: ObservableObject {
     // MARK: - Memory Pressure
 
     @objc private func handleMemoryPressure() {
+        MemoryDiagnosticRecorder.shared.capture(.memoryWarning)
         logger.warning("Memory pressure received — evicting model")
         guard currentState == .loaded else { return }
         Task {
@@ -193,27 +202,22 @@ final class ModelLifecycleManager: ObservableObject {
 
     /// Load the first fully downloaded model. Used for UI testing.
     func autoLoadFirstModel() async {
-        print("[AUTOLOAD] autoLoadFirstModel called — activeModel=\(activeModel?.id ?? "nil")")
-        guard activeModel == nil else {
-            print("[AUTOLOAD] SKIP: model already loaded (\(activeModel!.id))")
+        guard activeModel == nil else { return }
+
+        let candidates: [AIModel]
+        if MemoryDiagnosticRecorder.shared.isEnabled,
+           let target = ModelRegistry.model(for: MemoryDiagnosticRecorder.targetModelID) {
+            candidates = [target]
+        } else {
+            candidates = ModelRegistry.allModels
+        }
+
+        guard let model = candidates.first(where: ModelManagerService.isFullyDownloaded) else {
+            logger.warning("autoLoadFirstModel: required model is not installed and verified")
             return
         }
-        
-        // Check each model's download status
-        for model in ModelRegistry.allModels {
-            let isDL = ModelManagerService.isFullyDownloaded(model)
-            print("[AUTOLOAD]   \(model.id): downloaded=\(isDL)")
-        }
-        
-        guard let model = ModelRegistry.allModels.first(where: { ModelManagerService.isFullyDownloaded($0) }) else {
-            print("[AUTOLOAD] FAIL: no downloaded models found")
-            logger.warning("autoLoadFirstModel: no downloaded models found")
-            return
-        }
-        print("[AUTOLOAD] Selected: \(model.id), loading...")
         logger.info("autoLoadFirstModel: loading \(model.id, privacy: .public)")
         await loadModel(model)
-        print("[AUTOLOAD] loadModel returned — currentState=\(self.currentState), isLoaded=\(self.isModelLoaded)")
     }
 }
 

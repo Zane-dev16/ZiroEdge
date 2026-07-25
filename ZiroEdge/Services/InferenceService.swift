@@ -37,6 +37,29 @@ protocol InferenceServiceProtocol: Sendable {
 
 // MARK: - Inference Service
 
+private final class MemoryPeakAccumulator: @unchecked Sendable {
+    private let lock = NSLock()
+    private var peak: MemorySnapshot
+
+    init(initial: MemorySnapshot) {
+        peak = initial
+    }
+
+    func record(_ snapshot: MemorySnapshot) {
+        lock.lock()
+        defer { lock.unlock() }
+        if snapshot.physicalFootprintBytes > peak.physicalFootprintBytes {
+            peak = snapshot
+        }
+    }
+
+    func snapshot() -> MemorySnapshot {
+        lock.lock()
+        defer { lock.unlock() }
+        return peak
+    }
+}
+
 /// Production implementation of InferenceServiceProtocol.
 /// Manages the lifecycle of the underlying LlamaEngine.
 actor InferenceService: InferenceServiceProtocol {
@@ -74,7 +97,6 @@ actor InferenceService: InferenceServiceProtocol {
     // MARK: - Model Loading
 
     func loadModel(_ model: AIModel, baseURL: URL, mmprojURL: URL?) async throws {
-        print("[INFERENCE-LOAD] loadModel(\(model.id)) from \(baseURL.path)")
         // Wait for any pending cancellation or unload to complete before loading.
         await waitForPendingCancellation()
         await pendingUnload?.value
@@ -86,7 +108,6 @@ actor InferenceService: InferenceServiceProtocol {
 
         // Validate file exists.
         let baseExists = FileManager.default.fileExists(atPath: baseURL.path)
-        print("[INFERENCE-LOAD] base file exists: \(baseExists), size: \(baseExists ? (try? FileManager.default.attributesOfItem(atPath: baseURL.path)[.size] as? Int64) ?? 0 : 0)")
         guard baseExists else {
             throw InferenceError.modelFileNotFound(path: baseURL.path)
         }
@@ -109,18 +130,13 @@ actor InferenceService: InferenceServiceProtocol {
             gpuLayers: config.gpuLayers
         )
 
-        // Create the engine.
-        print("[INFERENCE-LOAD] Creating LlamaEngine...")
-        let startTime = Date()
+        // Creating the engine loads the model, context, and optional multimodal projector.
         let newEngine = try LlamaEngine(config: engineConfig)
-        let elapsed = Date().timeIntervalSince(startTime)
-        print("[INFERENCE-LOAD] Engine created in \(String(format: "%.1f", elapsed))s")
         engine = newEngine
         _loadedModelID = model.id
         currentConfig = config
         currentModel = model
 
-        print("[INFERENCE-LOAD] SUCCESS — engine set, modelID=\(model.id)")
         logger.info("Model loaded successfully: \(model.id, privacy: .public)")
     }
 
@@ -202,12 +218,17 @@ actor InferenceService: InferenceServiceProtocol {
             repeatPenalty: sampling.repeatPenalty
         )
 
-        // Stream from the engine.
-        return try await eng.streamCompletion(
+        let prefillStarted = ContinuousClock.now
+        let stream = try await eng.streamCompletion(
             prompt: prompt,
             addBos: config.addBos,
             stopStrings: config.stopStrings,
             sampling: engineSampling
+        )
+        return instrumentGenerationPeak(
+            stream,
+            firstEvaluationCheckpoint: .firstTextPrefill,
+            evaluationStarted: prefillStarted
         )
     }
 
@@ -265,14 +286,81 @@ actor InferenceService: InferenceServiceProtocol {
             repeatPenalty: sampling.repeatPenalty
         )
 
-        // Stream from the engine using vision completion.
-        return try await eng.streamVisionCompletion(
+        let imageEvaluationStarted = ContinuousClock.now
+        let stream = try await eng.streamVisionCompletion(
             prompt: visionPrompt,
             images: images,
             addBos: config.addBos,
             stopStrings: config.stopStrings,
             sampling: engineSampling
         )
+        return instrumentGenerationPeak(
+            stream,
+            firstEvaluationCheckpoint: .firstImageEval,
+            evaluationStarted: imageEvaluationStarted
+        )
+    }
+
+    private func instrumentGenerationPeak(
+        _ source: AsyncThrowingStream<String, Error>,
+        firstEvaluationCheckpoint: MemoryCheckpoint,
+        evaluationStarted: ContinuousClock.Instant
+    ) -> AsyncThrowingStream<String, Error> {
+        guard MemoryDiagnosticRecorder.shared.isEnabled else { return source }
+
+        return AsyncThrowingStream { continuation in
+            let task = Task {
+                let accumulator = MemoryPeakAccumulator(
+                    initial: MemorySnapshotReader.capture(.generationPeak)
+                )
+                let sampler = Task {
+                    while !Task.isCancelled {
+                        accumulator.record(MemorySnapshotReader.capture(.generationPeak))
+                        do {
+                            try await Task.sleep(for: .milliseconds(100))
+                        } catch {
+                            break
+                        }
+                    }
+                }
+                var generationStarted: ContinuousClock.Instant?
+
+                do {
+                    for try await token in source {
+                        if generationStarted == nil {
+                            generationStarted = .now
+                            MemoryDiagnosticRecorder.shared.capture(
+                                firstEvaluationCheckpoint,
+                                elapsedMilliseconds: evaluationStarted.elapsedMilliseconds
+                            )
+                        }
+                        accumulator.record(MemorySnapshotReader.capture(.generationPeak))
+                        continuation.yield(token)
+                    }
+                    sampler.cancel()
+                    await sampler.value
+                    let elapsed = generationStarted?.elapsedMilliseconds
+                        ?? evaluationStarted.elapsedMilliseconds
+                    MemoryDiagnosticRecorder.shared.persist(
+                        accumulator.snapshot().addingDiagnosticMetadata(elapsedMilliseconds: elapsed)
+                    )
+                    continuation.finish()
+                } catch {
+                    sampler.cancel()
+                    await sampler.value
+                    let elapsed = generationStarted?.elapsedMilliseconds
+                        ?? evaluationStarted.elapsedMilliseconds
+                    MemoryDiagnosticRecorder.shared.persist(
+                        accumulator.snapshot().addingDiagnosticMetadata(
+                            elapsedMilliseconds: elapsed,
+                            error: error.localizedDescription
+                        )
+                    )
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
     }
 
     // MARK: - Cancellation

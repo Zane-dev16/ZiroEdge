@@ -31,9 +31,18 @@ struct ZiroEdgeApp: App {
             rootView
                 .task {
                     guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
+                    if MemoryDiagnosticRecorder.shared.isEnabled {
+                        MemoryDiagnosticRecorder.shared.resetLog()
+                        MemoryDiagnosticRecorder.shared.capture(.cold)
+                    }
                     await runtime.start()
                 }
                 .onChange(of: scenePhase) { _, phase in
+                    if phase == .background {
+                        MemoryDiagnosticRecorder.shared.capture(.background)
+                    } else if phase == .active {
+                        MemoryDiagnosticRecorder.shared.capture(.foreground)
+                    }
                     guard phase == .background,
                           case .ready(let services) = runtime.state else { return }
                     Task {
@@ -142,6 +151,9 @@ struct MainView: View {
     @State private var showSettings = false
     @State private var showModelsFromPicker = false
     @State private var compactPath: [UUID] = []
+#if DEBUG
+    @State private var memoryDiagnosticWorkloadState = "workload-starting"
+#endif
 
     private var hasModels: Bool {
         ModelRegistry.allModels.contains { downloadManager.status(for: $0).isReady }
@@ -203,7 +215,54 @@ struct MainView: View {
                 chatViewModel.needsModelRedirect = false
             }
         }
+#if DEBUG
+        .task {
+            guard MemoryDiagnosticRecorder.shared.controlledWorkloadEnabled else { return }
+            for _ in 0..<240 where !lifecycleManager.isModelLoaded {
+                if lifecycleManager.currentState == .loadFailed { break }
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+            guard lifecycleManager.isModelLoaded else {
+                memoryDiagnosticWorkloadState = "workload-failed-initial-load"
+                return
+            }
+            memoryDiagnosticWorkloadState = await MemoryDiagnosticWorkload.run(
+                lifecycleManager: lifecycleManager,
+                inferenceService: inferenceService
+            ) { state in
+                memoryDiagnosticWorkloadState = state
+            }
+        }
+        .overlay(alignment: .bottom) {
+            if MemoryDiagnosticRecorder.shared.isEnabled {
+                Text(memoryDiagnosticState)
+                    .font(.caption2)
+                    .accessibilityIdentifier("memory-diagnostic-state")
+                    .padding(4)
+            }
+        }
+#endif
     }
+
+#if DEBUG
+    private var memoryDiagnosticState: String {
+        let targetID = MemoryDiagnosticRecorder.targetModelID
+        guard let target = ModelRegistry.model(for: targetID),
+              ModelManagerService.isFullyDownloaded(target) else {
+            return "missing-\(targetID)"
+        }
+        if MemoryDiagnosticRecorder.shared.controlledWorkloadEnabled {
+            return memoryDiagnosticWorkloadState
+        }
+        if lifecycleManager.activeModel?.id == targetID, lifecycleManager.currentState == .loaded {
+            return "loaded-\(targetID)"
+        }
+        if lifecycleManager.showInsufficientMemoryWarning {
+            return "blocked-\(targetID)"
+        }
+        return "\(lifecycleManager.currentState)-\(targetID)"
+    }
+#endif
 
     private var compactNavigation: some View {
         NavigationStack(path: $compactPath) {
@@ -330,7 +389,7 @@ struct SettingsView: View {
     @State private var modelToDelete: AIModel?
 
     /// Memory values (loaded async from actor).
-    @State private var availableRAM: String = "Loading..."
+    @State private var appMemoryHeadroom: String = "Loading..."
     @State private var totalRAM: String = "Loading..."
 
     private static let privacyPolicyURL = URL(string: "https://ziroedge.app/privacy")
@@ -423,9 +482,13 @@ struct SettingsView: View {
                 }
 
                 // Memory section.
-                Section("Memory") {
-                    LabeledContent("Available RAM", value: availableRAM)
+                Section {
+                    LabeledContent("App Memory Headroom", value: appMemoryHeadroom)
                     LabeledContent("Total Device RAM", value: totalRAM)
+                } header: {
+                    Text("Memory")
+                } footer: {
+                    Text("App Memory Headroom is the memory iOS allowed ZiroEdge at the latest model load check, or a current sample before the first check. It is not unused device RAM.")
                 }
 
                 // Legal section.
@@ -501,7 +564,7 @@ struct SettingsView: View {
 
     @MainActor
     private func refreshMemoryInfo() async {
-        availableRAM = await memoryBudgeter.formattedAvailableRAM()
+        appMemoryHeadroom = await memoryBudgeter.formattedAppMemoryHeadroom()
         totalRAM = await memoryBudgeter.formattedTotalRAM()
     }
 }
