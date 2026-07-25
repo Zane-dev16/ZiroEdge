@@ -126,7 +126,11 @@ final class MemoryDiagnosticRecorder: @unchecked Sendable {
     private var contextPhase: String?
 
     var isEnabled: Bool {
+#if DEBUG
         CommandLine.arguments.contains("--memory-diagnostic")
+#else
+        false
+#endif
     }
 
     var unsafeLoadOverrideEnabled: Bool {
@@ -215,6 +219,7 @@ final class MemoryDiagnosticRecorder: @unchecked Sendable {
                 defer { try? handle.close() }
                 try handle.seekToEnd()
                 try handle.write(contentsOf: Data((line + "\n").utf8))
+                try handle.synchronize()
             } else {
                 try Data((line + "\n").utf8).write(to: url, options: .atomic)
             }
