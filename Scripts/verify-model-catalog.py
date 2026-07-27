@@ -36,37 +36,59 @@ def parse_size(match: re.Match[str], label: str) -> int:
 
 def extract_catalog() -> list[CatalogArtifact]:
     source = CATALOG.read_text(encoding="utf-8")
-    # Reference entries are intentionally not production catalog entries.
+    # Reference and DEBUG calibration identities are not production catalog entries.
     source = source.split("/* Reference:", 1)[0]
+    source = re.sub(r"#if DEBUG.*?#endif", "", source, flags=re.DOTALL)
     models: list[CatalogArtifact] = []
-    pattern = re.compile(r"static let\s+\w+\s*=\s*AIModel\((.*?)\n    \)", re.DOTALL)
+    symbols: dict[str, CatalogArtifact] = {}
+    seen_artifacts: set[tuple[str, int, str, str]] = set()
+    pattern = re.compile(r"static let\s+(\w+)\s*=\s*AIModel\((.*?)\n    \)", re.DOTALL)
 
-    for block in pattern.findall(source):
+    reference_patterns = {
+        "baseURL": re.compile(r"baseURL:\s*(\w+)\.baseURL"),
+        "baseSHA256": re.compile(r"baseSHA256:\s*(\w+)\.baseSHA256"),
+    }
+
+    def resolve_string(block, field, literal_pattern):
+        literal = literal_pattern.search(block)
+        if literal:
+            return literal.group(1)
+        reference = reference_patterns[field].search(block)
+        if reference and reference.group(1) in symbols:
+            return symbols[reference.group(1)][
+                {"baseURL": "url", "baseSHA256": "sha256"}[field]
+            ]
+        raise ValueError(f"Could not resolve {field} from AIModel.swift")
+
+    def resolve_size(block):
+        literal = re.search(r"baseFileSizeBytes:\s*([0-9_]+)", block)
+        if literal:
+            return parse_size(literal, "base artifact")
+        reference = re.search(r"baseFileSizeBytes:\s*(\w+)\.baseFileSizeBytes", block)
+        if reference and reference.group(1) in symbols:
+            return symbols[reference.group(1)]["size"]
+        raise ValueError("Could not resolve baseFileSizeBytes from AIModel.swift")
+
+    for symbol, block in pattern.findall(source):
         model_id = re.search(r'id:\s*"([^"]+)"', block)
         model_type = re.search(r"modelType:\s*\.(\w+)", block)
-        base_url = re.search(r'baseURL:\s*URL\(string:\s*"([^"]+)"\)', block)
-        base_size = re.search(r"baseFileSizeBytes:\s*([0-9_]+)", block)
-        base_hash = re.search(r'baseSHA256:\s*"([^"]*)"', block)
-        if (
-            model_id is None
-            or model_type is None
-            or base_url is None
-            or base_size is None
-            or base_hash is None
-        ):
-            raise ValueError(
-                "Could not parse a complete base artifact from AIModel.swift"
-            )
-
-        artifacts: list[CatalogArtifact] = [
-            {
-                "model": model_id.group(1),
-                "kind": "base",
-                "url": base_url.group(1),
-                "size": parse_size(base_size, f"{model_id.group(1)} base"),
-                "sha256": base_hash.group(1),
-            }
-        ]
+        if model_id is None or model_type is None:
+            raise ValueError("Could not parse a production AIModel identity")
+        base_artifact: CatalogArtifact = {
+            "model": model_id.group(1),
+            "kind": "base",
+            "url": resolve_string(
+                block,
+                "baseURL",
+                re.compile(r'baseURL:\s*URL\(string:\s*"([^"]+)"\)'),
+            ),
+            "size": resolve_size(block),
+            "sha256": resolve_string(
+                block, "baseSHA256", re.compile(r'baseSHA256:\s*"([^"]*)"')
+            ),
+        }
+        symbols[symbol] = base_artifact
+        artifacts: list[CatalogArtifact] = [base_artifact]
 
         if model_type.group(1) == "vision":
             projector_url = re.search(r'mmprojURL:\s*URL\(string:\s*"([^"]+)"\)', block)
@@ -90,7 +112,16 @@ def extract_catalog() -> list[CatalogArtifact]:
                 }
             )
 
-        models.extend(artifacts)
+        for artifact in artifacts:
+            identity = (
+                artifact["kind"],
+                artifact["size"],
+                artifact["sha256"],
+                artifact["url"],
+            )
+            if identity not in seen_artifacts:
+                seen_artifacts.add(identity)
+                models.append(artifact)
 
     if not models:
         raise ValueError("No production catalog artifacts found")
@@ -133,27 +164,41 @@ def validate_metadata(artifacts: list[CatalogArtifact]) -> None:
         destinations.add(destination)
 
 
-def verify_download(artifact: CatalogArtifact) -> None:
-    request = Request(
-        str(artifact["url"]),
-        headers={"User-Agent": "ZiroEdge-catalog-release-check/1"},
-    )
+def verify_download(artifact: CatalogArtifact, timeout: int) -> None:
     expected_size = artifact["size"]
     expected_hash = str(artifact["sha256"]).lower()
     actual_size = 0
     digest = hashlib.sha256()
+    request_chunk_size = 64 * 1024 * 1024
 
     with tempfile.NamedTemporaryFile(
         prefix="ziroedge-catalog-", suffix=".gguf"
     ) as clean_file:
-        with urlopen(request, timeout=120) as response:
-            while True:
-                chunk = response.read(1024 * 1024)
-                if not chunk:
-                    break
-                clean_file.write(chunk)
-                digest.update(chunk)
-                actual_size += len(chunk)
+        while actual_size < expected_size:
+            range_end = min(actual_size + request_chunk_size, expected_size) - 1
+            request = Request(
+                str(artifact["url"]),
+                headers={
+                    "User-Agent": "ZiroEdge-catalog-release-check/1",
+                    "Range": f"bytes={actual_size}-{range_end}",
+                },
+            )
+            received_this_request = 0
+            with urlopen(request, timeout=timeout) as response:
+                if actual_size > 0 and response.status != 206:
+                    raise ValueError("server stopped honoring ranged verification")
+                while True:
+                    chunk = response.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    clean_file.write(chunk)
+                    digest.update(chunk)
+                    actual_size += len(chunk)
+                    received_this_request += len(chunk)
+            if received_this_request == 0:
+                raise ValueError("server returned an empty ranged response")
+            if actual_size > expected_size:
+                raise ValueError("server returned bytes beyond catalog size")
         clean_file.flush()
 
         actual_hash = digest.hexdigest()
@@ -171,6 +216,12 @@ def verify_download(artifact: CatalogArtifact) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=900,
+        help="per-socket operation timeout in seconds (default: 900)",
+    )
     parser.add_argument(
         "--model",
         action="append",
@@ -191,7 +242,7 @@ def main() -> int:
                 "none of the requested model IDs exist in the production catalog"
             )
         for artifact in selected:
-            verify_download(artifact)
+            verify_download(artifact, args.timeout)
     except Exception as error:  # noqa: BLE001 - release check should report one concise failure
         print(f"catalog verification failed: {error}", file=sys.stderr)
         return 1

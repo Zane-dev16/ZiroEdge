@@ -3,16 +3,19 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-OUTPUT_DIR="$PROJECT_DIR/test-output/memory-diagnostic"
+RUN_STAMP="$(date -u +'%Y%m%dT%H%M%SZ')"
+OUTPUT_DIR="${RAM_DIAGNOSTIC_OUTPUT_DIR:-$PROJECT_DIR/test-output/memory-diagnostic-$RUN_STAMP}"
 PROJECT="$PROJECT_DIR/ZiroEdge.xcodeproj"
 EXPECTATION="observe"
 DESTINATION=""
 MODE="device"
-UNSAFE_OVERRIDE=0
+CALIBRATION_LOAD=0
 CONTROLLED_WORKLOAD=0
+PROFILE=text
+MODEL=e4b
 
 usage() {
-	echo "Usage: $0 [--expect observe|load|block] [--unsafe-override] [--controlled-workload] [--device UDID|--simulator]"
+	echo "Usage: $0 [--expect observe|load|block] [--calibration-load] [--controlled-workload] [--model llama|e2b|e4b] [--profile text|vision] [--device UDID|--simulator]"
 }
 
 while (($#)); do
@@ -30,13 +33,21 @@ while (($#)); do
 		MODE=simulator
 		shift
 		;;
-	--unsafe-override)
-		UNSAFE_OVERRIDE=1
+	--calibration-load)
+		CALIBRATION_LOAD=1
 		shift
 		;;
 	--controlled-workload)
 		CONTROLLED_WORKLOAD=1
 		shift
+		;;
+	--model)
+		MODEL="${2:?missing model}"
+		shift 2
+		;;
+	--profile)
+		PROFILE="${2:?missing profile}"
+		shift 2
 		;;
 	*)
 		usage
@@ -50,30 +61,43 @@ case "$EXPECTATION" in observe | load | block) ;; *)
 	exit 64
 	;;
 esac
-if ((UNSAFE_OVERRIDE)) && [[ "$EXPECTATION" != load ]]; then
-	echo "--unsafe-override requires --expect load" >&2
-	exit 64
-fi
-if ((CONTROLLED_WORKLOAD)) && ((!UNSAFE_OVERRIDE)); then
-	echo "--controlled-workload requires --unsafe-override" >&2
-	exit 64
-fi
-
-case "$EXPECTATION:$UNSAFE_OVERRIDE:$CONTROLLED_WORKLOAD" in
-observe:0:0) UI_TEST=testObserveGemmaMemoryOutcome ;;
-load:0:0) UI_TEST=testAssertGemmaLoads ;;
-load:1:0) UI_TEST=testAssertGemmaLoadsWithUnsafeOverride ;;
-load:1:1) UI_TEST=testControlledGemmaWorkloadWithUnsafeOverride ;;
-block:0:0) UI_TEST=testAssertGemmaIsBlocked ;;
-*)
+case "$PROFILE" in text | vision) ;; *)
 	usage
 	exit 64
 	;;
 esac
+case "$MODEL" in llama | e2b | e4b) ;; *)
+	usage
+	exit 64
+	;;
+esac
+if ((CALIBRATION_LOAD)) && [[ "$EXPECTATION" != load ]]; then
+	echo "--calibration-load requires --expect load" >&2
+	exit 64
+fi
+if [[ "$EXPECTATION" == load ]] && ((!CONTROLLED_WORKLOAD)); then
+	echo "load requires --controlled-workload --calibration-load" >&2
+	exit 64
+fi
+if ((CONTROLLED_WORKLOAD)) && ((!CALIBRATION_LOAD)); then
+	echo "--controlled-workload requires --calibration-load" >&2
+	exit 64
+fi
+if [[ "$MODEL" == llama && "$PROFILE" != text ]]; then
+	echo "Llama supports only the text profile" >&2
+	exit 64
+fi
+if [[ "$MODEL" == e2b && "$PROFILE" != vision ]]; then
+	echo "E2B text prompts run inside its paired vision profile; calibrate that exact shape with --profile vision" >&2
+	exit 64
+fi
 
 cd "$PROJECT_DIR"
 xcodegen generate
-rm -rf "$OUTPUT_DIR"
+if [[ -e "$OUTPUT_DIR" ]] && [[ -n "$(find "$OUTPUT_DIR" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]; then
+	echo "Refusing to overwrite existing diagnostic artifacts: $OUTPUT_DIR" >&2
+	exit 73
+fi
 mkdir -p "$OUTPUT_DIR"
 date -u +'%Y-%m-%dT%H:%M:%SZ' >"$OUTPUT_DIR/run-start-utc.txt"
 
@@ -90,7 +114,36 @@ elif [[ -z "$DESTINATION" ]]; then
 	exit 64
 fi
 
-echo "destination=$DESTINATION expectation=$EXPECTATION"
+case "$MODEL:$PROFILE" in
+llama:text)
+	CALIBRATION_MODEL_ID=llama3.2-3b-q4
+	TARGET_SUFFIX=Llama
+	;;
+e2b:vision)
+	CALIBRATION_MODEL_ID=gemma-4-e2b-q4
+	TARGET_SUFFIX=E2BVision
+	;;
+e4b:text)
+	CALIBRATION_MODEL_ID=gemma-4-e4b-q4-text-calibration
+	TARGET_SUFFIX=E4BText
+	;;
+e4b:vision)
+	CALIBRATION_MODEL_ID=gemma-4-e4b-q4
+	TARGET_SUFFIX=E4BVision
+	;;
+esac
+
+case "$EXPECTATION:$CALIBRATION_LOAD:$CONTROLLED_WORKLOAD" in
+observe:0:0) UI_TEST="testObserve${TARGET_SUFFIX}MemoryOutcome" ;;
+load:1:1) UI_TEST="testControlled${TARGET_SUFFIX}Workload" ;;
+block:0:0) UI_TEST="testBlock${TARGET_SUFFIX}UnvalidatedProfile" ;;
+*)
+	usage
+	exit 64
+	;;
+esac
+
+echo "destination=$DESTINATION expectation=$EXPECTATION model=$CALIBRATION_MODEL_ID profile=$PROFILE"
 set +e
 xcodebuild test \
 	-project "$PROJECT" \
@@ -119,6 +172,12 @@ set -e
 grep -E '\[ZIRO-MEMORY(-OUTCOME)?\]' "$OUTPUT_DIR/ui-tests.log" >"$OUTPUT_DIR/records.log" || true
 
 ARTIFACT_FAILURE=0
+for required in unit-tests.log ui-tests.log unit-tests.xcresult ui-tests.xcresult run-start-utc.txt; do
+	if [[ ! -e "$OUTPUT_DIR/$required" ]]; then
+		echo "[RAM-DIAGNOSE] ERROR: required artifact missing: $required" >&2
+		ARTIFACT_FAILURE=1
+	fi
+done
 if [[ "$MODE" == device ]]; then
 	DEVICE_ID="${DESTINATION#id=}"
 
@@ -142,6 +201,15 @@ print(" ".join(checkpoints))
 PY
 			); then
 				echo "[RAM-DIAGNOSE] Recovered JSONL with checkpoints: $CHECKPOINTS"
+				if ((CONTROLLED_WORKLOAD)); then
+					if ! python3 "$SCRIPT_DIR/validate_memory_calibration.py" \
+						"$JSONL_DEST" \
+						--model-id "$CALIBRATION_MODEL_ID" \
+						--mode "$PROFILE" \
+						--summary "$OUTPUT_DIR/calibration-summary.json"; then
+						ARTIFACT_FAILURE=1
+					fi
+				fi
 			else
 				echo "[RAM-DIAGNOSE] ERROR: recovered JSONL is not valid" >&2
 				ARTIFACT_FAILURE=1
@@ -169,4 +237,4 @@ if ((UI_TEST_STATUS != 0)); then
 	exit "$UI_TEST_STATUS"
 fi
 
-printf 'Memory diagnostic passed: expectation=%s destination=%s\n' "$EXPECTATION" "$DESTINATION"
+printf 'Memory diagnostic passed: expectation=%s profile=%s destination=%s\n' "$EXPECTATION" "$PROFILE" "$DESTINATION"

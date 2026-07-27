@@ -38,11 +38,9 @@ Everything runs on your device. No data ever leaves your phone.
 
 ## Models
 
-| Model | Type | Quant | Size | RAM Floor |
-|-------|------|-------|------|-----------|
-| Llama 3.2 3B | Text | Q4_K_M | ~2 GB | 3.5 GB |
+Catalog artifacts remain available for storage and verification work, but runtime profiles are hidden from normal chat until their exact configurations pass physical-device acceptance. Download size is never used as a RAM estimate.
 
-Vision models (Phase 2): SmolVLM 500M, Qwen 2.5-VL 3B.
+See [Runtime memory profiles and calibration](docs/memory-profiles.md) for current evidence, disabled profiles, the production formula, and physical calibration commands.
 
 ## Setup
 
