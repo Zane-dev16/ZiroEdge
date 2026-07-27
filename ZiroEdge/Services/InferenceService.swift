@@ -71,6 +71,9 @@ actor InferenceService: InferenceServiceProtocol {
 
     /// The currently loaded model ID.
     private var _loadedModelID: String?
+#if DEBUG
+    private var hermeticModelLoaded = false
+#endif
 
     /// The current model configuration.
     private var currentConfig: ModelConfiguration?
@@ -84,10 +87,33 @@ actor InferenceService: InferenceServiceProtocol {
     /// Pending stream cancellation — awaited before starting more engine work.
     private var pendingCancellation: Task<Void, Never>?
 
+    private let loadSafetyStore: LoadSafetyStore
+
+    init(loadSafetyStore: LoadSafetyStore) {
+        self.loadSafetyStore = loadSafetyStore
+    }
+
+#if DEBUG
+    /// Isolated convenience for previews and tests. Production wiring must supply
+    /// the throwing, persistent store created by AppRuntime.
+    init() {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ZiroEdge-LoadSafety-\(UUID().uuidString)")
+        do {
+            self.loadSafetyStore = try LoadSafetyStore(directory: directory)
+        } catch {
+            preconditionFailure("Could not create isolated test load-safety storage")
+        }
+    }
+#endif
+
     // MARK: - State
 
     var isModelLoaded: Bool {
-        engine != nil
+#if DEBUG
+        if hermeticModelLoaded { return true }
+#endif
+        return engine != nil
     }
 
     var loadedModelID: String? {
@@ -105,6 +131,25 @@ actor InferenceService: InferenceServiceProtocol {
         unloadInternal()
 
         logger.info("Loading model: \(model.id, privacy: .public) from \(baseURL.path, privacy: .public)")
+
+#if DEBUG
+        if HermeticUITestRuntime.isEnabled, model.id == ModelRegistry.llama32_3B.id {
+            guard let profile = MemoryProfileRegistry.profile(for: model.id) else {
+                throw InferenceError.nativeFailure(kind: .contextCreation, diagnostic: "fixture-profile-missing")
+            }
+            try loadSafetyStore.beginLoad(profileID: profile.id)
+            do {
+                try loadSafetyStore.clearAfterNativeConstruction(profileID: profile.id)
+            } catch {
+                throw InferenceError.nativeFailure(kind: .suspectedJetsam, diagnostic: "fixture-safety-clear-failed")
+            }
+            hermeticModelLoaded = true
+            _loadedModelID = model.id
+            currentConfig = model.config
+            currentModel = model
+            return
+        }
+#endif
 
         // Validate file exists.
         let baseExists = FileManager.default.fileExists(atPath: baseURL.path)
@@ -124,14 +169,54 @@ actor InferenceService: InferenceServiceProtocol {
             modelPath: baseURL.path,
             mmprojPath: mmprojURL?.path,
             contextLength: config.contextLength,
+            batchSize: config.batchSize,
+            microBatchSize: config.microBatchSize,
             threadCount: config.threadCount,
             useMmap: config.useMmap,
             f16KV: config.f16KV,
             gpuLayers: config.gpuLayers
         )
 
-        // Creating the engine loads the model, context, and optional multimodal projector.
-        let newEngine = try LlamaEngine(config: engineConfig)
+        // Persist immediately before native construction, including direct service callers.
+        guard let profile = MemoryProfileRegistry.profile(for: model.id) else {
+            throw InferenceError.nativeFailure(
+                kind: .memoryPressure,
+                diagnostic: "runtime-profile-missing"
+            )
+        }
+        do {
+            try loadSafetyStore.beginLoad(profileID: profile.id)
+        } catch {
+            throw InferenceError.nativeFailure(
+                kind: .suspectedJetsam,
+                diagnostic: "load-safety-circuit-open"
+            )
+        }
+
+        // Native construction is synchronous and cannot be interrupted once entered.
+        let newEngine: LlamaEngine
+        do {
+            newEngine = try LlamaEngine(config: engineConfig)
+        } catch {
+            // A returned native error is not an unclean termination. Preserve its
+            // category even if committing marker cleanup also fails.
+            let classified = Self.classifyNativeFailure(error)
+            do {
+                try loadSafetyStore.clearAfterNativeConstruction(profileID: profile.id)
+            } catch {
+                throw classified.addingSanitizedDiagnostic("load-safety-clear-failed")
+            }
+            throw classified
+        }
+        do {
+            try loadSafetyStore.clearAfterNativeConstruction(profileID: profile.id)
+        } catch {
+            await newEngine.unload()
+            throw InferenceError.nativeFailure(
+                kind: .suspectedJetsam,
+                diagnostic: "load-safety-clear-failed"
+            )
+        }
         engine = newEngine
         _loadedModelID = model.id
         currentConfig = config
@@ -147,6 +232,9 @@ actor InferenceService: InferenceServiceProtocol {
     }
 
     private func unloadInternal() {
+#if DEBUG
+        hermeticModelLoaded = false
+#endif
         if let eng = engine {
             pendingUnload = Task { await eng.unload() }
         }
@@ -157,6 +245,9 @@ actor InferenceService: InferenceServiceProtocol {
         logger.info("Model unloaded")
     }
 
+}
+
+extension InferenceService {
     // MARK: - Raw Text Completion (bypasses chat template)
 
     /// Stream a raw completion with a pre-formatted prompt string.
@@ -168,9 +259,13 @@ actor InferenceService: InferenceServiceProtocol {
         addBos: Bool?
     ) async throws -> AsyncThrowingStream<String, Error> {
         await waitForPendingCancellation()
+#if DEBUG
+        if hermeticModelLoaded { return Self.hermeticResponse() }
+#endif
         guard let eng = engine else {
             throw InferenceError.modelNotLoaded
         }
+        try enforcePreInferenceReserve()
         let engineSampling = SamplingConfigSwift(
             temperature: sampling.temperature,
             topP: sampling.topP,
@@ -194,6 +289,9 @@ actor InferenceService: InferenceServiceProtocol {
         sampling: SamplingConfig
     ) async throws -> AsyncThrowingStream<String, Error> {
         await waitForPendingCancellation()
+#if DEBUG
+        if hermeticModelLoaded { return Self.hermeticResponse() }
+#endif
         guard let eng = engine else {
             throw InferenceError.modelNotLoaded
         }
@@ -201,13 +299,7 @@ actor InferenceService: InferenceServiceProtocol {
         guard let config = currentConfig else {
             throw InferenceError.modelNotLoaded
         }
-
-        // Format the prompt.
-        let prompt = formatChatPrompt(
-            messages: messages,
-            systemPrompt: systemPrompt,
-            config: config
-        )
+        try enforcePreInferenceReserve()
 
         // Convert sampling config to SwiftLlama format.
         let engineSampling = SamplingConfigSwift(
@@ -219,12 +311,31 @@ actor InferenceService: InferenceServiceProtocol {
         )
 
         let prefillStarted = ContinuousClock.now
-        let stream = try await eng.streamCompletion(
-            prompt: prompt,
-            addBos: config.addBos,
-            stopStrings: config.stopStrings,
-            sampling: engineSampling
-        )
+        let stream: AsyncThrowingStream<String, Error>
+        switch config.promptPath {
+        case .chatTemplate:
+            stream = try await eng.streamChatCompletion(
+                messages: chatTemplateMessages(messages: messages, systemPrompt: systemPrompt),
+                addBos: config.addBos,
+                stopStrings: config.stopStrings,
+                sampling: engineSampling
+            )
+        case .gemma:
+            stream = try await eng.streamCompletion(
+                prompt: Self.formatGemmaPrompt(messages: messages, systemPrompt: systemPrompt),
+                addBos: config.addBos,
+                parseSpecial: true,
+                stopStrings: config.stopStrings,
+                sampling: engineSampling
+            )
+        case .raw:
+            stream = try await eng.streamCompletion(
+                prompt: formatRawPrompt(messages: messages, systemPrompt: systemPrompt),
+                addBos: config.addBos,
+                stopStrings: config.stopStrings,
+                sampling: engineSampling
+            )
+        }
         return instrumentGenerationPeak(
             stream,
             firstEvaluationCheckpoint: .firstTextPrefill,
@@ -248,34 +359,16 @@ actor InferenceService: InferenceServiceProtocol {
         guard let config = currentConfig else {
             throw InferenceError.modelNotLoaded
         }
+        try enforcePreInferenceReserve()
 
-        // Format prompt with <__media__> markers for each image.
-        let marker = "<__media__>"
-        let imageMarkers = images.map { _ in marker }.joined(separator: "\n")
-
-        // Format user messages, inserting image markers before user text.
-        var parts: [String] = []
-        if let systemPrompt, !systemPrompt.isEmpty {
-            parts.append("System: \(systemPrompt)")
+        // Format one marker per supplied image. Markers belong to the first user
+        // message only; repeating them for later turns would mismatch the bitmap array.
+        let imageMarkers = images.map { _ in "<__media__>" }.joined(separator: "\n")
+        var templateMessages = chatTemplateMessages(messages: messages, systemPrompt: systemPrompt)
+        if !imageMarkers.isEmpty,
+           let firstUserIndex = templateMessages.firstIndex(where: { $0.role == "user" }) {
+            templateMessages[firstUserIndex].content = imageMarkers + "\n" + templateMessages[firstUserIndex].content
         }
-
-        for message in messages {
-            let rolePrefix: String
-            switch message.role {
-            case .user: rolePrefix = "User"
-            case .assistant: rolePrefix = "Assistant"
-            case .system: rolePrefix = "System"
-            }
-
-            if message.role == .user && !images.isEmpty {
-                // Insert image markers before the first user message.
-                parts.append("\(rolePrefix): \(imageMarkers)\n\(message.content)")
-            } else {
-                parts.append("\(rolePrefix): \(message.content)")
-            }
-        }
-        parts.append("Assistant:")
-        let visionPrompt = parts.joined(separator: "\n")
 
         // Convert sampling config to SwiftLlama format.
         let engineSampling = SamplingConfigSwift(
@@ -287,13 +380,37 @@ actor InferenceService: InferenceServiceProtocol {
         )
 
         let imageEvaluationStarted = ContinuousClock.now
-        let stream = try await eng.streamVisionCompletion(
-            prompt: visionPrompt,
-            images: images,
-            addBos: config.addBos,
-            stopStrings: config.stopStrings,
-            sampling: engineSampling
-        )
+        let stream: AsyncThrowingStream<String, Error>
+        switch config.promptPath {
+        case .chatTemplate:
+            stream = try await eng.streamVisionChatCompletion(
+                messages: templateMessages,
+                images: images,
+                addBos: config.addBos,
+                stopStrings: config.stopStrings,
+                sampling: engineSampling
+            )
+        case .gemma:
+            stream = try await eng.streamVisionCompletion(
+                prompt: Self.formatGemmaPrompt(
+                    messages: messages,
+                    systemPrompt: systemPrompt,
+                    imageMarkers: imageMarkers
+                ),
+                images: images,
+                addBos: config.addBos,
+                stopStrings: config.stopStrings,
+                sampling: engineSampling
+            )
+        case .raw:
+            stream = try await eng.streamVisionCompletion(
+                prompt: formatRawPrompt(messages: messages, systemPrompt: systemPrompt),
+                images: images,
+                addBos: config.addBos,
+                stopStrings: config.stopStrings,
+                sampling: engineSampling
+            )
+        }
         return instrumentGenerationPeak(
             stream,
             firstEvaluationCheckpoint: .firstImageEval,
@@ -306,7 +423,9 @@ actor InferenceService: InferenceServiceProtocol {
         firstEvaluationCheckpoint: MemoryCheckpoint,
         evaluationStarted: ContinuousClock.Instant
     ) -> AsyncThrowingStream<String, Error> {
-        guard MemoryDiagnosticRecorder.shared.isEnabled else { return source }
+        guard MemoryDiagnosticRecorder.shared.isEnabled else {
+            return instrumentSuccessfulInference(source)
+        }
 
         return AsyncThrowingStream { continuation in
             let task = Task {
@@ -363,6 +482,67 @@ actor InferenceService: InferenceServiceProtocol {
         }
     }
 
+    private func instrumentSuccessfulInference(
+        _ source: AsyncThrowingStream<String, Error>
+    ) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    for try await token in source { continuation.yield(token) }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: Self.classifyNativeFailure(error))
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    /// One fresh snapshot immediately before entering inference. The load-time
+    /// check cannot protect a model whose headroom fell while it was idle.
+    private func enforcePreInferenceReserve() throws {
+        let available = UInt64(os_proc_available_memory())
+        guard available >= MemoryProfile.productionReserveBytes else {
+            throw InferenceError.nativeFailure(
+                kind: .memoryPressure,
+                diagnostic: MemoryAdmissionFailure.postLoadReserveBreached.rawValue
+            )
+        }
+    }
+
+    private static func classifyNativeFailure(_ error: Error) -> InferenceError {
+        guard let llamaError = error as? LlamaError else {
+            return .nativeFailure(kind: .inference, diagnostic: sanitize(error.localizedDescription))
+        }
+        let kind: NativeFailureKind
+        switch llamaError {
+        case .modelLoadFailed: kind = .modelMapping
+        case .contextCreationFailed: kind = .contextCreation
+        case .projectorInitializationFailed, .visionNotSupported, .visionImageLoadFailed:
+            kind = .projectorInitialization
+        case .decodeFailed, .tokenizationFailed, .samplerCreationFailed, .modelNotLoaded:
+            kind = .inference
+        case .invalidConfiguration: kind = .contextCreation
+        }
+        return .nativeFailure(kind: kind, diagnostic: sanitize(llamaError.localizedDescription))
+    }
+
+    private static func sanitize(_ diagnostic: String) -> String {
+        diagnostic
+            .replacingOccurrences(of: #"(?:/[^\s:]+)+"#, with: "<redacted-path>", options: .regularExpression)
+            .prefix(500)
+            .description
+    }
+
+#if DEBUG
+    private static func hermeticResponse() -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            continuation.yield("OK")
+            continuation.finish()
+        }
+    }
+#endif
+
     // MARK: - Cancellation
 
     func cancelCurrentStream() async {
@@ -388,68 +568,131 @@ actor InferenceService: InferenceServiceProtocol {
 
     // MARK: - Prompt Formatting
 
-    /// Format messages into a prompt string for the model.
-    /// Handles chat template and raw format paths.
-    private func formatChatPrompt(
+    /// Preserve semantic roles and let each GGUF's embedded template choose its
+    /// own control tokens. Hard-coding one model family's syntax breaks the others.
+    private func chatTemplateMessages(
+        messages: [ChatMessagePayload],
+        systemPrompt: String?
+    ) -> [(role: String, content: String)] {
+        var result: [(role: String, content: String)] = []
+        if let systemPrompt, !systemPrompt.isEmpty {
+            result.append((role: "system", content: systemPrompt))
+        }
+        result.append(contentsOf: messages.map { (role: $0.role.rawValue, content: $0.content) })
+        return result
+    }
+
+    static func formatGemmaPrompt(
         messages: [ChatMessagePayload],
         systemPrompt: String?,
-        config: ModelConfiguration
+        imageMarkers: String = ""
     ) -> String {
-        switch config.promptPath {
-        case .chatTemplate:
-            // Gemma chat format: <start_of_turn>ROLE\nCONTENT<end_of_turn>\n
-            var parts: [String] = []
-            if let systemPrompt, !systemPrompt.isEmpty {
-                parts.append("<start_of_turn>system\n\(systemPrompt)<end_of_turn>")
-            }
-            for message in messages {
-                let role = message.role.rawValue
-                parts.append("<start_of_turn>\(role)\n\(message.content)<end_of_turn>")
-            }
-            parts.append("<start_of_turn>model\n")
-            return parts.joined(separator: "\n")
+        var rendered = ""
+        var pendingSystem = systemPrompt?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        var pendingImages = imageMarkers
 
-        case .raw:
-            var parts: [String] = []
-            if let systemPrompt, !systemPrompt.isEmpty {
-                parts.append("System: \(systemPrompt)")
+        for message in messages {
+            let role: String
+            var content = message.content
+            switch message.role {
+            case .system:
+                pendingSystem = [pendingSystem, content]
+                    .filter { !$0.isEmpty }
+                    .joined(separator: "\n")
+                continue
+            case .user:
+                role = "user"
+                content = [pendingSystem, pendingImages, content]
+                    .filter { !$0.isEmpty }
+                    .joined(separator: "\n")
+                pendingSystem = ""
+                pendingImages = ""
+            case .assistant:
+                role = "model"
             }
-            for message in messages {
-                let rolePrefix: String
-                switch message.role {
-                case .user: rolePrefix = "User"
-                case .assistant: rolePrefix = "Assistant"
-                case .system: rolePrefix = "System"
-                }
-                parts.append("\(rolePrefix): \(message.content)")
-            }
-            parts.append("Assistant:")
-            return parts.joined(separator: "\n")
+            rendered += "<start_of_turn>\(role)\n\(content)<end_of_turn>\n"
         }
+        if !pendingSystem.isEmpty || !pendingImages.isEmpty {
+            rendered += "<start_of_turn>user\n"
+                + [pendingSystem, pendingImages].filter { !$0.isEmpty }.joined(separator: "\n")
+                + "<end_of_turn>\n"
+        }
+        rendered += "<start_of_turn>model\n"
+        return rendered
+    }
+
+    private func formatRawPrompt(
+        messages: [ChatMessagePayload],
+        systemPrompt: String?
+    ) -> String {
+        var parts: [String] = []
+        if let systemPrompt, !systemPrompt.isEmpty {
+            parts.append("System: \(systemPrompt)")
+        }
+        for message in messages {
+            let rolePrefix: String
+            switch message.role {
+            case .user: rolePrefix = "User"
+            case .assistant: rolePrefix = "Assistant"
+            case .system: rolePrefix = "System"
+            }
+            parts.append("\(rolePrefix): \(message.content)")
+        }
+        parts.append("Assistant:")
+        return parts.joined(separator: "\n")
     }
 }
 
 // MARK: - Inference Errors
 
-enum InferenceError: Error, LocalizedError {
+enum NativeFailureKind: String, Sendable, Equatable {
+    case modelMapping
+    case contextCreation
+    case projectorInitialization
+    case inference
+    case memoryPressure
+    case suspectedJetsam
+}
+
+enum InferenceError: Error, LocalizedError, Equatable {
     case modelNotLoaded
     case modelFileNotFound(path: String)
     case mmprojFileNotFound(path: String)
     case visionNotSupported
-    case inferenceFailed(underlying: Error)
+    case nativeFailure(kind: NativeFailureKind, diagnostic: String)
+
+    var sanitizedDiagnostic: String {
+        switch self {
+        case .modelNotLoaded: return "model-not-loaded"
+        case .modelFileNotFound: return "model-artifact-missing"
+        case .mmprojFileNotFound: return "projector-artifact-missing"
+        case .visionNotSupported: return "vision-profile-disabled"
+        case .nativeFailure(let kind, let diagnostic): return "\(kind.rawValue): \(diagnostic)"
+        }
+    }
+
+    func addingSanitizedDiagnostic(_ suffix: String) -> InferenceError {
+        guard case .nativeFailure(let kind, let diagnostic) = self else { return self }
+        return .nativeFailure(kind: kind, diagnostic: "\(diagnostic);\(suffix)")
+    }
+
+    var nativeFailureKind: NativeFailureKind? {
+        guard case .nativeFailure(let kind, _) = self else { return nil }
+        return kind
+    }
 
     var errorDescription: String? {
         switch self {
         case .modelNotLoaded:
             return "No model is loaded. Please download and load a model first."
-        case .modelFileNotFound(let path):
-            return "Model file not found at: \(path)"
-        case .mmprojFileNotFound(let path):
-            return "Multimodal projector file not found at: \(path)"
+        case .modelFileNotFound:
+            return "The model artifact is missing."
+        case .mmprojFileNotFound:
+            return "The vision projector artifact is missing."
         case .visionNotSupported:
-            return "Vision chat is not yet supported. Coming in Phase 2."
-        case .inferenceFailed(let error):
-            return "Inference failed: \(error.localizedDescription)"
+            return "This runtime profile does not support vision."
+        case .nativeFailure(let kind, _):
+            return "Local inference failed during \(kind.rawValue)."
         }
     }
 }

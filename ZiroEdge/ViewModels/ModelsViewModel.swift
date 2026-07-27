@@ -16,6 +16,10 @@ final class ModelsViewModel: ObservableObject {
     @Published var pendingDownloadModel: AIModel?
     @Published var showingDeleteConfirmation = false
     @Published var pendingDeleteModel: AIModel?
+    @Published var showingExperimentalConsent = false
+    @Published var pendingExperimentalModel: AIModel?
+    @Published var showingSafetyResetResult = false
+    @Published var safetyResetMessage = ""
 
     // MARK: - Dependencies
 
@@ -24,7 +28,7 @@ final class ModelsViewModel: ObservableObject {
 
     // MARK: - Computed
 
-    /// All models in the registry.
+    /// The catalog is never filtered by runtime validation. Eligibility gates loading.
     var allModels: [AIModel] {
         ModelRegistry.allModels
     }
@@ -108,8 +112,14 @@ final class ModelsViewModel: ObservableObject {
         return concerns.joined(separator: "\n\n")
     }
 
+    var canConfirmPendingDownload: Bool {
+        guard let model = pendingDownloadModel else { return false }
+        return downloadManager.hasSufficientStorage(for: model)
+    }
+
     func confirmPendingDownload() {
-        guard let model = pendingDownloadModel else { return }
+        guard let model = pendingDownloadModel,
+              downloadManager.hasSufficientStorage(for: model) else { return }
         showingDownloadWarning = false
         downloadManager.startDownload(for: model)
         pendingDownloadModel = nil
@@ -118,6 +128,46 @@ final class ModelsViewModel: ObservableObject {
     func cancelPendingDownload() {
         pendingDownloadModel = nil
         showingDownloadWarning = false
+    }
+
+    func requestExperimentalConsent(for model: AIModel) {
+        guard model.runtimeEligibility == .experimental else { return }
+        pendingExperimentalModel = model
+        showingExperimentalConsent = true
+    }
+
+    func confirmExperimentalConsent() {
+        guard let model = pendingExperimentalModel else { return }
+        ExperimentalModelConsent.setGranted(true, for: model)
+        pendingExperimentalModel = nil
+        showingExperimentalConsent = false
+        objectWillChange.send()
+    }
+
+    func revokeExperimentalConsent(for model: AIModel) {
+        ExperimentalModelConsent.setGranted(false, for: model)
+        objectWillChange.send()
+    }
+
+    func hasExperimentalConsent(for model: AIModel) -> Bool {
+        ExperimentalModelConsent.isGranted(for: model)
+    }
+
+    func isLoadSafetyDisabled(for model: AIModel) -> Bool {
+        lifecycleManager.isLoadSafetyDisabled(for: model)
+    }
+
+    func resetLoadSafety(for model: AIModel) {
+        switch lifecycleManager.resetLoadSafety(for: model) {
+        case .reset:
+            safetyResetMessage = "Load-safety history was reset for \(model.displayName). You can try loading it again."
+        case .notDisabled:
+            safetyResetMessage = "\(model.displayName) is not currently disabled by load safety."
+        case .failed(let message):
+            safetyResetMessage = message
+        }
+        showingSafetyResetResult = true
+        objectWillChange.send()
     }
 
     /// Pause a download.

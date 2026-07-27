@@ -110,7 +110,7 @@ final class ChatViewModel: ObservableObject {
 
     /// All models that are fully downloaded and available for use.
     var availableModels: [AIModel] {
-        ModelRegistry.allModels.filter { downloadStatusProvider.status(for: $0).isReady }
+        ModelRegistry.selectableModels.filter { downloadStatusProvider.status(for: $0).isReady }
     }
 
     /// Auto-select a model for a new conversation. Uses the fallback chain:
@@ -241,6 +241,9 @@ final class ChatViewModel: ObservableObject {
         return id
     }
 
+}
+
+extension ChatViewModel {
     // MARK: - Message Sending
 
     /// Validate preconditions for sending a message. Returns nil on success,

@@ -17,9 +17,15 @@ final class ModelPickerTests: XCTestCase {
 
         func status(for model: AIModel) -> ModelDownloadStatus {
             if readyModelIDs.contains(model.id) {
-                return ModelDownloadStatus(baseState: .downloaded, mmprojState: nil)
+                return ModelDownloadStatus(
+                    baseState: .downloaded,
+                    mmprojState: model.requiresMMProj ? .downloaded : nil
+                )
             }
-            return ModelDownloadStatus(baseState: .notDownloaded, mmprojState: nil)
+            return ModelDownloadStatus(
+                baseState: .notDownloaded,
+                mmprojState: model.requiresMMProj ? .notDownloaded : nil
+            )
         }
     }
 
@@ -48,19 +54,17 @@ final class ModelPickerTests: XCTestCase {
 
     // MARK: - Auto-Selection Tests
 
-    func testAutoSelectLastUsedModel() throws {
+    func testAutoSelectDoesNotRestoreUnvalidatedLastUsedModel() {
         let provider = MockDownloadStatusProvider()
         let model = ModelRegistry.llama32_3B
         provider.readyModelIDs = [model.id]
-
         UserDefaults.standard.set(model.id, forKey: "lastUsedModelID")
 
         let viewModel = makeViewModel(provider: provider)
         viewModel.autoSelectModel()
 
-        XCTAssertNotNil(viewModel.selectedModel)
-        XCTAssertEqual(viewModel.selectedModel?.id, model.id)
-        XCTAssertFalse(viewModel.needsModelRedirect)
+        XCTAssertNil(viewModel.selectedModel)
+        XCTAssertTrue(viewModel.needsModelRedirect)
     }
 
     func testAutoSelectFallsBackWhenLastUsedDeleted() throws {
@@ -77,21 +81,16 @@ final class ModelPickerTests: XCTestCase {
         XCTAssertTrue(viewModel.needsModelRedirect)
     }
 
-    func testAutoSelectPicksNextAvailableWhenLastUsedMismatch() throws {
+    func testAutoSelectDoesNotFallBackToDownloadedUnvalidatedModel() {
         let provider = MockDownloadStatusProvider()
-        let model = ModelRegistry.llama32_3B
-        provider.readyModelIDs = [model.id]
-
-        // Set a non-existent model ID as last used.
+        provider.readyModelIDs = [ModelRegistry.llama32_3B.id]
         UserDefaults.standard.set("nonexistent-model-id", forKey: "lastUsedModelID")
 
         let viewModel = makeViewModel(provider: provider)
         viewModel.autoSelectModel()
 
-        // Should fall back to the first available model.
-        XCTAssertNotNil(viewModel.selectedModel)
-        XCTAssertEqual(viewModel.selectedModel?.id, model.id)
-        XCTAssertFalse(viewModel.needsModelRedirect)
+        XCTAssertNil(viewModel.selectedModel)
+        XCTAssertTrue(viewModel.needsModelRedirect)
     }
 
     func testAutoSelectSignalsRedirectWhenNoModelsAvailable() throws {
@@ -109,15 +108,26 @@ final class ModelPickerTests: XCTestCase {
 
     // MARK: - Available Models Tests
 
-    func testAvailableModelsOnlyIncludesDownloaded() throws {
+    func testAvailableModelsExcludeDownloadedProfilesWithoutAcceptance() {
         let provider = MockDownloadStatusProvider()
-        let model = ModelRegistry.llama32_3B
-        provider.readyModelIDs = [model.id]
+        provider.readyModelIDs = [ModelRegistry.llama32_3B.id]
 
         let viewModel = makeViewModel(provider: provider)
 
-        XCTAssertEqual(viewModel.availableModels.count, 1)
-        XCTAssertEqual(viewModel.availableModels.first?.id, model.id)
+        XCTAssertTrue(viewModel.availableModels.isEmpty)
+    }
+
+    func testValidatedModelDoesNotRequireExperimentalConsent() {
+        let provider = MockDownloadStatusProvider()
+        let model = ModelRegistry.gemma4_e2b
+        provider.readyModelIDs = [model.id]
+        ExperimentalModelConsent.setGranted(false, for: model)
+
+        let viewModel = makeViewModel(provider: provider)
+        XCTAssertEqual(viewModel.availableModels, [model])
+
+        ExperimentalModelConsent.setGranted(true, for: model)
+        XCTAssertEqual(viewModel.availableModels, [model])
     }
 
     func testAvailableModelsEmptyWhenNoneDownloaded() throws {
@@ -171,5 +181,6 @@ final class ModelPickerTests: XCTestCase {
     override func tearDown() {
         super.tearDown()
         UserDefaults.standard.removeObject(forKey: "lastUsedModelID")
+        ExperimentalModelConsent.setGranted(false, for: ModelRegistry.gemma4_e2b)
     }
 }

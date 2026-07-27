@@ -3,7 +3,6 @@ import Darwin
 import os
 
 protocol MemoryMetricsProviding: Sendable {
-    /// Process-specific allocation headroom. This is the only production gating metric.
     func processAvailableMemory() -> UInt64
     func totalRAM() -> UInt64
 }
@@ -16,10 +15,7 @@ struct FixedMemoryMetricsProvider: MemoryMetricsProviding {
 }
 
 struct SystemMemoryMetricsProvider: MemoryMetricsProviding {
-    func processAvailableMemory() -> UInt64 {
-        UInt64(os_proc_available_memory())
-    }
-
+    func processAvailableMemory() -> UInt64 { UInt64(os_proc_available_memory()) }
     func totalRAM() -> UInt64 {
         var size: UInt64 = 0
         var sizeSize = MemoryLayout<UInt64>.size
@@ -30,92 +26,127 @@ struct SystemMemoryMetricsProvider: MemoryMetricsProviding {
 struct MemoryLoadDecision: Equatable, Sendable {
     let recommendation: MemoryRecommendation
     let processAvailableBytes: UInt64
-    let modelBytes: UInt64
-    let requiredBytes: UInt64
+    let totalPhysicalBytes: UInt64
+    let profileID: String?
+    let requiredBytes: UInt64?
+    let reason: MemoryAdmissionFailure?
 
-    var formattedAppMemoryHeadroom: String {
-        Self.format(bytes: processAvailableBytes)
-    }
+    /// A regression sentinel: admission never consumes download/storage byte counts.
+    var artifactBytesUsedForAdmission: UInt64? { nil }
+
+    var formattedAppMemoryHeadroom: String { Self.format(bytes: processAvailableBytes) }
 
     static func format(bytes: UInt64) -> String {
-        ByteCountFormatter.string(
-            fromByteCount: Int64(clamping: bytes),
-            countStyle: .memory
-        )
+        ByteCountFormatter.string(fromByteCount: Int64(clamping: bytes), countStyle: .memory)
     }
 
     var logSummary: String {
-        "recommendation=\(recommendation) processHeadroomBytes=\(processAvailableBytes) modelBytes=\(modelBytes) requiredBytes=\(requiredBytes)"
+        [
+            "recommendation=\(recommendation)",
+            "processHeadroomBytes=\(processAvailableBytes)",
+            "totalPhysicalBytes=\(totalPhysicalBytes)",
+            "profileID=\(profileID ?? "unknown")",
+            "requiredBytes=\(requiredBytes.map(String.init) ?? "unknown")",
+            "reason=\(reason?.rawValue ?? "none")",
+        ].joined(separator: " ")
     }
 
     func alertMessage(modelName: String) -> String {
-        "\(modelName) needs more working memory than the \(formattedAppMemoryHeadroom) of App Memory Headroom currently available. Close other apps or choose a smaller model."
+        switch reason {
+        case .profileUnvalidated:
+            return "\(modelName) is not validated for normal use. Experimental use requires explicit consent and measured load evidence."
+        case .profileMissing:
+            return "\(modelName) has no registered runtime-memory profile and cannot be loaded."
+        case .profileDisabled:
+            return "\(modelName) was disabled after repeated unclean loads. Reset its safety history before calibrating again."
+        default:
+            return "\(modelName) needs more working memory than the \(formattedAppMemoryHeadroom) of App Memory Headroom currently available."
+        }
     }
 }
 
-/// Model-load policy based on one process-headroom sample per decision.
+enum MemoryAdmissionFailure: String, Sendable, Equatable {
+    case metricsUnavailable
+    case profileMissing
+    case profileUnvalidated
+    case physicalRAMBelowMinimum
+    case insufficientProcessHeadroom
+    case postLoadReserveBreached
+    case profileDisabled
+}
+
+/// Profile-based model-load policy. The caller must complete unload/recovery before invoking `decision`.
 actor MemoryBudgeter {
     private let logger = Logger(subsystem: "com.zanish-labs.ziroedge", category: "memory")
     private let metrics: any MemoryMetricsProviding
     private var lastDecision: MemoryLoadDecision?
 
-    /// Fixed policy headroom for KV cache, activations, and other working memory.
-    private let policyHeadroomBytes: UInt64 = 1_500_000_000
-
     init(metrics: any MemoryMetricsProviding = SystemMemoryMetricsProvider()) {
         self.metrics = metrics
     }
 
-    func appMemoryHeadroom() -> UInt64 {
-        metrics.processAvailableMemory()
-    }
+    func appMemoryHeadroom() -> UInt64 { metrics.processAvailableMemory() }
+    func totalDeviceRAM() -> UInt64 { metrics.totalRAM() }
 
-    func totalDeviceRAM() -> UInt64 {
-        metrics.totalRAM()
-    }
-
-    /// Samples process headroom exactly once and owns all values used by policy, logs, and UI.
-    func decision(for model: AIModel) -> MemoryLoadDecision {
+    /// Samples os_proc_available_memory exactly once after the caller has completed unload recovery.
+    func decision(for model: AIModel, allowUnvalidatedCalibration: Bool = false) -> MemoryLoadDecision {
         let processAvailable = metrics.processAvailableMemory()
-        let modelBytes = UInt64(model.totalFileSizeBytes)
-        let requiredBytes = modelBytes + policyHeadroomBytes
-        let recommendation: MemoryRecommendation
+        let total = metrics.totalRAM()
+        let profile = MemoryProfileRegistry.profile(for: model.id)
+        var required = try? profile?.requiredProcessHeadroomBytes()
+        let reason: MemoryAdmissionFailure?
 
-        if processAvailable >= requiredBytes {
-            recommendation = .proceed
-        } else if processAvailable >= modelBytes {
-            recommendation = .unloadCurrentFirst
+        if processAvailable == 0 || total == 0 {
+            reason = .metricsUnavailable
+        } else if profile == nil {
+            reason = .profileMissing
+        } else if let profile, total < profile.minimumPhysicalRAMBytes {
+            reason = .physicalRAMBelowMinimum
+        } else if let profile, required == nil, allowUnvalidatedCalibration {
+            // Normal experimental consent still requires measured runtime evidence.
+            // DEBUG controlled calibration is the only path that may gather first evidence.
+            if let experimentalRequired = try? profile.experimentalRequiredProcessHeadroomBytes() {
+                required = experimentalRequired
+                reason = processAvailable < experimentalRequired ? .insufficientProcessHeadroom : nil
+            } else {
+#if DEBUG
+                reason = MemoryDiagnosticRecorder.shared.controlledWorkloadEnabled ? nil : .profileUnvalidated
+#else
+                reason = .profileUnvalidated
+#endif
+            }
+        } else if required == nil {
+            reason = .profileUnvalidated
+        } else if let required, processAvailable < required {
+            reason = .insufficientProcessHeadroom
         } else {
-            // A zero/failed process sample deliberately fails closed. Host VM pages are diagnostics-only.
-            recommendation = .insufficientRAM
+            reason = nil
         }
 
         let decision = MemoryLoadDecision(
-            recommendation: recommendation,
+            recommendation: reason == nil ? .proceed : .insufficientRAM,
             processAvailableBytes: processAvailable,
-            modelBytes: modelBytes,
-            requiredBytes: requiredBytes
+            totalPhysicalBytes: total,
+            profileID: profile?.id,
+            requiredBytes: required,
+            reason: reason
         )
         lastDecision = decision
         logger.info("Memory load decision for \(model.id, privacy: .public): \(decision.logSummary, privacy: .public)")
         return decision
     }
 
-    func memoryReclaimable(from model: AIModel) -> UInt64 {
-        UInt64(model.totalFileSizeBytes)
+    /// One post-load sample; validated and calibration loads must retain the fixed reserve.
+    func postLoadReserveSatisfied() -> Bool {
+        metrics.processAvailableMemory() >= MemoryProfile.productionReserveBytes
     }
 
-    /// Uses the latest load-decision sample when one exists so Settings and load feedback agree.
     func formattedAppMemoryHeadroom() -> String {
-        if let lastDecision {
-            return lastDecision.formattedAppMemoryHeadroom
-        }
+        if let lastDecision { return lastDecision.formattedAppMemoryHeadroom }
         return MemoryLoadDecision.format(bytes: appMemoryHeadroom())
     }
 
-    func formattedTotalRAM() -> String {
-        MemoryLoadDecision.format(bytes: totalDeviceRAM())
-    }
+    func formattedTotalRAM() -> String { MemoryLoadDecision.format(bytes: totalDeviceRAM()) }
 }
 
 enum MemoryRecommendation: Sendable, Equatable {

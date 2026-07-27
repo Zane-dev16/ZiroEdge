@@ -11,6 +11,7 @@ import Foundation
 /// How the model expects to receive input.
 enum PromptPath: Sendable {
     case chatTemplate       // Uses the model's built-in chat template (e.g. Llama 3.2, Qwen)
+    case gemma              // Deterministic Gemma turn formatting with special-token parsing
     case raw                // Bypasses chat template, sends raw text (e.g. translation-specific models)
 }
 
@@ -60,8 +61,14 @@ struct ModelConfiguration: Sendable, Hashable {
     /// Default sampling parameters for this model.
     let defaultSampling: SamplingConfig
 
-    /// Context window size (n_ctx). Default 4096.
+    /// Context window size (n_ctx).
     let contextLength: Int
+
+    /// Maximum logical prompt batch (n_batch).
+    let batchSize: Int
+
+    /// Maximum physical prompt microbatch (n_ubatch).
+    let microBatchSize: Int
 
     /// Number of threads for CPU inference. Default 2 (battery-friendly).
     let threadCount: Int
@@ -84,6 +91,8 @@ struct ModelConfiguration: Sendable, Hashable {
         stopStrings: ["<|eot_id|>", "<|end_of_text|>"],
         defaultSampling: .default,
         contextLength: 4096,
+        batchSize: 512,
+        microBatchSize: 128,
         threadCount: 2,
         useMmap: true,
         f16KV: true,
@@ -97,6 +106,8 @@ struct ModelConfiguration: Sendable, Hashable {
         stopStrings: ["<end_of_utterance>"],
         defaultSampling: .default,
         contextLength: 4096,
+        batchSize: 512,
+        microBatchSize: 128,
         threadCount: 2,
         useMmap: true,
         f16KV: true,
@@ -105,16 +116,51 @@ struct ModelConfiguration: Sendable, Hashable {
 
     /// Gemma 4 — vision model, chat template. Requires BOS token.
     static let gemma4 = ModelConfiguration(
-        promptPath: .chatTemplate,
+        promptPath: .gemma,
         addBos: true,  // Gemma requires BOS
         stopStrings: ["<end_of_turn>"],
         defaultSampling: .default,
         contextLength: 4096,
+        batchSize: 512,
+        microBatchSize: 128,
         threadCount: 2,
         useMmap: true,
         f16KV: true,
         gpuLayers: 0
     )
+
+    /// E4B text-only runtime shape. It shares the base artifact with E4B vision
+    /// but has independent evidence and never initializes a projector.
+    static let gemma4E4BText = ModelConfiguration(
+        promptPath: .gemma,
+        addBos: true,
+        stopStrings: ["<end_of_turn>"],
+        defaultSampling: .default,
+        contextLength: 512,
+        batchSize: 256,
+        microBatchSize: 64,
+        threadCount: 2,
+        useMmap: true,
+        f16KV: true,
+        gpuLayers: 0
+    )
+
+#if DEBUG
+    /// Calibration-only alias of the independently selectable Release text shape.
+    static let gemma4E4BTextCalibration = ModelConfiguration(
+        promptPath: .gemma,
+        addBos: true,
+        stopStrings: ["<end_of_turn>"],
+        defaultSampling: .default,
+        contextLength: 512,
+        batchSize: 256,
+        microBatchSize: 64,
+        threadCount: 2,
+        useMmap: true,
+        f16KV: true,
+        gpuLayers: 0
+    )
+#endif
 
     /// Qwen 2.5-VL — vision model, chat template. (Phase 2)
     static let qwen25VL = ModelConfiguration(
@@ -123,6 +169,8 @@ struct ModelConfiguration: Sendable, Hashable {
         stopStrings: ["<|im_end|>"],
         defaultSampling: .default,
         contextLength: 4096,
+        batchSize: 512,
+        microBatchSize: 128,
         threadCount: 2,
         useMmap: true,
         f16KV: true,

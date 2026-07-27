@@ -16,10 +16,18 @@ struct ModelsView: View {
         .navigationTitle("Models")
         .navigationBarTitleDisplayMode(.large)
         .alert("Review Download", isPresented: $viewModel.showingDownloadWarning) {
-            Button("Download Anyway") { viewModel.confirmPendingDownload() }
+            if viewModel.canConfirmPendingDownload {
+                Button("Download") { viewModel.confirmPendingDownload() }
+            }
             Button("Cancel", role: .cancel) { viewModel.cancelPendingDownload() }
         } message: {
             Text(viewModel.pendingDownloadWarningMessage)
+        }
+        .alert("Enable Experimental Runtime?", isPresented: $viewModel.showingExperimentalConsent) {
+            Button("Enable Experimental Use") { viewModel.confirmExperimentalConsent() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This profile has measured load evidence but has not passed the full physical workload. ZiroEdge will still enforce its measured admission floor and reserve.")
         }
         .confirmationDialog("Delete Model", isPresented: $viewModel.showingDeleteConfirmation) {
             Button("Delete", role: .destructive) { Task { await viewModel.confirmDelete() } }
@@ -50,7 +58,7 @@ struct ModelsView: View {
                 NavigationLink { ModelDetailView(model: model, viewModel: viewModel) } label: {
                     ModelRow(
                         model: model,
-                        subtitle: "\(model.quantization) · \(viewModel.diskUsage(for: model)) used",
+                        subtitle: "\(model.runtimeEligibility.label) · \(model.quantization) · \(viewModel.diskUsage(for: model)) used",
                         status: .installed
                     )
                 }
@@ -97,9 +105,14 @@ struct ModelsView: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
-                Text("\(model.formattedSize) · \(model.quantization)")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+                HStack(spacing: ZiroTheme.Spacing.small) {
+                    Text(model.runtimeEligibility.label)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(runtimeTint(model.runtimeEligibility))
+                    Text("\(model.formattedSize) · \(model.quantization)")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
             }
             Spacer(minLength: ZiroTheme.Spacing.small)
             downloadIndicator(model, status: status)
@@ -144,6 +157,14 @@ struct ModelsView: View {
                     .foregroundStyle(Color.accentColor)
                     .accessibilityLabel("Download \(model.displayName)")
             }
+        }
+    }
+
+    private func runtimeTint(_ eligibility: RuntimeEligibility) -> Color {
+        switch eligibility {
+        case .validated: .green
+        case .experimental: .orange
+        case .unavailable: .secondary
         }
     }
 

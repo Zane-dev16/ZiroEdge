@@ -22,6 +22,10 @@ final class DownloadManagerTests: XCTestCase {
         for model in ModelRegistry.allModels {
             ModelManagerService.deleteModel(model)
         }
+        // Shared catalog artifacts intentionally survive per-entry deletion.
+        try? FileManager.default.removeItem(
+            at: ModelManagerService.baseModelPath(for: ModelRegistry.gemma4_e4b)
+        )
         downloadManager = nil
         super.tearDown()
     }
@@ -223,10 +227,34 @@ final class DownloadManagerTests: XCTestCase {
             mmprojSHA256: nil,
             quantization: "Q4",
             config: .llama32,
-            minimumDeviceRAM: 0,
             license: LicenseInfo(name: "Test", url: URL(string: "https://example.com")!, copyright: "Test")
         )
         XCTAssertTrue(downloadManager.hasSufficientStorage(for: tinyModel))
+    }
+
+    func testSameSizeWrongDigestBaseRequiresFullReplacement() throws {
+        let corrupt = TestModelFixtures.gguf(fill: 0x11)
+        let expected = TestModelFixtures.gguf(fill: 0x22, count: corrupt.count)
+        let model = TestModelFixtures.text(data: expected)
+        try TestModelFixtures.install(corrupt, for: model)
+        defer { ModelManagerService.deleteModel(model) }
+
+        XCTAssertEqual(downloadManager.requiredDownloadBytes(for: model), Int64(expected.count))
+        XCTAssertFalse(ModelManagerService.isBaseDownloaded(model))
+    }
+
+    func testSameSizeWrongDigestProjectorRequiresFullReplacement() throws {
+        let base = TestModelFixtures.gguf(fill: 0x31)
+        let corruptProjector = TestModelFixtures.gguf(fill: 0x41)
+        let expectedProjector = TestModelFixtures.gguf(fill: 0x42, count: corruptProjector.count)
+        let model = makeVisionModel(base: base, projector: expectedProjector)
+        try TestModelFixtures.install(base, for: model)
+        try corruptProjector.write(to: ModelManagerService.mmprojModelPath(for: model), options: .atomic)
+        defer { ModelManagerService.deleteModel(model) }
+
+        XCTAssertEqual(downloadManager.requiredDownloadBytes(for: model), Int64(expectedProjector.count))
+        XCTAssertTrue(ModelManagerService.isBaseDownloaded(model))
+        XCTAssertFalse(ModelManagerService.isMMProjDownloaded(model))
     }
 
     func testInsufficientStorageDetection() {
@@ -244,7 +272,6 @@ final class DownloadManagerTests: XCTestCase {
             mmprojSHA256: nil,
             quantization: "Q4",
             config: .llama32,
-            minimumDeviceRAM: 0,
             license: LicenseInfo(name: "Test", url: URL(string: "https://example.com")!, copyright: "Test")
         )
         XCTAssertFalse(downloadManager.hasSufficientStorage(for: hugeModel))
@@ -292,7 +319,6 @@ final class DownloadManagerTests: XCTestCase {
             mmprojSHA256: "",
             quantization: "Q4",
             config: .llama32,
-            minimumDeviceRAM: 0,
             license: LicenseInfo(name: "Test", url: URL(string: "https://example.com")!, copyright: "Test")
         )
         ModelManagerService.ensureModelsDirectory()
@@ -316,6 +342,40 @@ final class DownloadManagerTests: XCTestCase {
 
     // MARK: - Delete Model
 
+    func testDeletingE4BTextPreservesBaseUsedByVision() throws {
+        let path = ModelManagerService.baseModelPath(for: ModelRegistry.gemma4_e4b_text)
+        ModelManagerService.ensureModelsDirectory()
+        try Data("shared-base".utf8).write(to: path, options: .atomic)
+
+        ModelManagerService.deleteModel(ModelRegistry.gemma4_e4b_text)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: path.path))
+    }
+
+    func testDeletingE4BVisionPreservesBaseUsedByTextAndDeletesProjector() throws {
+        let basePath = ModelManagerService.baseModelPath(for: ModelRegistry.gemma4_e4b)
+        let projectorPath = ModelManagerService.mmprojModelPath(for: ModelRegistry.gemma4_e4b)
+        ModelManagerService.ensureModelsDirectory()
+        try Data("shared-base".utf8).write(to: basePath, options: .atomic)
+        try Data("projector".utf8).write(to: projectorPath, options: .atomic)
+
+        ModelManagerService.deleteModel(ModelRegistry.gemma4_e4b)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: basePath.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: projectorPath.path))
+    }
+
+    func testE4BTextAndVisionCannotClaimTwoBaseWriters() {
+        let visionTask = DownloadTask(model: ModelRegistry.gemma4_e4b, artifact: .base)
+        let textTask = DownloadTask(model: ModelRegistry.gemma4_e4b_text, artifact: .base)
+
+        XCTAssertEqual(visionTask.storageID, textTask.storageID)
+        XCTAssertTrue(downloadManager.registerActiveTaskIfAbsent(visionTask))
+        XCTAssertFalse(downloadManager.registerActiveTaskIfAbsent(textTask))
+        XCTAssertTrue(downloadManager.hasActiveDownload(model: ModelRegistry.gemma4_e4b_text, artifact: .base))
+        downloadManager.cancelDownload(for: ModelRegistry.gemma4_e4b)
+    }
+
     func testDeleteModelClearsStatus() throws {
         let data = TestModelFixtures.gguf()
         let model = TestModelFixtures.text(data: data)
@@ -326,6 +386,25 @@ final class DownloadManagerTests: XCTestCase {
 
         XCTAssertFalse(ModelManagerService.isBaseDownloaded(model))
         XCTAssertFalse(downloadManager.status(for: model).isReady)
+    }
+
+    private func makeVisionModel(base: Data, projector: Data) -> AIModel {
+        let id = "fixture-vision-\(UUID().uuidString.lowercased())"
+        return AIModel(
+            id: id,
+            displayName: "Fixture Vision",
+            description: "Deterministic paired artifacts",
+            modelType: .vision,
+            baseURL: URL(string: "https://example.com/\(id)-base.gguf")!,
+            mmprojURL: URL(string: "https://example.com/\(id)-mmproj.gguf")!,
+            baseFileSizeBytes: Int64(base.count),
+            mmprojFileSizeBytes: Int64(projector.count),
+            baseSHA256: TestModelFixtures.sha256(base),
+            mmprojSHA256: TestModelFixtures.sha256(projector),
+            quantization: "Q4_K_M",
+            config: .gemma4,
+            license: LicenseInfo(name: "Test", url: URL(string: "https://example.com/license")!, copyright: "Test")
+        )
     }
 
     // MARK: - Download Error

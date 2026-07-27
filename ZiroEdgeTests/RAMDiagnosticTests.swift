@@ -1,6 +1,7 @@
 import XCTest
 @testable import ZiroEdge
 
+@MainActor
 final class RAMDiagnosticTests: XCTestCase {
     func testSnapshotContainsCoherentProcessAndHostDiagnostics() throws {
         let snapshot = MemorySnapshotReader.capture(.cold)
@@ -34,23 +35,27 @@ final class RAMDiagnosticTests: XCTestCase {
         XCTAssertNotNil(object["timestamp"])
     }
 
-    func testDiagnosticTargetIsGemmaE2B() {
-        XCTAssertEqual(MemoryDiagnosticRecorder.targetModelID, "gemma-4-e2b-q4")
-        XCTAssertEqual(ModelRegistry.model(for: MemoryDiagnosticRecorder.targetModelID)?.totalFileSizeBytes, 3_985_228_864)
+    func testDefaultDiagnosticTargetIsCalibrationOnlyE4BText() {
+        XCTAssertEqual(MemoryDiagnosticRecorder.defaultTargetModelID, "gemma-4-e4b-q4-text-calibration")
+        XCTAssertEqual(ModelRegistry.model(for: MemoryDiagnosticRecorder.defaultTargetModelID)?.modelType, .text)
+        XCTAssertEqual(MemoryDiagnosticWorkload.cycleCount, 5)
+        XCTAssertEqual(MemoryDiagnosticWorkload.promptCount, 20)
+        XCTAssertEqual(MemoryDiagnosticWorkload.minimumHeadroomBytes, 750_000_000)
+        XCTAssertEqual(MemoryDiagnosticWorkload.recoveryToleranceBytes, 100_000_000)
     }
 
-    func testUnsafeOverrideRequiresDebugBuildAndBothDiagnosticFlags() {
-        let flags = ["ZiroEdge", "--memory-diagnostic", "--unsafe-memory-load"]
-        XCTAssertTrue(MemoryDiagnosticRecorder.allowsUnsafeOverride(arguments: flags, isDebugBuild: true))
-        XCTAssertFalse(MemoryDiagnosticRecorder.allowsUnsafeOverride(arguments: flags, isDebugBuild: false))
-        XCTAssertFalse(MemoryDiagnosticRecorder.allowsUnsafeOverride(arguments: ["ZiroEdge", "--unsafe-memory-load"], isDebugBuild: true))
+    func testCalibrationLoadRequiresDebugBuildAndBothDiagnosticFlags() {
+        let flags = ["ZiroEdge", "--memory-diagnostic", "--calibration-memory-load"]
+        XCTAssertTrue(MemoryDiagnosticRecorder.allowsCalibrationLoad(arguments: flags, isDebugBuild: true))
+        XCTAssertFalse(MemoryDiagnosticRecorder.allowsCalibrationLoad(arguments: flags, isDebugBuild: false))
+        XCTAssertFalse(MemoryDiagnosticRecorder.allowsCalibrationLoad(arguments: ["ZiroEdge", "--calibration-memory-load"], isDebugBuild: true))
     }
 
     func testControlledWorkloadRequiresDebugOverrideAndWorkloadFlag() {
         let allFlags = [
             "ZiroEdge",
             "--memory-diagnostic",
-            "--unsafe-memory-load",
+            "--calibration-memory-load",
             "--memory-diagnostic-workload"
         ]
         XCTAssertTrue(MemoryDiagnosticRecorder.allowsControlledWorkload(arguments: allFlags, isDebugBuild: true))
@@ -63,7 +68,7 @@ final class RAMDiagnosticTests: XCTestCase {
         )
         XCTAssertFalse(
             MemoryDiagnosticRecorder.allowsControlledWorkload(
-                arguments: allFlags.filter { $0 != "--unsafe-memory-load" },
+                arguments: allFlags.filter { $0 != "--calibration-memory-load" },
                 isDebugBuild: true
             )
         )

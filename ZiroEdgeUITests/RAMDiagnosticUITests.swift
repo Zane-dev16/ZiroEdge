@@ -1,30 +1,56 @@
 import XCTest
 
-/// Physical-device feedback loop for the installed Gemma E2B model.
+/// Physical-device feedback loop for each registered runtime profile.
 final class RAMDiagnosticUITests: UITestBase {
-    func testObserveGemmaMemoryOutcome() throws {
-        try runDiagnostic(expectation: .observe, unsafeOverride: false)
+    override func setUpWithError() throws {
+#if targetEnvironment(simulator)
+        throw XCTSkip("Physical memory diagnostics are exercised only by Scripts/ram-diagnose.sh")
+#else
+        try super.setUpWithError()
+#endif
     }
 
-    func testAssertGemmaLoads() throws {
-        try runDiagnostic(expectation: .load, unsafeOverride: false)
+    private enum ExpectedOutcome: String {
+        case observe
+        case load
+        case block
     }
 
-    func testAssertGemmaLoadsWithUnsafeOverride() throws {
-        try runDiagnostic(expectation: .load, unsafeOverride: true)
+    private enum Target {
+        static let llama = "llama3.2-3b-q4"
+        static let e2bVision = "gemma-4-e2b-q4"
+        static let e4bVision = "gemma-4-e4b-q4"
+        static let e4bText = "gemma-4-e4b-q4-text-calibration"
     }
 
-    func testAssertGemmaIsBlocked() throws {
-        try runDiagnostic(expectation: .block, unsafeOverride: false)
-    }
+    func testObserveLlamaMemoryOutcome() throws { try runDiagnostic(expectation: .observe, modelID: Target.llama) }
+    func testObserveE2BVisionMemoryOutcome() throws { try runDiagnostic(expectation: .observe, modelID: Target.e2bVision) }
+    func testObserveE4BVisionMemoryOutcome() throws { try runDiagnostic(expectation: .observe, modelID: Target.e4bVision) }
+    func testObserveE4BTextMemoryOutcome() throws { try runDiagnostic(expectation: .observe, modelID: Target.e4bText) }
 
-    func testControlledGemmaWorkloadWithUnsafeOverride() throws {
+    func testBlockLlamaUnvalidatedProfile() throws { try runDiagnostic(expectation: .block, modelID: Target.llama) }
+    func testE2BValidatedProfileLoadsWhenInstalled() throws { try runDiagnostic(expectation: .load, modelID: Target.e2bVision) }
+    func testBlockE4BVisionUnvalidatedProfile() throws { try runDiagnostic(expectation: .block, modelID: Target.e4bVision) }
+    func testBlockE4BTextUnvalidatedProfile() throws { try runDiagnostic(expectation: .block, modelID: Target.e4bText) }
+
+    func testControlledLlamaWorkload() throws { try runControlledWorkload(modelID: Target.llama) }
+    func testControlledE2BVisionWorkload() throws { try runControlledWorkload(modelID: Target.e2bVision) }
+    func testControlledE4BVisionWorkload() throws { try runControlledWorkload(modelID: Target.e4bVision) }
+    func testControlledE4BTextWorkload() throws { try runControlledWorkload(modelID: Target.e4bText) }
+
+    private func runControlledWorkload(modelID: String) throws {
+#if targetEnvironment(simulator)
+        throw XCTSkip("Physical calibration requires the target device and an installed verified artifact")
+#else
         let chatApp = XCUIApplication()
         chatApp.launchArguments = [
             "--uitesting",
             "--memory-diagnostic",
-            "--unsafe-memory-load",
-            "--memory-diagnostic-workload"
+            "--memory-diagnostic-reset",
+            "--calibration-memory-load",
+            "--memory-diagnostic-workload",
+            "--memory-profile-id",
+            modelID
         ]
         chatApp.launch()
         app = chatApp
@@ -48,7 +74,7 @@ final class RAMDiagnosticUITests: UITestBase {
                 app.activate()
                 XCTAssertTrue(status.waitForExistence(timeout: 30), "App did not return after background/foreground cycle")
             }
-            if outcome == "workload-complete" || outcome.hasPrefix("workload-failed-") {
+            if outcome == "workload-complete" || outcome.hasPrefix("workload-failed-") || outcome.hasPrefix("missing-") {
                 break
             }
             // The awaiting-background state lasts only eight seconds. Sample
@@ -57,22 +83,20 @@ final class RAMDiagnosticUITests: UITestBase {
         }
 
         print("[ZIRO-MEMORY-OUTCOME] expectation=controlled-workload outcome=\(outcome)")
+        XCTAssertFalse(outcome.hasPrefix("missing-"), "Required installed calibration artifact is unavailable or unverified")
         XCTAssertTrue(performedBackgroundCycle, "Controlled workload never reached the background/foreground checkpoint")
         XCTAssertEqual(outcome, "workload-complete")
+#endif
     }
 
-    private enum ExpectedOutcome: String {
-        case observe
-        case load
-        case block
-    }
-
-    private func runDiagnostic(expectation: ExpectedOutcome, unsafeOverride: Bool) throws {
+    private func runDiagnostic(expectation: ExpectedOutcome, modelID: String) throws {
+#if targetEnvironment(simulator)
+        throw XCTSkip("Physical diagnostics require the target device and an installed verified artifact")
+#else
         let chatApp = XCUIApplication()
-        chatApp.launchArguments = ["--uitesting", "--memory-diagnostic"]
-        if unsafeOverride {
-            chatApp.launchArguments.append("--unsafe-memory-load")
-        }
+        chatApp.launchArguments = [
+            "--uitesting", "--memory-diagnostic", "--memory-profile-id", modelID
+        ]
         chatApp.launch()
         app = chatApp
 
@@ -90,18 +114,22 @@ final class RAMDiagnosticUITests: UITestBase {
         }
 
         print("[ZIRO-MEMORY-OUTCOME] expectation=\(expectation.rawValue) outcome=\(outcome)")
-        XCTAssertFalse(outcome.hasPrefix("missing-"), "Required installed model gemma-4-e2b-q4 is unavailable or unverified")
+        XCTAssertFalse(
+            outcome.hasPrefix("missing-"),
+            "Required installed calibration artifact is unavailable or unverified"
+        )
 
         switch expectation {
-        case .load:
-            XCTAssertEqual(outcome, "loaded-gemma-4-e2b-q4")
         case .block:
-            XCTAssertEqual(outcome, "blocked-gemma-4-e2b-q4")
+            XCTAssertEqual(outcome, "blocked-\(modelID)")
+        case .load:
+            XCTAssertEqual(outcome, "loaded-\(modelID)")
         case .observe:
             XCTAssertTrue(
-                outcome == "loaded-gemma-4-e2b-q4" || outcome == "blocked-gemma-4-e2b-q4",
+                outcome == "loaded-\(modelID)" || outcome == "blocked-\(modelID)",
                 "Observe mode did not reach a load-policy outcome: \(outcome)"
             )
         }
+#endif
     }
 }

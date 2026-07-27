@@ -10,6 +10,34 @@ import UIKit
 import os
 
 /// The current state of a model in the lifecycle.
+enum ModelLoadFailureKind: String, Sendable, Equatable {
+    case unavailableArtifact
+    case runtimeProfileUnavailable
+    case safetyDisabled
+    case insufficientMemory
+    case invalidatedBySafetyEvent
+    case nativeLoadFailure
+    case safetyPersistence
+}
+
+struct ModelLoadFailure: Sendable, Equatable {
+    let kind: ModelLoadFailureKind
+    let message: String
+    let nativeKind: NativeFailureKind?
+}
+
+enum ModelLoadResult: Sendable, Equatable {
+    case loaded
+    case alreadyLoaded
+    case failed(ModelLoadFailure)
+}
+
+enum ModelSafetyResetResult: Sendable, Equatable {
+    case reset
+    case notDisabled
+    case failed(message: String)
+}
+
 enum ModelState: Sendable, Equatable {
     case unloaded
     case loading
@@ -40,26 +68,41 @@ final class ModelLifecycleManager: ObservableObject {
     @Published var showMemoryWarning = false
     @Published var showInsufficientMemoryWarning = false
     @Published private(set) var insufficientMemoryMessage: String?
+    @Published var showLoadFailure = false
+    @Published private(set) var loadFailureMessage: String?
 
     // MARK: - Dependencies
 
-    private let inferenceService: InferenceService
+    private let inferenceService: any InferenceServiceProtocol
     private let memoryBudgeter: MemoryBudgeter
+    private let loadSafetyStore: LoadSafetyStore
     private let logger = Logger(subsystem: "com.zanish-labs.ziroedge", category: "lifecycle")
+    private let availabilityProvider: @Sendable (AIModel) -> ModelAvailability
+    private let recoveryDelay: Duration
+    private var safetyEpoch: UInt64 = 0
+    private var loadInProgress = false
 
     // MARK: - Download Status (injected from ModelManagerService)
 
     /// Tracks download state per model ID. Populated by ModelManagerService.
     @Published var downloadStatuses: [String: ModelDownloadStatus] = [:]
 
-    /// Stores the evicted model so it can be reloaded after memory pressure eviction.
-    private var evictedModel: AIModel?
-
     // MARK: - Initialization
 
-    init(inferenceService: InferenceService, memoryBudgeter: MemoryBudgeter) {
+    init(
+        inferenceService: any InferenceServiceProtocol,
+        memoryBudgeter: MemoryBudgeter,
+        loadSafetyStore: LoadSafetyStore,
+        availabilityProvider: @escaping @Sendable (AIModel) -> ModelAvailability = {
+            ModelManagerService.availability(for: $0)
+        },
+        recoveryDelay: Duration = .seconds(5)
+    ) {
         self.inferenceService = inferenceService
         self.memoryBudgeter = memoryBudgeter
+        self.loadSafetyStore = loadSafetyStore
+        self.availabilityProvider = availabilityProvider
+        self.recoveryDelay = recoveryDelay
 
         // Observe memory pressure notifications.
         NotificationCenter.default.addObserver(
@@ -70,56 +113,112 @@ final class ModelLifecycleManager: ObservableObject {
         )
     }
 
+#if DEBUG
+    convenience init(
+        inferenceService: any InferenceServiceProtocol,
+        memoryBudgeter: MemoryBudgeter
+    ) {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ZiroEdge-LifecycleSafety-\(UUID().uuidString)")
+        do {
+            let store = try LoadSafetyStore(directory: directory)
+            self.init(
+                inferenceService: inferenceService,
+                memoryBudgeter: memoryBudgeter,
+                loadSafetyStore: store
+            )
+        } catch {
+            preconditionFailure("Could not create isolated lifecycle test storage")
+        }
+    }
+#endif
+
     deinit {
         NotificationCenter.default.removeObserver(self)
     }
 
     // MARK: - Model Operations
 
-    /// Load a model. Checks memory budget first. Unloads current model if needed.
-    func loadModel(_ model: AIModel) async {
-        guard case .ready = ModelManagerService.availability(for: model) else {
-            logger.error("Refusing to load unavailable or unverified model: \(model.id, privacy: .public)")
-            currentState = .loadFailed
-            return
+    /// Load a model. Every exit returns a typed result and user-visible failures.
+    @discardableResult
+    func loadModel(_ model: AIModel) async -> ModelLoadResult {
+        guard case .ready = availabilityProvider(model) else {
+            return failLoad(
+                kind: .unavailableArtifact,
+                message: "The downloaded model files are missing or failed integrity verification. Repair the download and try again."
+            )
         }
         if let active = activeModel, active.id == model.id, currentState == .loaded {
-            logger.info("Model already loaded: \(model.id, privacy: .public)")
-            return
+            return .alreadyLoaded
         }
 
+        loadInProgress = true
         currentState = .loading
+        let loadEpoch = safetyEpoch
+        defer { loadInProgress = false }
         MemoryDiagnosticRecorder.shared.capture(.beforeModelLoad)
 
-        var decision = await memoryBudgeter.decision(for: model)
-        if decision.recommendation == .unloadCurrentFirst, activeModel != nil {
-            logger.info("Unloading current model to make room for \(model.id, privacy: .public)")
-            await unloadCurrentModel()
-            // Reclaim is asynchronous. Recheck instead of assuming the unload made the load safe.
-            try? await Task.sleep(nanoseconds: 500_000_000)  // 0.5s
-            decision = await memoryBudgeter.decision(for: model)
-        }
-
-        if decision.recommendation != .proceed {
-            if MemoryDiagnosticRecorder.shared.unsafeLoadOverrideEnabled {
-                logger.fault("DEBUG override accepted unsafe load for \(model.id, privacy: .public): \(decision.logSummary, privacy: .public)")
-            } else {
-                logger.warning("Blocking unsafe load for \(model.id, privacy: .public): \(decision.logSummary, privacy: .public)")
-                insufficientMemoryMessage = decision.alertMessage(modelName: model.displayName)
-                showInsufficientMemoryWarning = true
-                currentState = activeModel == nil ? .loadFailed : .loaded
-                return
+        let engineReportsLoaded = await inferenceService.isModelLoaded
+        let hadPriorEngine = activeModel != nil || engineReportsLoaded
+        if hadPriorEngine {
+            await inferenceService.cancelCurrentStream()
+            await inferenceService.unloadModel()
+            activeModel = nil
+            currentState = .loading
+            do {
+                try await Task.sleep(for: recoveryDelay)
+            } catch {
+                return await invalidateLoadAttempt()
             }
         }
+        guard loadEpoch == safetyEpoch else { return await invalidateLoadAttempt() }
 
-        // Get file paths.
+        guard let profile = MemoryProfileRegistry.profile(for: model.id) else {
+            return failLoad(kind: .runtimeProfileUnavailable, message: model.runtimeEligibilityExplanation)
+        }
+        if loadSafetyStore.isDisabled(profileID: profile.id) {
+            return failLoad(
+                kind: .safetyDisabled,
+                message: "This exact runtime profile was disabled after two unclean attempts among its last five loads. "
+                    + "Open the model details and explicitly reset its safety history before trying again."
+            )
+        }
+
+        let calibrationOverride = MemoryDiagnosticRecorder.shared.controlledWorkloadEnabled
+            && model.id == MemoryDiagnosticRecorder.targetModelID
+        let experimentalConsent = model.runtimeEligibility == .experimental
+            && ExperimentalModelConsent.isGranted(for: model)
+        let decision = await memoryBudgeter.decision(
+            for: model,
+            allowUnvalidatedCalibration: calibrationOverride || experimentalConsent
+        )
+        guard loadEpoch == safetyEpoch else { return await invalidateLoadAttempt() }
+        guard decision.recommendation == .proceed else {
+            logger.warning("Blocking unsafe load for \(model.id, privacy: .public): \(decision.logSummary, privacy: .public)")
+            insufficientMemoryMessage = decision.alertMessage(modelName: model.displayName)
+            showInsufficientMemoryWarning = true
+            currentState = .loadFailed
+            return .failed(ModelLoadFailure(
+                kind: .insufficientMemory,
+                message: decision.alertMessage(modelName: model.displayName),
+                nativeKind: nil
+            ))
+        }
+
         let baseURL = ModelManagerService.baseModelPath(for: model)
         let mmprojURL = model.requiresMMProj ? ModelManagerService.mmprojModelPath(for: model) : nil
-
-        // Load the model, context, and optional multimodal projector.
         let loadStarted = ContinuousClock.now
         do {
             try await inferenceService.loadModel(model, baseURL: baseURL, mmprojURL: mmprojURL)
+            guard loadEpoch == safetyEpoch else { return await invalidateLoadAttempt() }
+            guard await memoryBudgeter.postLoadReserveSatisfied() else {
+                await inferenceService.unloadModel()
+                throw InferenceError.nativeFailure(
+                    kind: .memoryPressure,
+                    diagnostic: MemoryAdmissionFailure.postLoadReserveBreached.rawValue
+                )
+            }
+            guard loadEpoch == safetyEpoch else { return await invalidateLoadAttempt() }
             activeModel = model
             currentState = .loaded
             MemoryDiagnosticRecorder.shared.capture(
@@ -127,43 +226,119 @@ final class ModelLifecycleManager: ObservableObject {
                 elapsedMilliseconds: loadStarted.elapsedMilliseconds
             )
             logger.info("Model loaded: \(model.id, privacy: .public)")
+            return .loaded
         } catch {
             MemoryDiagnosticRecorder.shared.capture(
                 .afterModelLoad,
                 elapsedMilliseconds: loadStarted.elapsedMilliseconds,
                 error: error.localizedDescription
             )
-            logger.error("Model load failed: \(error.localizedDescription, privacy: .public)")
-            currentState = .loadFailed
+            let inferenceError = error as? InferenceError
+            logger.error("Model load failed: \(inferenceError?.sanitizedDiagnostic ?? "unknown-load-failure", privacy: .private)")
+            let nativeKind = inferenceError?.nativeFailureKind
+            let message = Self.userMessage(for: inferenceError)
+            return failLoad(
+                kind: inferenceError?.sanitizedDiagnostic.contains("load-safety") == true
+                    ? .safetyPersistence : .nativeLoadFailure,
+                message: message,
+                nativeKind: nativeKind
+            )
         }
     }
 
-    /// Unload the current model, freeing memory.
-    func unloadCurrentModel() async {
+    private func failLoad(
+        kind: ModelLoadFailureKind,
+        message: String,
+        nativeKind: NativeFailureKind? = nil
+    ) -> ModelLoadResult {
+        currentState = .loadFailed
+        loadFailureMessage = message
+        showLoadFailure = true
+        return .failed(ModelLoadFailure(kind: kind, message: message, nativeKind: nativeKind))
+    }
+
+    private func invalidateLoadAttempt() async -> ModelLoadResult {
+        await inferenceService.cancelCurrentStream()
+        await inferenceService.unloadModel()
+        activeModel = nil
+        currentState = .evicted
+        return .failed(ModelLoadFailure(
+            kind: .invalidatedBySafetyEvent,
+            message: "Model loading stopped because the app left the foreground or received memory pressure.",
+            nativeKind: .memoryPressure
+        ))
+    }
+
+    private static func userMessage(for error: InferenceError?) -> String {
+        guard let error else { return "The local model could not be loaded. Try repairing the download." }
+        switch error {
+        case .modelFileNotFound:
+            return "The model artifact is missing. Repair the download and try again."
+        case .mmprojFileNotFound:
+            return "The vision projector is missing. Repair the download and try again."
+        case .nativeFailure(let kind, _):
+            switch kind {
+            case .modelMapping: return "The model file could not be mapped into memory."
+            case .contextCreation: return "The model context could not be created safely."
+            case .projectorInitialization: return "The vision projector could not be initialized."
+            case .memoryPressure: return "The model was unloaded because the required memory reserve was not available."
+            case .suspectedJetsam: return "Load safety state could not be committed. Loading remains blocked."
+            case .inference: return "The local inference engine could not load this model."
+            }
+        case .modelNotLoaded, .visionNotSupported:
+            return error.localizedDescription
+        }
+    }
+
+    /// Unload the current model, freeing memory. Persistence failures are surfaced.
+    @discardableResult
+    func unloadCurrentModel() async -> Bool {
         let unloadStarted = ContinuousClock.now
         await inferenceService.unloadModel()
         let previousModel = activeModel
         activeModel = nil
         currentState = .unloaded
+        if let previousModel,
+           let profileID = MemoryProfileRegistry.profile(for: previousModel.id)?.id {
+            do {
+                try loadSafetyStore.clearAfterCleanUnload(profileID: profileID)
+            } catch {
+                loadFailureMessage = "The model unloaded, but its load-safety state could not be saved."
+                showLoadFailure = true
+                return false
+            }
+        }
         MemoryDiagnosticRecorder.shared.capture(
             .afterUnload,
             elapsedMilliseconds: unloadStarted.elapsedMilliseconds
         )
         logger.info("Model unloaded: \(previousModel?.id ?? "none", privacy: .public)")
+        return true
     }
 
-    /// Switch to a different model, restoring the previous model if the new load fails.
-    func switchToModel(_ model: AIModel) async {
-        if let active = activeModel, active.id == model.id { return }
+    /// Switch to a different model. Safety failures never trigger an automatic reload.
+    @discardableResult
+    func switchToModel(_ model: AIModel) async -> ModelLoadResult {
+        if let active = activeModel, active.id == model.id { return .alreadyLoaded }
+        return await loadModel(model)
+    }
 
-        let previousModel = activeModel
-        await unloadCurrentModel()
-        await loadModel(model)
-
-        if currentState != .loaded, let previousModel {
-            logger.warning("Model switch failed; restoring \(previousModel.id, privacy: .public)")
-            await loadModel(previousModel)
+    func resetLoadSafety(for model: AIModel) -> ModelSafetyResetResult {
+        guard let profile = MemoryProfileRegistry.profile(for: model.id) else {
+            return .failed(message: "No runtime profile exists for this model.")
         }
+        guard loadSafetyStore.isDisabled(profileID: profile.id) else { return .notDisabled }
+        do {
+            try loadSafetyStore.reset(profileID: profile.id)
+            return .reset
+        } catch {
+            return .failed(message: "The safety history could not be reset. Loading remains blocked.")
+        }
+    }
+
+    func isLoadSafetyDisabled(for model: AIModel) -> Bool {
+        guard let profile = MemoryProfileRegistry.profile(for: model.id) else { return false }
+        return loadSafetyStore.isDisabled(profileID: profile.id)
     }
 
     /// Whether a model is currently loaded and ready.
@@ -175,16 +350,25 @@ final class ModelLifecycleManager: ObservableObject {
     // MARK: - Memory Pressure
 
     @objc private func handleMemoryPressure() {
-        MemoryDiagnosticRecorder.shared.capture(.memoryWarning)
-        logger.warning("Memory pressure received — evicting model")
-        guard currentState == .loaded else { return }
-        Task {
-            guard currentState == .loaded else { return }
-            evictedModel = activeModel
-            await unloadCurrentModel()
-            currentState = .evicted
-            showMemoryWarning = true
-        }
+        // Keep the critical notification path allocation-free apart from dispatching existing actor work.
+        guard currentState == .loaded || currentState == .loading || loadInProgress else { return }
+        safetyEpoch &+= 1
+        currentState = .evicted
+        Task { await cancelAndUnloadForSafety(showWarning: true) }
+    }
+
+    func handleBackgroundTransition() async {
+        guard currentState == .loaded || currentState == .loading || loadInProgress else { return }
+        safetyEpoch &+= 1
+        currentState = .evicted
+        await cancelAndUnloadForSafety(showWarning: false)
+    }
+
+    private func cancelAndUnloadForSafety(showWarning: Bool) async {
+        await inferenceService.cancelCurrentStream()
+        await unloadCurrentModel()
+        currentState = .evicted
+        showMemoryWarning = showWarning
     }
 
     /// Dismiss the memory warning banner.
@@ -192,24 +376,16 @@ final class ModelLifecycleManager: ObservableObject {
         showMemoryWarning = false
     }
 
-    /// Reload after eviction.
-    func reloadEvictedModel() async {
-        guard let model = evictedModel else { return }
-        evictedModel = nil
-        showMemoryWarning = false
-        await loadModel(model)
-    }
-
     /// Load the first fully downloaded model. Used for UI testing.
     func autoLoadFirstModel() async {
         guard activeModel == nil else { return }
 
         let candidates: [AIModel]
-        if MemoryDiagnosticRecorder.shared.isEnabled,
+        if MemoryDiagnosticRecorder.shared.controlledWorkloadEnabled,
            let target = ModelRegistry.model(for: MemoryDiagnosticRecorder.targetModelID) {
             candidates = [target]
         } else {
-            candidates = ModelRegistry.allModels
+            candidates = ModelRegistry.selectableModels
         }
 
         guard let model = candidates.first(where: ModelManagerService.isFullyDownloaded) else {
@@ -236,7 +412,7 @@ enum ModelManagerService {
 
     /// File path for a model's base .gguf.
     static func baseModelPath(for model: AIModel) -> URL {
-        modelsDirectory.appendingPathComponent("\(model.id).gguf")
+        modelsDirectory.appendingPathComponent("\(model.baseArtifactStorageID).gguf")
     }
 
     /// File path for a model's mmproj.gguf (vision models).
@@ -244,45 +420,47 @@ enum ModelManagerService {
         modelsDirectory.appendingPathComponent("\(model.id)-mmproj.gguf")
     }
 
-    /// Whether the base model file exists on disk AND passes basic validation.
-    /// Bogus files (wrong magic, size mismatch, etc.) are removed automatically.
+    /// Whether the base artifact passes the complete catalog contract.
+    /// Download planning must use the digest too: header and size alone cannot
+    /// distinguish a repairable same-size corruption from an installed model.
     static func isBaseDownloaded(_ model: AIModel) -> Bool {
-        guard isValidSHA256(model.baseSHA256) else { return false }
-        let path = baseModelPath(for: model)
-        guard FileManager.default.fileExists(atPath: path.path) else { return false }
-        guard verifyGGUFHeader(fileURL: path) else {
-            try? FileManager.default.removeItem(at: path)
-            return false
-        }
-        // Cheap size check — wrong byte count means the download is incomplete/corrupt.
-        if let attrs = try? FileManager.default.attributesOfItem(atPath: path.path),
-           let fileSize = attrs[.size] as? Int64,
-           fileSize != model.baseFileSizeBytes {
-            try? FileManager.default.removeItem(at: path)
-            return false
-        }
-        return true
+        isArtifactDownloaded(model, artifact: .base)
     }
 
-    /// Whether the mmproj file exists on disk AND passes basic validation.
+    /// Whether the projector passes the complete catalog contract.
     /// Always returns true for text-only models.
     static func isMMProjDownloaded(_ model: AIModel) -> Bool {
         guard model.requiresMMProj else { return true }
-        guard let hash = model.mmprojSHA256, isValidSHA256(hash) else { return false }
-        let path = mmprojModelPath(for: model)
-        guard FileManager.default.fileExists(atPath: path.path) else { return false }
-        guard verifyGGUFHeader(fileURL: path) else {
+        return isArtifactDownloaded(model, artifact: .mmproj)
+    }
+
+    private static func isArtifactDownloaded(_ model: AIModel, artifact: ArtifactType) -> Bool {
+        let path: URL
+        let expectedBytes: Int64
+        let expectedSHA: String
+        switch artifact {
+        case .base:
+            path = baseModelPath(for: model)
+            expectedBytes = model.baseFileSizeBytes
+            expectedSHA = model.baseSHA256
+        case .mmproj:
+            guard let bytes = model.mmprojFileSizeBytes,
+                  let sha = model.mmprojSHA256 else { return false }
+            path = mmprojModelPath(for: model)
+            expectedBytes = bytes
+            expectedSHA = sha
+        }
+        guard isValidSHA256(expectedSHA),
+              FileManager.default.fileExists(atPath: path.path) else { return false }
+        guard verifyGGUFHeader(fileURL: path),
+              let attrs = try? FileManager.default.attributesOfItem(atPath: path.path),
+              let fileSize = attrs[.size] as? Int64,
+              fileSize == expectedBytes else {
+            // Incomplete and non-GGUF files cannot be resumed as installed artifacts.
             try? FileManager.default.removeItem(at: path)
             return false
         }
-        if let expectedSize = model.mmprojFileSizeBytes,
-           let attrs = try? FileManager.default.attributesOfItem(atPath: path.path),
-           let fileSize = attrs[.size] as? Int64,
-           fileSize != expectedSize {
-            try? FileManager.default.removeItem(at: path)
-            return false
-        }
-        return true
+        return verifySHA256(fileURL: path, expected: expectedSHA)
     }
 
     /// Whether a model is fully downloaded AND passes validation (GGUF header, size, SHA-256).
@@ -349,18 +527,23 @@ enum ModelManagerService {
         value.count == 64 && value.allSatisfy { $0.isHexDigit && !$0.isUppercase }
     }
 
-    /// Delete a model's files from disk.
+    static func isBaseArtifactShared(_ model: AIModel) -> Bool {
+        ModelRegistry.allModels.contains {
+            $0.id != model.id && $0.baseArtifactStorageID == model.baseArtifactStorageID
+        }
+    }
+
+    /// Delete artifacts owned exclusively by one catalog entry. A shared base
+    /// remains installed while another catalog variant references that storage ID.
     static func deleteModel(_ model: AIModel) {
         let fm = FileManager.default
-        let basePath = baseModelPath(for: model)
-        let mmprojPath = mmprojModelPath(for: model)
-
-        try? fm.removeItem(at: basePath)
-        if model.requiresMMProj {
-            try? fm.removeItem(at: mmprojPath)
+        if !isBaseArtifactShared(model) {
+            try? fm.removeItem(at: baseModelPath(for: model))
         }
-
-        logger.info("Deleted model files: \(model.id, privacy: .public)")
+        if model.requiresMMProj {
+            try? fm.removeItem(at: mmprojModelPath(for: model))
+        }
+        logger.info("Deleted model-owned files: \(model.id, privacy: .public)")
     }
 
     /// Create the models directory if it doesn't exist.
@@ -387,6 +570,11 @@ extension ModelManagerService {
 
     /// Comprehensive model availability check for an AIModel.
     static func availability(for model: AIModel) -> ModelAvailability {
+#if DEBUG
+        if HermeticUITestRuntime.isEnabled, model.id == ModelRegistry.llama32_3B.id {
+            return .ready
+        }
+#endif
         // Missing or malformed integrity metadata is a catalog configuration error.
         guard isValidSHA256(model.baseSHA256),
               !model.requiresMMProj || model.mmprojSHA256.map(isValidSHA256) == true else {

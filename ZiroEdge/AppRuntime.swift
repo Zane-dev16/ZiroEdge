@@ -19,6 +19,7 @@ final class AppRuntime: ObservableObject {
         case loading(attempt: Int)
         case ready(RuntimeServices)
         case failed(PersistenceFailure)
+        case loadSafetyFailed(message: String)
         case quarantining
         case awaitingResetConfirmation(StoreRecoveryArtifact)
         case resetting
@@ -53,7 +54,11 @@ final class AppRuntime: ObservableObject {
     }
 
     func retry() {
-        guard case .failed = state, openTask == nil else { return }
+        guard openTask == nil else { return }
+        switch state {
+        case .failed, .loadSafetyFailed: break
+        default: return
+        }
         openTask = Task { [weak self] in
             guard let self else { return }
             await self.openStore()
@@ -133,7 +138,14 @@ final class AppRuntime: ObservableObject {
                 lastFailure = nil
                 diagnosticsURL = nil
                 diagnosticsExportError = nil
-                state = .ready(makeServices(persistence: persistence))
+                do {
+                    state = .ready(try makeServices(persistence: persistence))
+                } catch {
+                    state = .loadSafetyFailed(
+                        message: "Load-safety storage is unavailable or corrupt. Model loading is blocked to protect this device."
+                    )
+                    return
+                }
                 if isCompletingReset {
                     isCompletingReset = false
                     postResetMessage = "Local history reset successfully. You can start a new conversation."
@@ -152,12 +164,23 @@ final class AppRuntime: ObservableObject {
         }
     }
 
-    private func makeServices(persistence: PersistenceController) -> RuntimeServices {
-        let inferenceService = InferenceService()
+    private func makeServices(persistence: PersistenceController) throws -> RuntimeServices {
+        let loadSafetyStore = try LoadSafetyStore()
+        let inferenceService = InferenceService(loadSafetyStore: loadSafetyStore)
+#if DEBUG
+        let memoryBudgeter = HermeticUITestRuntime.isEnabled
+            ? MemoryBudgeter(metrics: FixedMemoryMetricsProvider(
+                processAvailable: 4_000_000_000,
+                total: 8_054_095_872
+            ))
+            : MemoryBudgeter()
+#else
         let memoryBudgeter = MemoryBudgeter()
+#endif
         let lifecycleManager = ModelLifecycleManager(
             inferenceService: inferenceService,
-            memoryBudgeter: memoryBudgeter
+            memoryBudgeter: memoryBudgeter,
+            loadSafetyStore: loadSafetyStore
         )
         let sessionActor = ChatSessionActor(inferenceService: inferenceService, persistence: persistence)
         let conversationListViewModel = ConversationListViewModel(persistence: persistence)

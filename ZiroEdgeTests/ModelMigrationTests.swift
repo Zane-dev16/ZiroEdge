@@ -227,7 +227,6 @@ final class ModelMigrationTests: XCTestCase {
             mmprojSHA256: sha256(projector),
             quantization: "Q4_K_M",
             config: .llama32,
-            minimumDeviceRAM: 0,
             license: testLicense
         )
         return MigrationFixture(model: model, base: base, projector: projector)
@@ -253,7 +252,6 @@ final class ModelMigrationTests: XCTestCase {
             mmprojSHA256: nil,
             quantization: "Q4_K_M",
             config: .llama32,
-            minimumDeviceRAM: 0,
             license: testLicense
         )
         return MigrationFixture(model: model, base: base, projector: nil)

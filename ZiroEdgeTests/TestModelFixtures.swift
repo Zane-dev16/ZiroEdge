@@ -27,7 +27,6 @@ enum TestModelFixtures {
             mmprojSHA256: nil,
             quantization: "Q4_K_M",
             config: .llama32,
-            minimumDeviceRAM: 0,
             license: LicenseInfo(name: "Test", url: URL(string: "https://example.com/license")!, copyright: "Test")
         )
     }

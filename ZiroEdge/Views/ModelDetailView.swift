@@ -26,6 +26,7 @@ struct ModelDetailView: View {
                 .padding(.vertical, ZiroTheme.Spacing.small)
             }
             metadataSection
+            runtimeSection
             downloadSection
             if viewModel.isDownloaded(model) {
                 actionsSection
@@ -33,6 +34,11 @@ struct ModelDetailView: View {
         }
         .navigationTitle(model.displayName)
         .navigationBarTitleDisplayMode(.inline)
+        .alert("Load Safety", isPresented: $viewModel.showingSafetyResetResult) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(viewModel.safetyResetMessage)
+        }
     }
 
     // MARK: - Metadata
@@ -46,6 +52,38 @@ struct ModelDetailView: View {
             LabeledContent("License", value: model.license.name)
             if viewModel.isDownloaded(model) {
                 LabeledContent("Storage Used", value: viewModel.diskUsage(for: model))
+            }
+        }
+    }
+
+    private var runtimeSection: some View {
+        Section("Runtime Status") {
+            LabeledContent("Mode", value: model.runtimeEligibility.label)
+            Text(model.runtimeEligibilityExplanation)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+
+            if viewModel.isLoadSafetyDisabled(for: model) {
+                Label(
+                    "Loading is disabled after repeated unclean attempts.",
+                    systemImage: "exclamationmark.shield.fill"
+                )
+                .foregroundStyle(.orange)
+                Button("Reset Load-Safety History") {
+                    viewModel.resetLoadSafety(for: model)
+                }
+            }
+
+            if model.runtimeEligibility == .experimental {
+                if viewModel.hasExperimentalConsent(for: model) {
+                    Button("Disable Experimental Use", role: .destructive) {
+                        viewModel.revokeExperimentalConsent(for: model)
+                    }
+                } else {
+                    Button("Review Experimental Use") {
+                        viewModel.requestExperimentalConsent(for: model)
+                    }
+                }
             }
         }
     }

@@ -2,70 +2,64 @@ import XCTest
 @testable import ZiroEdge
 
 final class MemoryBudgeterTests: XCTestCase {
-    private let model = AIModel(
-        id: "memory-fixture", displayName: "Fixture", description: "Fixture", modelType: .text,
-        baseURL: URL(string: "https://example.com/model.gguf")!, mmprojURL: nil,
-        baseFileSizeBytes: 2_000_000_000, mmprojFileSizeBytes: nil,
-        baseSHA256: String(repeating: "a", count: 64), mmprojSHA256: nil,
-        quantization: "Q4", config: .llama32, minimumDeviceRAM: 0,
-        license: LicenseInfo(name: "Test", url: URL(string: "https://example.com")!, copyright: "Test")
-    )
-
     func testDecisionUsesExactlyOneProcessHeadroomSample() async {
-        let metrics = CountingMemoryMetricsProvider(processAvailable: 4_000_000_000, total: 8_000_000_000)
-        let decision = await MemoryBudgeter(metrics: metrics).decision(for: model)
-
-        XCTAssertEqual(decision.recommendation, .proceed)
-        XCTAssertEqual(decision.processAvailableBytes, 4_000_000_000)
-        XCTAssertEqual(metrics.processAvailableCallCount, 1)
-    }
-
-    func testCapturedPhysicalDeviceFixtureBlocksGemmaWithoutHostVMFallback() async throws {
-        let gemma = try XCTUnwrap(ModelRegistry.model(for: "gemma-4-e2b-q4"))
-        let metrics = FixedMemoryMetricsProvider(
-            processAvailable: 3_488_300_112,
-            total: 8_054_095_872
+        let metrics = CountingMemoryMetricsProvider(processAvailable: 4_000_000_000, total: 8_054_095_872)
+        let decision = await MemoryBudgeter(metrics: metrics).decision(
+            for: ModelRegistry.gemma4_e2b,
+            allowUnvalidatedCalibration: true
         )
 
-        let decision = await MemoryBudgeter(metrics: metrics).decision(for: gemma)
-
-        XCTAssertEqual(decision.modelBytes, 3_985_228_864)
-        XCTAssertEqual(decision.requiredBytes, 5_485_228_864)
-        XCTAssertEqual(decision.recommendation, .insufficientRAM)
-        XCTAssertEqual(decision.processAvailableBytes, 3_488_300_112)
+        XCTAssertEqual(decision.recommendation, .proceed)
+        XCTAssertEqual(decision.requiredBytes, 1_750_000_000)
+        XCTAssertEqual(decision.processAvailableBytes, 4_000_000_000)
+        XCTAssertEqual(metrics.processAvailableCallCount, 1)
+        XCTAssertNil(decision.artifactBytesUsedForAdmission)
     }
 
-    func testZeroProcessHeadroomFailsClosedInsteadOfUsingHostMemory() async {
+    func testAcceptedPhysicalWorkloadPromotesExactE2BProfile() async {
+        let decision = await MemoryBudgeter(
+            metrics: FixedMemoryMetricsProvider(
+                processAvailable: 3_488_300_112,
+                total: 8_054_095_872
+            )
+        ).decision(for: ModelRegistry.gemma4_e2b)
+
+        XCTAssertEqual(decision.recommendation, .proceed)
+        XCTAssertNil(decision.reason)
+        XCTAssertEqual(decision.requiredBytes, 1_750_000_000)
+        XCTAssertNil(decision.artifactBytesUsedForAdmission)
+    }
+
+    func testZeroProcessHeadroomFailsClosed() async {
         let decision = await MemoryBudgeter(
             metrics: FixedMemoryMetricsProvider(processAvailable: 0, total: 128_000_000_000)
-        ).decision(for: model)
+        ).decision(for: ModelRegistry.gemma4E4BTextCalibration, allowUnvalidatedCalibration: true)
 
         XCTAssertEqual(decision.recommendation, .insufficientRAM)
-        XCTAssertEqual(decision.processAvailableBytes, 0)
+        XCTAssertEqual(decision.reason, .metricsUnavailable)
     }
 
-    func testDecisionOwnsRecommendationFormattingAndAlertWording() async {
+    func testPhysicalRAMMinimumIsEnforcedForCalibration() async {
         let decision = await MemoryBudgeter(
-            metrics: FixedMemoryMetricsProvider(processAvailable: 1_000_000_000, total: 8_000_000_000)
-        ).decision(for: model)
+            metrics: FixedMemoryMetricsProvider(processAvailable: 4_000_000_000, total: 6_000_000_000)
+        ).decision(for: ModelRegistry.gemma4E4BTextCalibration, allowUnvalidatedCalibration: true)
 
-        XCTAssertEqual(decision.recommendation, .insufficientRAM)
-        XCTAssertTrue(decision.alertMessage(modelName: model.displayName).contains("App Memory Headroom"))
+        XCTAssertEqual(decision.reason, .physicalRAMBelowMinimum)
+    }
+
+    func testDecisionOwnsFormattingAndUnvalidatedWording() async {
+        let decision = await MemoryBudgeter(
+            metrics: FixedMemoryMetricsProvider(processAvailable: 1_000_000_000, total: 8_054_095_872)
+        ).decision(for: ModelRegistry.gemma4E4BTextCalibration)
+
+        XCTAssertTrue(decision.alertMessage(modelName: "Fixture").contains("explicit consent"))
         XCTAssertTrue(decision.logSummary.contains("processHeadroomBytes=1000000000"))
     }
 
-    func testUnloadRecommendationUsesSameCapturedSample() async {
-        let metrics = CountingMemoryMetricsProvider(processAvailable: 2_500_000_000, total: 8_000_000_000)
-        let decision = await MemoryBudgeter(metrics: metrics).decision(for: model)
-
-        XCTAssertEqual(decision.recommendation, .unloadCurrentFirst)
-        XCTAssertEqual(metrics.processAvailableCallCount, 1)
-    }
-
     func testSettingsFormattingReusesLatestDecisionSample() async {
-        let metrics = CountingMemoryMetricsProvider(processAvailable: 2_500_000_000, total: 8_000_000_000)
+        let metrics = CountingMemoryMetricsProvider(processAvailable: 2_500_000_000, total: 8_054_095_872)
         let budgeter = MemoryBudgeter(metrics: metrics)
-        let decision = await budgeter.decision(for: model)
+        let decision = await budgeter.decision(for: ModelRegistry.gemma4E4BTextCalibration)
         let displayedHeadroom = await budgeter.formattedAppMemoryHeadroom()
 
         XCTAssertEqual(displayedHeadroom, decision.formattedAppMemoryHeadroom)
@@ -73,14 +67,7 @@ final class MemoryBudgeterTests: XCTestCase {
     }
 
     func testMemoryFormattingClampsValuesAboveInt64Max() {
-        let decision = MemoryLoadDecision(
-            recommendation: .proceed,
-            processAvailableBytes: .max,
-            modelBytes: 1,
-            requiredBytes: 1
-        )
-
-        XCTAssertFalse(decision.formattedAppMemoryHeadroom.isEmpty)
+        XCTAssertFalse(MemoryLoadDecision.format(bytes: .max).isEmpty)
     }
 
     func testSystemMetricsSmoke() async {

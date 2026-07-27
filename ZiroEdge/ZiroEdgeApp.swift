@@ -32,7 +32,9 @@ struct ZiroEdgeApp: App {
                 .task {
                     guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
                     if MemoryDiagnosticRecorder.shared.isEnabled {
-                        MemoryDiagnosticRecorder.shared.resetLog()
+                        if CommandLine.arguments.contains("--memory-diagnostic-reset") {
+                            MemoryDiagnosticRecorder.shared.resetLog()
+                        }
                         MemoryDiagnosticRecorder.shared.capture(.cold)
                     }
                     await runtime.start()
@@ -46,6 +48,7 @@ struct ZiroEdgeApp: App {
                     guard phase == .background,
                           case .ready(let services) = runtime.state else { return }
                     Task {
+                        await services.lifecycleManager.handleBackgroundTransition()
                         let failures = await services.persistence.flushPendingWrites()
                         if let failure = failures.values.first {
                             await MainActor.run {
@@ -102,6 +105,20 @@ struct ZiroEdgeApp: App {
                 if CommandLine.arguments.contains("--uitesting") {
                     await services.lifecycleManager.autoLoadFirstModel()
                 }
+#if DEBUG
+                if CommandLine.arguments.contains("--uitesting-sendtest"),
+                   let model = services.lifecycleManager.activeModel {
+                    await services.chatViewModel.selectModel(model)
+                    if let id = await services.conversationListViewModel.createConversation(
+                        modelID: model.id,
+                        title: "UITest Send Test"
+                    ) {
+                        await services.chatViewModel.loadConversation(id)
+                        services.chatViewModel.inputText = "Reply with exactly OK."
+                        await services.chatViewModel.sendMessage()
+                    }
+                }
+#endif
             }
         case .failed(let failure):
             StoreRecoveryView(
@@ -112,6 +129,18 @@ struct ZiroEdgeApp: App {
                 onExportDiagnostics: runtime.exportDiagnostics,
                 onReset: runtime.prepareReset
             )
+        case .loadSafetyFailed(let message):
+            VStack(spacing: ZiroTheme.Spacing.large) {
+                ZiroHero(
+                    symbol: "lock.trianglebadge.exclamationmark",
+                    title: "Model loading is blocked",
+                    message: message,
+                    tint: .orange
+                )
+                Button("Retry Safety Storage") { runtime.retry() }
+                    .buttonStyle(ZiroPrimaryButtonStyle())
+            }
+            .padding()
         case .quarantining:
             StoreOperationProgressView(
                 symbol: "doc.on.doc.fill",
@@ -156,7 +185,7 @@ struct MainView: View {
 #endif
 
     private var hasModels: Bool {
-        ModelRegistry.allModels.contains { downloadManager.status(for: $0).isReady }
+        ModelRegistry.selectableModels.contains { downloadManager.status(for: $0).isReady }
     }
 
     var body: some View {
@@ -177,10 +206,15 @@ struct MainView: View {
             )
         }
         .alert("Model Unloaded", isPresented: $lifecycleManager.showMemoryWarning) {
-            Button("Reload Model") { Task { await lifecycleManager.reloadEvictedModel() } }
-            Button("Not Now", role: .cancel) { lifecycleManager.dismissMemoryWarning() }
+            Button("OK", role: .cancel) { lifecycleManager.dismissMemoryWarning() }
         } message: {
             Text("ZiroEdge released the model to protect your device under memory pressure. Reload it when you are ready to continue.")
+        }
+        .alert("Model Load Failed", isPresented: $lifecycleManager.showLoadFailure) {
+            Button("Choose Another Model") { showModelsFromPicker = true }
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(lifecycleManager.loadFailureMessage ?? "The local model could not be loaded.")
         }
         .alert("Model Needs More Memory", isPresented: $lifecycleManager.showInsufficientMemoryWarning) {
             Button("Choose Another Model") { showModelsFromPicker = true }
@@ -204,7 +238,11 @@ struct MainView: View {
             OnboardingView(isPresented: $onboardingManager.showOnboarding)
         }
         .onChange(of: conversationListViewModel.selectedConversationID) { _, selection in
-            if selection == nil {
+            if let selection {
+                if horizontalSizeClass == .compact, compactPath.last != selection {
+                    compactPath = [selection]
+                }
+            } else {
                 chatViewModel.clearActiveConversation()
                 compactPath.removeAll()
             }
@@ -485,6 +523,14 @@ struct SettingsView: View {
                 Section {
                     LabeledContent("App Memory Headroom", value: appMemoryHeadroom)
                     LabeledContent("Total Device RAM", value: totalRAM)
+#if DEBUG
+                    if let exportURL = MemoryDiagnosticRecorder.shared.exportURL {
+                        ShareLink(item: exportURL) {
+                            Label("Export Memory Calibration JSONL", systemImage: "square.and.arrow.up")
+                        }
+                        .accessibilityIdentifier("export-memory-calibration")
+                    }
+#endif
                 } header: {
                     Text("Memory")
                 } footer: {

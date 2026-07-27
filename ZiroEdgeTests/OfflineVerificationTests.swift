@@ -259,7 +259,7 @@ final class OfflineModelLoadingTests: XCTestCase {
             id: "test-vision-offline", displayName: "Vision Test", description: "Test", modelType: .vision,
             baseURL: URL(string: "https://example.com/base.gguf")!, mmprojURL: URL(string: "https://example.com/mmproj.gguf")!,
             baseFileSizeBytes: 16, mmprojFileSizeBytes: 16, baseSHA256: "", mmprojSHA256: "",
-            quantization: "Q4", config: .llama32, minimumDeviceRAM: 0,
+            quantization: "Q4", config: .llama32,
             license: LicenseInfo(name: "Test", url: URL(string: "https://example.com")!, copyright: "Test")
         )
         XCTAssertFalse(ModelManagerService.isFullyDownloaded(invalid))
@@ -614,9 +614,11 @@ final class OfflineModelsPageTests: XCTestCase {
         super.tearDown()
     }
 
-    func testModelsPageShowsAllModelsOffline() {
-        // The models page should list all registered models regardless of network.
-        XCTAssertEqual(modelsViewModel.allModels.count, ModelRegistry.allModels.count)
+    func testModelsPageShowsCatalogWhileRuntimeEligibilityRemainsExplicit() {
+        XCTAssertEqual(modelsViewModel.allModels, ModelRegistry.allModels)
+        XCTAssertFalse(modelsViewModel.allModels.isEmpty)
+        XCTAssertTrue(modelsViewModel.allModels.contains { $0.runtimeEligibility == .unavailable })
+        XCTAssertTrue(modelsViewModel.allModels.contains { $0.runtimeEligibility == .validated })
     }
 
     func testDownloadedFixtureDetectedOffline() throws {

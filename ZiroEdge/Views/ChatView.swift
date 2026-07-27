@@ -314,7 +314,10 @@ struct ChatView: View {
         }
     }
 
-    private var modelPicker: some View {
+}
+
+private extension ChatView {
+    var modelPicker: some View {
         Menu {
             if viewModel.availableModels.isEmpty {
                 Button { viewModel.needsModelRedirect = true } label: {
@@ -509,6 +512,7 @@ struct ScrollOffsetKey: PreferenceKey {
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
 
+#if DEBUG
 #Preview {
     ChatView(viewModel: ChatViewModel(
         persistence: PersistenceController(inMemory: true),
@@ -518,3 +522,4 @@ struct ScrollOffsetKey: PreferenceKey {
         downloadStatusProvider: DownloadManager()
     ))
 }
+#endif

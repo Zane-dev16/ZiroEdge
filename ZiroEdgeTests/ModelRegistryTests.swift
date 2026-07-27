@@ -92,11 +92,28 @@ final class ModelRegistryTests: XCTestCase {
         XCTAssertNil(ModelRegistry.model(for: "nonexistent"))
     }
 
-    func testDeviceRAMGating() throws {
-        let allModels = ModelRegistry.availableModels(deviceRAM: 16_000_000_000)
-        XCTAssertFalse(allModels.isEmpty)
-        let noModels = ModelRegistry.availableModels(deviceRAM: 500_000_000)
-        XCTAssertTrue(noModels.isEmpty)
+    func testCatalogIncludesEveryRequiredRuntimeIdentityWhileEligibilityIsGated() {
+        XCTAssertEqual(ModelRegistry.allModels.count, 4)
+        XCTAssertEqual(ModelRegistry.productionModels, [ModelRegistry.gemma4_e2b])
+        XCTAssertEqual(ModelRegistry.gemma4_e2b.runtimeEligibility, .validated)
+        XCTAssertEqual(ModelRegistry.llama32_3B.runtimeEligibility, .unavailable)
+        XCTAssertEqual(ModelRegistry.gemma4_e4b_text.runtimeEligibility, .unavailable)
+        XCTAssertEqual(ModelRegistry.gemma4_e4b.runtimeEligibility, .unavailable)
+        XCTAssertEqual(ModelRegistry.availableModels(deviceRAM: 16_000_000_000), [ModelRegistry.gemma4_e2b])
+        XCTAssertTrue(ModelRegistry.availableModels(deviceRAM: 500_000_000).isEmpty)
+    }
+
+    func testEveryCatalogArtifactHasDownloadIntegrityMetadata() {
+        for model in ModelRegistry.allModels {
+            XCTAssertEqual(model.baseURL.scheme, "https")
+            XCTAssertTrue(ModelManagerService.isValidSHA256(model.baseSHA256), model.id)
+            XCTAssertGreaterThan(model.baseFileSizeBytes, 0)
+            if model.requiresMMProj {
+                XCTAssertEqual(model.mmprojURL?.scheme, "https")
+                XCTAssertTrue(ModelManagerService.isValidSHA256(model.mmprojSHA256 ?? ""), model.id)
+                XCTAssertGreaterThan(model.mmprojFileSizeBytes ?? 0, 0)
+            }
+        }
     }
 
     func testModelFileSizeFormatting() throws {
@@ -110,6 +127,8 @@ final class ModelRegistryTests: XCTestCase {
     func testLlama32Config() throws {
         let config = ModelConfiguration.llama32
         XCTAssertEqual(config.contextLength, 4096)
+        XCTAssertEqual(config.batchSize, 512)
+        XCTAssertEqual(config.microBatchSize, 128)
         XCTAssertEqual(config.threadCount, 2)
         XCTAssertTrue(config.useMmap)
         XCTAssertTrue(config.f16KV)
@@ -201,6 +220,20 @@ final class ModelRegistryTests: XCTestCase {
         XCTAssertEqual(model?.quantization, "Q4_K_M")
     }
 
+    func testGemma4E4BTextIsReleaseCatalogIdentitySharingOnlyTheBaseArtifact() {
+        let text = ModelRegistry.gemma4_e4b_text
+        let vision = ModelRegistry.gemma4_e4b
+        XCTAssertEqual(text.modelType, .text)
+        XCTAssertFalse(text.requiresMMProj)
+        XCTAssertEqual(text.baseURL, vision.baseURL)
+        XCTAssertEqual(text.baseSHA256, vision.baseSHA256)
+        XCTAssertEqual(
+            ModelManagerService.baseModelPath(for: text),
+            ModelManagerService.baseModelPath(for: vision)
+        )
+        XCTAssertNotEqual(text.id, vision.id)
+    }
+
     func testGemma4E4BInRegistry() throws {
         let model = ModelRegistry.model(for: "gemma-4-e4b-q4")
         XCTAssertNotNil(model)
@@ -215,6 +248,8 @@ final class ModelRegistryTests: XCTestCase {
         XCTAssertTrue(config.addBos == true)
         XCTAssertTrue(config.stopStrings.contains("<end_of_turn>"))
         XCTAssertEqual(config.contextLength, 4096)
+        XCTAssertEqual(config.batchSize, 512)
+        XCTAssertEqual(config.microBatchSize, 128)
         XCTAssertEqual(config.threadCount, 2)
         XCTAssertTrue(config.useMmap)
         XCTAssertTrue(config.f16KV)
@@ -259,7 +294,7 @@ final class ChatFlowDiagnosticTest: XCTestCase {
             throw XCTSkip("Requires a locally installed model that passes catalog SHA-256 verification")
         }
         print("[CHATFLOW-TEST] === Starting chat UI flow diagnostic ===")
-        
+
         // Step 1: Create the same objects the chat UI uses
         let inference = InferenceService()
         let memoryBudgeter = MemoryBudgeter()
@@ -267,22 +302,22 @@ final class ChatFlowDiagnosticTest: XCTestCase {
             inferenceService: inference,
             memoryBudgeter: memoryBudgeter
         )
-        
+
         // Step 2: Check current state
         print("[CHATFLOW-TEST] Initial state: \(lifecycle.currentState)")
         print("[CHATFLOW-TEST] isModelLoaded: \(lifecycle.isModelLoaded)")
         print("[CHATFLOW-TEST] activeModel: \(lifecycle.activeModel?.id ?? "nil")")
-        
+
         // Step 3: Call autoLoadFirstModel (same as chat UI does on new conversation)
         print("[CHATFLOW-TEST] Calling autoLoadFirstModel()...")
         await lifecycle.autoLoadFirstModel()
-        
+
         // Step 4: Check result
         print("[CHATFLOW-TEST] After autoLoad:")
         print("[CHATFLOW-TEST]   currentState: \(lifecycle.currentState)")
         print("[CHATFLOW-TEST]   isModelLoaded: \(lifecycle.isModelLoaded)")
         print("[CHATFLOW-TEST]   activeModel: \(lifecycle.activeModel?.id ?? "nil")")
-        
+
         // Step 5: Assert
         XCTAssertTrue(lifecycle.isModelLoaded, "Model was not loaded by autoLoadFirstModel(). state=\(lifecycle.currentState)")
         print("[CHATFLOW-TEST] === PASSED ===")
@@ -294,14 +329,14 @@ final class ChatFlowDiagnosticTest: XCTestCase {
             throw XCTSkip("Requires a verified GGUF artifact and real inference runtime")
         }
         print("[FULLFLOW] === Starting full chat flow ===")
-        
+
         let inference = InferenceService()
         let memoryBudgeter = MemoryBudgeter()
         let lifecycle = ModelLifecycleManager(
             inferenceService: inference,
             memoryBudgeter: memoryBudgeter
         )
-        
+
         // Load model (same as UI flow)
         await lifecycle.autoLoadFirstModel()
         guard lifecycle.isModelLoaded else {
@@ -309,20 +344,14 @@ final class ChatFlowDiagnosticTest: XCTestCase {
             return
         }
         print("[FULLFLOW] Model loaded: \(lifecycle.activeModel!.id)")
-        
-        // Get the model config for prompt formatting
-        guard let model = lifecycle.activeModel else {
-            XCTFail("No active model")
-            return
-        }
-        
+
         // Format a prompt using the SAME code path as streamChat
         let messages = [ChatMessagePayload(role: .user, content: "Say hello in exactly one word")]
         let sampling = SamplingConfig(
             temperature: 0.7, topP: 0.9, topK: 40,
             maxTokens: 32, repeatPenalty: 1.1
         )
-        
+
         print("[FULLFLOW] Sending via streamChat...")
         var response = ""
         do {
@@ -338,7 +367,7 @@ final class ChatFlowDiagnosticTest: XCTestCase {
             XCTFail("Stream error: \(error)")
             return
         }
-        
+
         XCTAssertFalse(response.isEmpty, "Empty response from model")
         print("[FULLFLOW] === PASSED — response: \(response) ===")
     }

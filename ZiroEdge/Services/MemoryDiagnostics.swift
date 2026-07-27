@@ -23,6 +23,8 @@ enum MemoryCheckpoint: String, Codable, Sendable {
     case memoryWarning
     case background
     case foreground
+    case periodic
+    case recovery
 }
 
 struct MemorySnapshot: Codable, Equatable, Sendable {
@@ -38,13 +40,17 @@ struct MemorySnapshot: Codable, Equatable, Sendable {
     let turn: Int?
     let phase: String?
     let error: String?
+    let runID: String?
+    let modelID: String?
 
     func addingDiagnosticMetadata(
         elapsedMilliseconds: UInt64? = nil,
         cycle: Int? = nil,
         turn: Int? = nil,
         phase: String? = nil,
-        error: String? = nil
+        error: String? = nil,
+        runID: String? = nil,
+        modelID: String? = nil
     ) -> MemorySnapshot {
         MemorySnapshot(
             totalPhysicalBytes: totalPhysicalBytes,
@@ -57,7 +63,9 @@ struct MemorySnapshot: Codable, Equatable, Sendable {
             cycle: cycle ?? self.cycle,
             turn: turn ?? self.turn,
             phase: phase ?? self.phase,
-            error: error ?? self.error
+            error: error ?? self.error,
+            runID: runID ?? self.runID,
+            modelID: modelID ?? self.modelID
         )
     }
 }
@@ -79,7 +87,9 @@ enum MemorySnapshotReader {
             cycle: nil,
             turn: nil,
             phase: nil,
-            error: error
+            error: error,
+            runID: nil,
+            modelID: nil
         )
     }
 
@@ -117,13 +127,35 @@ enum MemorySnapshotReader {
 /// Opt-in JSONL recorder. Release builds can record snapshots, but cannot bypass policy.
 final class MemoryDiagnosticRecorder: @unchecked Sendable {
     static let shared = MemoryDiagnosticRecorder()
-    static let targetModelID = "gemma-4-e2b-q4"
+#if DEBUG
+    static let defaultTargetModelID = "gemma-4-e4b-q4-text-calibration"
+    static let allowedTargetModelIDs = [
+        defaultTargetModelID,
+        "llama3.2-3b-q4",
+        "gemma-4-e2b-q4",
+        "gemma-4-e4b-q4"
+    ]
+
+    static var targetModelID: String {
+        guard let flagIndex = CommandLine.arguments.firstIndex(of: "--memory-profile-id"),
+              CommandLine.arguments.indices.contains(flagIndex + 1) else {
+            return defaultTargetModelID
+        }
+        let requested = CommandLine.arguments[flagIndex + 1]
+        return allowedTargetModelIDs.contains(requested) ? requested : defaultTargetModelID
+    }
+#else
+    static let defaultTargetModelID = ""
+    static let allowedTargetModelIDs: [String] = []
+    static var targetModelID: String { "" }
+#endif
 
     private let lock = NSLock()
     private let encoder: JSONEncoder
     private var contextCycle: Int?
     private var contextTurn: Int?
     private var contextPhase: String?
+    private let runID = UUID().uuidString
 
     var isEnabled: Bool {
 #if DEBUG
@@ -133,9 +165,9 @@ final class MemoryDiagnosticRecorder: @unchecked Sendable {
 #endif
     }
 
-    var unsafeLoadOverrideEnabled: Bool {
+    var calibrationLoadEnabled: Bool {
 #if DEBUG
-        Self.allowsUnsafeOverride(arguments: CommandLine.arguments, isDebugBuild: true)
+        Self.allowsCalibrationLoad(arguments: CommandLine.arguments, isDebugBuild: true)
 #else
         false
 #endif
@@ -149,11 +181,11 @@ final class MemoryDiagnosticRecorder: @unchecked Sendable {
 #endif
     }
 
-    static func allowsUnsafeOverride(arguments: [String], isDebugBuild: Bool) -> Bool {
+    static func allowsCalibrationLoad(arguments: [String], isDebugBuild: Bool) -> Bool {
 #if DEBUG
         isDebugBuild
             && arguments.contains("--memory-diagnostic")
-            && arguments.contains("--unsafe-memory-load")
+            && arguments.contains("--calibration-memory-load")
 #else
         false
 #endif
@@ -161,7 +193,7 @@ final class MemoryDiagnosticRecorder: @unchecked Sendable {
 
     static func allowsControlledWorkload(arguments: [String], isDebugBuild: Bool) -> Bool {
 #if DEBUG
-        allowsUnsafeOverride(arguments: arguments, isDebugBuild: isDebugBuild)
+        allowsCalibrationLoad(arguments: arguments, isDebugBuild: isDebugBuild)
             && arguments.contains("--memory-diagnostic-workload")
 #else
         false
@@ -204,7 +236,9 @@ final class MemoryDiagnosticRecorder: @unchecked Sendable {
         let enriched = snapshot.addingDiagnosticMetadata(
             cycle: contextCycle,
             turn: contextTurn,
-            phase: contextPhase
+            phase: contextPhase,
+            runID: runID,
+            modelID: Self.targetModelID
         )
         do {
             let data = try encoder.encode(enriched)
@@ -230,6 +264,10 @@ final class MemoryDiagnosticRecorder: @unchecked Sendable {
         }
     }
 
+    var exportURL: URL? {
+        Self.logURLIfPresent
+    }
+
     func resetLog() {
         guard isEnabled else { return }
         lock.lock()
@@ -240,5 +278,9 @@ final class MemoryDiagnosticRecorder: @unchecked Sendable {
     static var logURL: URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("memory-diagnostic.jsonl")
+    }
+
+    static var logURLIfPresent: URL? {
+        FileManager.default.fileExists(atPath: logURL.path) ? logURL : nil
     }
 }

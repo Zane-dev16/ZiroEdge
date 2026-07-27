@@ -13,9 +13,13 @@ final class FeatureTests: UITestBase {
     /// responds. The app creates a conversation with title "UITest Send Test"
     /// and sends a message internally. The test waits for ChatView to appear
     /// (selectedConversationID is set by the handler), then waits for response.
-    func testModelAutoLoads() {
+    func testModelAutoLoads() throws {
         let chatApp = XCUIApplication()
-        chatApp.launchArguments = ["--uitesting", "--uitesting-sendtest"]
+        chatApp.launchArguments = [
+            "--uitesting",
+            "--uitesting-sendtest",
+            "--uitesting-hermetic-model",
+        ]
         chatApp.launch()
         app = chatApp
 
@@ -92,8 +96,8 @@ final class FeatureTests: UITestBase {
             throw XCTSkip("Could not open or create a conversation")
         }
 
-        let input = app.textFields["Message ZiroEdge..."].firstMatch
-            ?? app.textFields.firstMatch
+        let namedInput = app.textFields["Message ZiroEdge..."].firstMatch
+        let input = namedInput.exists ? namedInput : app.textFields.firstMatch
         guard input.waitForExistence(timeout: 5) else {
             throw XCTSkip("No chat input found — model may not be loaded")
         }

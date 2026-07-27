@@ -3,12 +3,10 @@
 //
 // URLSession-based download manager with pause/resume, progress tracking,
 // cellular data detection, storage checking, and partial file cleanup.
-
 import Foundation
 import Network
 import CryptoKit
 import os
-
 // MARK: - Download Task Wrapper
 /// Internal wrapper tracking a single artifact download.
 final class DownloadTask {
@@ -19,7 +17,6 @@ final class DownloadTask {
     var resumeData: Data?
     var progress: Double = 0.0
     var state: DownloadState = .notDownloaded
-
     // Chunked downloads use a staging file so partially written bytes can be
     // resumed without ever exposing an unverified model as installed.
     var isChunked = false
@@ -35,12 +32,10 @@ final class DownloadTask {
     var chunkBytesReceived: Int64 = 0
     var chunkResponseValidated = false
     var chunkFailureReason: String?
-
     init(model: AIModel, artifact: ArtifactType) {
         self.model = model
         self.artifact = artifact
     }
-
     var destinationURL: URL {
         switch artifact {
         case .base:
@@ -49,7 +44,6 @@ final class DownloadTask {
             return ModelManagerService.mmprojModelPath(for: model)
         }
     }
-
     var sourceURL: URL {
         switch artifact {
         case .base:
@@ -61,7 +55,6 @@ final class DownloadTask {
             return url
         }
     }
-
     var expectedSHA256: String {
         switch artifact {
         case .base:
@@ -70,7 +63,6 @@ final class DownloadTask {
             return model.mmprojSHA256 ?? ""
         }
     }
-
     var expectedBytes: Int64 {
         switch artifact {
         case .base:
@@ -79,19 +71,26 @@ final class DownloadTask {
             return model.mmprojFileSizeBytes ?? 0
         }
     }
-
+    /// Canonical identity for the physical artifact. Catalog variants that share
+    /// a base model must coordinate through the same task, staging, and resume keys.
+    var storageID: String {
+        switch artifact {
+        case .base:
+            return "base-\(model.baseArtifactStorageID)"
+        case .mmproj:
+            return "mmproj-\(model.id)"
+        }
+    }
     /// Resume data file path for persistence across app restarts.
     var resumeDataURL: URL {
         ModelManagerService.modelsDirectory
-            .appendingPathComponent("\(model.id)-\(artifact)-resume.dat")
+            .appendingPathComponent("\(storageID)-resume.dat")
     }
-
     /// In-progress bytes are kept separate from the installed artifact.
     var stagingURL: URL {
         destinationURL.appendingPathExtension("tmp")
     }
 }
-
 // MARK: - Network Monitor
 /// Simple cellular data detector using NWPathMonitor.
 final class NetworkMonitor: ObservableObject {
@@ -99,7 +98,6 @@ final class NetworkMonitor: ObservableObject {
     @Published private(set) var isConnected = true
     private let monitor = NWPathMonitor()
     private let queue = DispatchQueue(label: "com.zanish-labs.ziroedge.network-monitor")
-
     init(startMonitoring: Bool = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil) {
         guard startMonitoring else { return }
         monitor.pathUpdateHandler = { [weak self] path in
@@ -110,33 +108,23 @@ final class NetworkMonitor: ObservableObject {
         }
         monitor.start(queue: queue)
     }
-
     deinit {
         monitor.cancel()
     }
 }
-
 // MARK: - Download Manager
-
 /// Manages model file downloads with progress, pause/resume, and verification.
 @MainActor
 final class DownloadManager: NSObject, ObservableObject {
-
     // MARK: - Published State
-
     /// Download statuses keyed by model ID.
     @Published private(set) var downloadStatuses: [String: ModelDownloadStatus] = [:]
-
-    /// Active download tasks keyed by model ID.
+    /// Active downloads keyed by canonical physical-artifact identity, never catalog model ID.
     private var activeTasks: [String: DownloadTask] = [:]
-
     /// Network connectivity monitor.
     let networkMonitor = NetworkMonitor()
-
     // MARK: - Private
-
     private var _urlSession: URLSession?
-
     private func getSession() -> URLSession {
         if let existing = _urlSession { return existing }
         let config = URLSessionConfiguration.default
@@ -148,45 +136,36 @@ final class DownloadManager: NSObject, ObservableObject {
         _urlSession = session
         return session
     }
-
     private let logger = Logger(subsystem: "com.zanish-labs.ziroedge", category: "download")
     private let fileManager = FileManager.default
-
     private static let chunkSize: Int64 = 100 * 1_024 * 1_024
     private static let chunkedDownloadThreshold: Int64 = 2_147_483_648
     private static let maximumChunkRetries = 3
-
     // MARK: - Initialization
-
     override init() {
         super.init()
         ModelManagerService.ensureModelsDirectory()
         updateStatusesFromDisk()
     }
-
     deinit {
         MainActor.assumeIsolated {
             _urlSession?.invalidateAndCancel()
             stuckTimer?.invalidate()
         }
     }
-
     // MARK: - Status Queries
-
     /// Get download status for a model. Falls back to disk check when
     /// no cached download task exists.
     func status(for model: AIModel) -> ModelDownloadStatus {
         if let cached = downloadStatuses[model.id] { return cached }
         return authoritativeDiskStatus(for: model)
     }
-
     /// Check disk and update statuses for all registered models.
     func updateStatusesFromDisk() {
         for model in ModelRegistry.allModels {
             downloadStatuses[model.id] = authoritativeDiskStatus(for: model)
         }
     }
-
     private func authoritativeDiskStatus(for model: AIModel) -> ModelDownloadStatus {
         switch ModelManagerService.availability(for: model) {
         case .ready:
@@ -216,9 +195,7 @@ final class DownloadManager: NSObject, ObservableObject {
             )
         }
     }
-
     // MARK: - Storage Check
-
     /// Available disk space in bytes.
     var availableDiskSpace: Int64 {
         guard let values = try? URL(fileURLWithPath: NSHomeDirectory())
@@ -226,14 +203,24 @@ final class DownloadManager: NSObject, ObservableObject {
         else { return 0 }
         return values.volumeAvailableCapacityForImportantUsage ?? 0
     }
-
-    /// Whether the device has enough space for a model download.
+    /// Whether the device has enough space for the artifacts that are still missing.
+    /// Installed verified artifacts are reused and are never staged a second time.
     func hasSufficientStorage(for model: AIModel) -> Bool {
-        let required = model.totalFileSizeBytes
-        guard required > 0, required < Int64.max else { return false }
+        let required = requiredDownloadBytes(for: model)
+        guard required >= 0, required < Int64.max else { return false }
         return availableDiskSpace >= required
     }
-
+    func requiredDownloadBytes(for model: AIModel) -> Int64 {
+        // These checks include the catalog SHA-256. A same-size GGUF with the
+        // wrong digest needs a complete replacement and therefore full staging space.
+        let required: Int64 = ModelManagerService.isBaseDownloaded(model)
+            ? 0 : model.baseFileSizeBytes
+        if model.requiresMMProj, !ModelManagerService.isMMProjDownloaded(model) {
+            let (sum, overflow) = required.addingReportingOverflow(model.mmprojFileSizeBytes ?? 0)
+            return overflow ? .max : sum
+        }
+        return required
+    }
     /// Formatted available disk space without shared formatter state.
     func formattedAvailableSpace() -> String {
         let bytes = max(availableDiskSpace, 0)
@@ -248,11 +235,19 @@ final class DownloadManager: NSObject, ObservableObject {
         let value = Double(bytes) / Double(unit.threshold)
         return String(format: "%.1f %@", value, unit.suffix)
     }
-
     // MARK: - Download Actions
 
     /// Start downloading a model. Shows cellular warning if needed.
     func startDownload(for model: AIModel) {
+        guard hasSufficientStorage(for: model) else {
+            downloadStatuses[model.id] = ModelDownloadStatus(
+                modelID: model.id,
+                baseState: .failed(error: .diskSpaceInsufficient),
+                mmprojState: model.requiresMMProj ? .failed(error: .diskSpaceInsufficient) : nil
+            )
+            logger.error("Refusing download without sufficient free storage: \(model.id, privacy: .public)")
+            return
+        }
         guard ModelManagerService.isValidSHA256(model.baseSHA256),
               !model.requiresMMProj || model.mmprojSHA256.map(ModelManagerService.isValidSHA256) == true else {
             downloadStatuses[model.id] = ModelDownloadStatus(
@@ -266,16 +261,19 @@ final class DownloadManager: NSObject, ObservableObject {
         print("[DL-START] startDownload: \(model.id) url=\(model.baseURL.absoluteString)")
         ZiroEdgeApp.diagnosticLog("[DL-START] startDownload: \(model.id) url=\(model.baseURL.absoluteString)")
         startStuckWatchdog()
-        let currentStatus = status(for: model)
+        let currentStatus = authoritativeDiskStatus(for: model)
+        downloadStatuses[model.id] = currentStatus
         print("[DL-START] \(model.id): isReady=\(currentStatus.isReady) isDownloading=\(currentStatus.isDownloading)")
         guard !currentStatus.isReady, !currentStatus.isDownloading else { return }
 
         ModelManagerService.ensureModelsDirectory()
 
-        print("[DL-START] \(model.id): starting base download")
-        startArtifactDownload(model: model, artifact: .base)
+        if !ModelManagerService.isBaseDownloaded(model) {
+            print("[DL-START] \(model.id): starting base download")
+            startArtifactDownload(model: model, artifact: .base)
+        }
 
-        if model.requiresMMProj {
+        if model.requiresMMProj, !ModelManagerService.isMMProjDownloaded(model) {
             print("[DL-START] \(model.id): starting mmproj download")
             startArtifactDownload(model: model, artifact: .mmproj)
         }
@@ -291,8 +289,8 @@ final class DownloadManager: NSObject, ObservableObject {
     }
 
     private func pauseArtifactDownload(model: AIModel, artifact: ArtifactType) {
-        let key = "\(model.id)-\(artifact)"
-        guard let downloadTask = activeTasks[key] else { return }
+        let key = artifactTaskKey(model: model, artifact: artifact)
+        guard let downloadTask = activeTasks[key], downloadTask.model.id == model.id else { return }
 
         downloadTask.isPaused = true
         downloadTask.state = .paused(progress: downloadTask.progress)
@@ -336,18 +334,17 @@ final class DownloadManager: NSObject, ObservableObject {
         cancelDownload(for: model)
         ModelManagerService.deleteModel(model)
 
-        // Clean up resume data
-        try? fileManager.removeItem(at: DownloadTask(model: model, artifact: .base).resumeDataURL)
+        // Shared resume state belongs to the physical base, not either catalog entry.
+        if !ModelManagerService.isBaseArtifactShared(model) {
+            try? fileManager.removeItem(at: DownloadTask(model: model, artifact: .base).resumeDataURL)
+        }
         if model.requiresMMProj {
             try? fileManager.removeItem(at: DownloadTask(model: model, artifact: .mmproj).resumeDataURL)
         }
 
+        // Recompute every catalog entry because another entry may share the base.
         updateStatusesFromDisk()
-        downloadStatuses[model.id] = ModelDownloadStatus(
-            modelID: model.id,
-            baseState: .notDownloaded,
-            mmprojState: model.requiresMMProj ? .notDownloaded : nil
-        )
+        downloadStatuses[model.id] = authoritativeDiskStatus(for: model)
     }
 
     // MARK: - Private Helpers
@@ -385,10 +382,32 @@ final class DownloadManager: NSObject, ObservableObject {
         }
     }
 
+    private func artifactTaskKey(model: AIModel, artifact: ArtifactType) -> String {
+        DownloadTask(model: model, artifact: artifact).storageID
+    }
+
+    /// Atomically claims a physical artifact for one writer. Kept internal so
+    /// regression tests can prove shared catalog variants cannot create two writers.
+    @discardableResult
+    func registerActiveTaskIfAbsent(_ task: DownloadTask) -> Bool {
+        guard activeTasks[task.storageID] == nil else { return false }
+        activeTasks[task.storageID] = task
+        return true
+    }
+
+    func hasActiveDownload(model: AIModel, artifact: ArtifactType) -> Bool {
+        activeTasks[artifactTaskKey(model: model, artifact: artifact)] != nil
+    }
+
     private func startArtifactDownload(model: AIModel, artifact: ArtifactType) {
         let task = DownloadTask(model: model, artifact: artifact)
-        let key = "\(model.id)-\(artifact)"
-        activeTasks[key] = task
+        let key = task.storageID
+        guard registerActiveTaskIfAbsent(task) else {
+            // Another catalog entry already owns this physical artifact. Its
+            // state is visible through the shared key; never race its .tmp file.
+            updateStatus(model: model)
+            return
+        }
         lastProgressTime[key] = Date()
         print("[DL-START] \(key): url=\(task.sourceURL.absoluteString) expectedBytes=\(task.expectedBytes)")
         ZiroEdgeApp.diagnosticLog("[DL-START] \(key): expectedBytes=\(task.expectedBytes)")
@@ -614,11 +633,12 @@ extension DownloadManager {
     }
 
     private func resumeArtifactDownload(model: AIModel, artifact: ArtifactType) {
-        let key = "\(model.id)-\(artifact)"
+        let key = artifactTaskKey(model: model, artifact: artifact)
         guard let task = activeTasks[key] else {
             startArtifactDownload(model: model, artifact: artifact)
             return
         }
+        guard task.model.id == model.id else { return }
 
         task.isPaused = false
         task.isCancelled = false
@@ -646,8 +666,10 @@ extension DownloadManager {
     }
 
     private func cancelArtifactDownload(model: AIModel, artifact: ArtifactType) {
-        let key = "\(model.id)-\(artifact)"
-        guard let task = activeTasks[key] else { return }
+        let key = artifactTaskKey(model: model, artifact: artifact)
+        // A sibling catalog entry may observe a shared download, but only the
+        // entry that claimed the writer may cancel and discard its staging data.
+        guard let task = activeTasks[key], task.model.id == model.id else { return }
 
         task.isCancelled = true
         task.task?.cancel()
@@ -715,28 +737,35 @@ extension DownloadManager {
     }
 
     private func updateStatus(model: AIModel) {
-        let baseKey = "\(model.id)-base"
-        let mmprojKey = "\(model.id)-mmproj"
-
-        let diskStatus = authoritativeDiskStatus(for: model)
-        let baseState = activeTasks[baseKey]?.state ?? diskStatus.baseState
-        let mmprojState: DownloadState? = model.requiresMMProj
-            ? (activeTasks[mmprojKey]?.state ?? diskStatus.mmprojState)
-            : nil
-
-        downloadStatuses[model.id] = ModelDownloadStatus(modelID: model.id, baseState: baseState, mmprojState: mmprojState)
+        var affectedModels = ModelRegistry.allModels.filter {
+            $0.baseArtifactStorageID == model.baseArtifactStorageID
+        }
+        if !affectedModels.contains(where: { $0.id == model.id }) {
+            affectedModels.append(model)
+        }
+        for affectedModel in affectedModels {
+            let baseKey = artifactTaskKey(model: affectedModel, artifact: .base)
+            let mmprojKey = artifactTaskKey(model: affectedModel, artifact: .mmproj)
+            let diskStatus = authoritativeDiskStatus(for: affectedModel)
+            let baseState = activeTasks[baseKey]?.state ?? diskStatus.baseState
+            let mmprojState: DownloadState? = affectedModel.requiresMMProj
+                ? (activeTasks[mmprojKey]?.state ?? diskStatus.mmprojState)
+                : nil
+            downloadStatuses[affectedModel.id] = ModelDownloadStatus(
+                modelID: affectedModel.id,
+                baseState: baseState,
+                mmprojState: mmprojState
+            )
+        }
     }
-
     /// Clean up partial files for failed downloads that cannot be resumed.
     func cleanupPartialFiles(for model: AIModel) {
         let basePath = ModelManagerService.baseModelPath(for: model)
         let tmpPath = basePath.appendingPathExtension("tmp")
-
         if fileManager.fileExists(atPath: tmpPath.path) {
             try? fileManager.removeItem(at: tmpPath)
             logger.info("Cleaned up partial file: \(tmpPath.lastPathComponent, privacy: .public)")
         }
-
         if model.requiresMMProj {
             let mmprojPath = ModelManagerService.mmprojModelPath(for: model)
             let mmprojTmpPath = mmprojPath.appendingPathExtension("tmp")
@@ -746,11 +775,8 @@ extension DownloadManager {
         }
     }
 }
-
 // MARK: - URLSessionDownloadDelegate
-
 extension DownloadManager: URLSessionDownloadDelegate, URLSessionDataDelegate {
-
     nonisolated func urlSession(
         _ session: URLSession,
         dataTask: URLSessionDataTask,
@@ -766,7 +792,6 @@ extension DownloadManager: URLSessionDownloadDelegate, URLSessionDataDelegate {
                 completionHandler(.cancel)
                 return
             }
-
             let start = task.currentChunkOffset
             let end = task.currentChunkEnd
             guard response.statusCode == 206,
@@ -777,12 +802,10 @@ extension DownloadManager: URLSessionDownloadDelegate, URLSessionDataDelegate {
                 completionHandler(.cancel)
                 return
             }
-
             task.chunkResponseValidated = true
             completionHandler(.allow)
         }
     }
-
     nonisolated func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         MainActor.assumeIsolated {
             guard let key = dataTask.taskDescription,
@@ -791,21 +814,18 @@ extension DownloadManager: URLSessionDownloadDelegate, URLSessionDataDelegate {
                   task.chunkTask === dataTask,
                   task.chunkResponseValidated,
                   task.chunkFailureReason == nil else { return }
-
             let expectedCount = task.currentChunkEnd - task.currentChunkOffset + 1
             guard task.chunkBytesReceived + Int64(data.count) <= expectedCount else {
                 task.chunkFailureReason = "range body exceeded expected \(expectedCount) bytes"
                 dataTask.cancel()
                 return
             }
-
             do {
                 guard let handle = task.chunkFileHandle else {
                     throw CocoaError(.fileNoSuchFile)
                 }
                 try handle.write(contentsOf: data)
                 task.chunkBytesReceived += Int64(data.count)
-
                 let totalWritten = task.currentChunkOffset + task.chunkBytesReceived
                 task.progress = Double(totalWritten) / Double(task.expectedBytes)
                 task.state = .downloading(progress: task.progress)
@@ -817,18 +837,15 @@ extension DownloadManager: URLSessionDownloadDelegate, URLSessionDataDelegate {
             }
         }
     }
-
     nonisolated func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
                     didFinishDownloadingTo location: URL) {
         MainActor.assumeIsolated {
             guard let key = downloadTask.taskDescription,
                   let task = activeTasks[key] else { return }
-
             let response = downloadTask.response as? HTTPURLResponse
             let statusCode = response?.statusCode ?? -1
             print("[DL-DONE] \(key): didFinishDownloadingTo, HTTP \(statusCode), location=\(location.path)")
             ZiroEdgeApp.diagnosticLog("[DL-DONE] \(key): HTTP \(statusCode)")
-
             // Transport validation: check for error pages before processing
             if !(200...299).contains(statusCode) {
                 print("[DL-DONE] \(key): HTTP error \(statusCode)")
@@ -838,7 +855,6 @@ extension DownloadManager: URLSessionDownloadDelegate, URLSessionDataDelegate {
                 activeTasks.removeValue(forKey: key)
                 return
             }
-
             // Check if the response is a textual error page
             if let contentType = response?.value(forHTTPHeaderField: "Content-Type")?.lowercased(),
                contentType.hasPrefix("text/") || contentType.contains("html") || contentType.contains("json") {
@@ -849,12 +865,10 @@ extension DownloadManager: URLSessionDownloadDelegate, URLSessionDataDelegate {
                 activeTasks.removeValue(forKey: key)
                 return
             }
-
             do {
                 let attributes = try fileManager.attributesOfItem(atPath: location.path)
                 let fileSize = (attributes[.size] as? NSNumber)?.int64Value ?? 0
                 print("[DL-DONE] \(key): file size=\(fileSize) bytes")
-
                 // Check if the downloaded file is actually a textual error page.
                 if fileSize < 10_000,
                    let data = try? Data(contentsOf: location, options: .mappedIfSafe),
@@ -869,7 +883,6 @@ extension DownloadManager: URLSessionDownloadDelegate, URLSessionDataDelegate {
                         return
                     }
                 }
-
                 if fileManager.fileExists(atPath: task.stagingURL.path) {
                     try fileManager.removeItem(at: task.stagingURL)
                 }
@@ -880,26 +893,22 @@ extension DownloadManager: URLSessionDownloadDelegate, URLSessionDataDelegate {
                 cleanupPartialFiles(for: task.model)
                 logger.error("Download staging failed: \(error.localizedDescription, privacy: .public)")
             }
-
             updateStatus(model: task.model)
             activeTasks.removeValue(forKey: key)
         }
     }
-
     nonisolated func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
                     didWriteData bytesWritten: Int64, totalBytesWritten: Int64,
                     totalBytesExpectedToWrite: Int64) {
         MainActor.assumeIsolated {
             guard let key = downloadTask.taskDescription,
                   let task = activeTasks[key] else { return }
-
             let progress = totalBytesExpectedToWrite > 0
                 ? Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
                 : 0.0
             task.progress = progress
             task.state = .downloading(progress: progress)
             updateStatus(model: task.model)
-
             let pct = Int(progress * 100)
             if pct % 5 == 0 {
                 print("[DL-PROG] \(key): \(pct)% (written=\(totalBytesWritten) expected=\(totalBytesExpectedToWrite)")
@@ -907,25 +916,20 @@ extension DownloadManager: URLSessionDownloadDelegate, URLSessionDataDelegate {
             lastProgressTime[key] = Date()
         }
     }
-
     nonisolated func urlSession(_ session: URLSession, task: URLSessionTask,
                     didCompleteWithError error: Error?) {
         MainActor.assumeIsolated {
             guard let key = task.taskDescription,
                   let downloadTask = activeTasks[key] else { return }
-
             if downloadTask.isChunked {
                 guard let dataTask = task as? URLSessionDataTask,
                       downloadTask.chunkTask === dataTask else { return }
-
                 downloadTask.chunkTask = nil
                 let expectedCount = downloadTask.currentChunkEnd - downloadTask.currentChunkOffset + 1
                 let failureReason = downloadTask.chunkFailureReason
                 let responseWasValid = downloadTask.chunkResponseValidated
                 closeChunkFile(for: downloadTask, synchronize: error == nil && failureReason == nil)
-
                 guard !downloadTask.isPaused, !downloadTask.isCancelled else { return }
-
                 if let failureReason {
                     retryChunk(task: downloadTask, key: key, reason: failureReason)
                 } else if let error {
@@ -941,19 +945,16 @@ extension DownloadManager: URLSessionDownloadDelegate, URLSessionDataDelegate {
                 }
                 return
             }
-
             let nsError = error as NSError?
             print("[DL-COMP] \(key): didCompleteWithError=\(error?.localizedDescription ?? "nil")")
             ZiroEdgeApp.diagnosticLog("[DL-COMP] \(key): error=\(error?.localizedDescription ?? "nil")")
             if let nsError {
                 print("[DL-COMP] \(key): NSError domain=\(nsError.domain) code=\(nsError.code)")
             }
-
             if let resumeData = nsError?.userInfo[NSURLSessionDownloadTaskResumeData] as? Data {
                 downloadTask.resumeData = resumeData
                 try? resumeData.write(to: downloadTask.resumeDataURL)
             }
-
             if downloadTask.isPaused {
                 downloadTask.state = .paused(progress: downloadTask.progress)
                 print("[DL-COMP] \(key): paused at \(Int(downloadTask.progress * 100))%")
@@ -966,12 +967,10 @@ extension DownloadManager: URLSessionDownloadDelegate, URLSessionDataDelegate {
             } else {
                 print("[DL-COMP] \(key): completed successfully")
             }
-
             updateStatus(model: downloadTask.model)
             activeTasks.removeValue(forKey: key)
         }
     }
-
     nonisolated func urlSession(
         _ session: URLSession,
         task: URLSessionTask,
@@ -986,7 +985,6 @@ extension DownloadManager: URLSessionDownloadDelegate, URLSessionDataDelegate {
             print("[DL-REDIRECT] \(key): HTTP \(response.statusCode)")
             print("[DL-REDIRECT] \(key): from=\(from)")
             print("[DL-REDIRECT] \(key): to=\(to.prefix(120))")
-
             var redirectedRequest = request
             if let downloadTask = activeTasks[key], downloadTask.isChunked {
                 let start = downloadTask.currentChunkOffset

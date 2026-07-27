@@ -60,6 +60,8 @@ public actor LlamaEngine {
         // Create context.
         var ctxParams = llama_context_default_params()
         ctxParams.n_ctx = UInt32(config.contextLength)
+        ctxParams.n_batch = UInt32(config.batchSize)
+        ctxParams.n_ubatch = UInt32(config.microBatchSize)
         ctxParams.n_threads = Int32(config.threadCount)
         ctxParams.n_threads_batch = Int32(config.threadCount)
         ctxParams.flash_attn_type = config.f16KV ? LLAMA_FLASH_ATTN_TYPE_ENABLED : LLAMA_FLASH_ATTN_TYPE_DISABLED
@@ -79,18 +81,32 @@ public actor LlamaEngine {
             mtmdParams.n_threads = Int32(config.threadCount)
             mtmdParams.use_gpu = false  // CPU-only for v1
             mtmdCtx = mtmd_init_from_file(mmprojPath, loadedModel, mtmdParams)
-            if mtmdCtx != nil {
-                logger.info("Multimodal context initialized: \(mmprojPath, privacy: .public)")
-            } else {
-                logger.warning("Failed to initialize mtmd context for: \(mmprojPath, privacy: .public)")
+            guard mtmdCtx != nil else {
+                llama_free(ctx)
+                context = nil
+                llama_model_free(loadedModel)
+                model = nil
+                vocabulary = nil
+                llama_backend_free()
+                isBackendInitialized = false
+                throw LlamaError.projectorInitializationFailed
             }
+            logger.info("Multimodal context initialized")
         }
 
         logger.info("Model loaded: \(config.modelPath, privacy: .public) ctx=\(config.contextLength) threads=\(config.threadCount)")
     }
 
     deinit {
-        unloadSync()
+        // Destruction cannot race actor work because in-flight tasks retain the engine.
+        // Use the same idempotent pointer-nulling primitive as explicit unload.
+        Self.releaseNativeResources(
+            mtmdCtx: &mtmdCtx,
+            context: &context,
+            model: &model,
+            vocabulary: &vocabulary,
+            isBackendInitialized: &isBackendInitialized
+        )
     }
 
     // MARK: - Unload
@@ -100,6 +116,23 @@ public actor LlamaEngine {
     }
 
     private func unloadSync() {
+        Self.releaseNativeResources(
+            mtmdCtx: &mtmdCtx,
+            context: &context,
+            model: &model,
+            vocabulary: &vocabulary,
+            isBackendInitialized: &isBackendInitialized
+        )
+        logger.info("Model unloaded")
+    }
+
+    private nonisolated static func releaseNativeResources(
+        mtmdCtx: inout OpaquePointer?,
+        context: inout OpaquePointer?,
+        model: inout OpaquePointer?,
+        vocabulary: inout OpaquePointer?,
+        isBackendInitialized: inout Bool
+    ) {
         if let mctx = mtmdCtx {
             mtmd_free(mctx)
             mtmdCtx = nil
@@ -117,9 +150,11 @@ public actor LlamaEngine {
             llama_backend_free()
             isBackendInitialized = false
         }
-        logger.info("Model unloaded")
     }
 
+}
+
+extension LlamaEngine {
     // MARK: - Chat Template Formatting
 
     /// Apply the model's built-in chat template to format messages.
@@ -130,9 +165,22 @@ public actor LlamaEngine {
         model: OpaquePointer?,
         addAssistant: Bool = true
     ) -> String {
-        // Build llama_chat_message array.
-        let chatMessages = messages.map { msg in
-            llama_chat_message(role: msg.role, content: msg.content)
+        guard let model, let template = llama_model_chat_template(model, nil) else {
+            return ""
+        }
+
+        // Own every C string for the complete native call. Passing Swift String
+        // conversions directly would leave dangling pointers in this array.
+        let roles = messages.map { strdup($0.role) }
+        let contents = messages.map { strdup($0.content) }
+        defer {
+            roles.forEach { free($0) }
+            contents.forEach { free($0) }
+        }
+        guard !roles.contains(where: { $0 == nil }),
+              !contents.contains(where: { $0 == nil }) else { return "" }
+        let chatMessages = messages.indices.map { index in
+            llama_chat_message(role: roles[index], content: contents[index])
         }
 
         // Calculate buffer size: 2x total characters of all messages.
@@ -141,24 +189,29 @@ public actor LlamaEngine {
 
         let formatted = chatMessages.withUnsafeBufferPointer { ptr -> String in
             var buffer = [CChar](repeating: 0, count: bufferSize)
-            // Pass nil for tmpl to use the model's built-in template.
-            let nBytes = llama_chat_apply_template(nil, ptr.baseAddress, chatMessages.count, addAssistant, &buffer, Int32(bufferSize))
+            let nBytes = llama_chat_apply_template(
+                template, ptr.baseAddress, chatMessages.count,
+                addAssistant, &buffer, Int32(bufferSize)
+            )
             if nBytes > 0 && nBytes <= Int32(bufferSize) {
-                return buffer.prefix(Int(nBytes)).withUnsafeBufferPointer { ptr in
-                    guard let base = ptr.baseAddress else { return "" }
-                    return String(cString: base)
-                }
+                return String(
+                    decoding: buffer.prefix(Int(nBytes)).map { UInt8(bitPattern: $0) },
+                    as: UTF8.self
+                )
             }
             // If buffer too small, retry with larger buffer.
             if nBytes > Int32(bufferSize) {
                 let largerSize = Int(nBytes) + 1
                 var largerBuffer = [CChar](repeating: 0, count: largerSize)
-                let nBytes2 = llama_chat_apply_template(nil, ptr.baseAddress, chatMessages.count, addAssistant, &largerBuffer, Int32(largerSize))
-                if nBytes2 > 0 {
-                    return largerBuffer.prefix(Int(nBytes2)).withUnsafeBufferPointer { ptr in
-                        guard let base = ptr.baseAddress else { return "" }
-                        return String(cString: base)
-                    }
+                let nBytes2 = llama_chat_apply_template(
+                    template, ptr.baseAddress, chatMessages.count,
+                    addAssistant, &largerBuffer, Int32(largerSize)
+                )
+                if nBytes2 > 0 && nBytes2 <= Int32(largerSize) {
+                    return String(
+                        decoding: largerBuffer.prefix(Int(nBytes2)).map { UInt8(bitPattern: $0) },
+                        as: UTF8.self
+                    )
                 }
             }
             // Fallback: empty string (will cause tokenization to fail).
@@ -184,7 +237,13 @@ public actor LlamaEngine {
             throw LlamaError.tokenizationFailed
         }
         logger.info("Chat template applied, prompt length: \(prompt.count, privacy: .public)")
-        return try streamCompletion(prompt: prompt, addBos: addBos, stopStrings: stopStrings, sampling: sampling)
+        return try streamCompletion(
+            prompt: prompt,
+            addBos: addBos,
+            parseSpecial: true,
+            stopStrings: stopStrings,
+            sampling: sampling
+        )
     }
 
     // MARK: - Streaming Completion
@@ -192,6 +251,7 @@ public actor LlamaEngine {
     public func streamCompletion(
         prompt: String,
         addBos: Bool?,
+        parseSpecial: Bool = false,
         stopStrings: [String],
         sampling: SamplingConfigSwift
     ) throws -> AsyncThrowingStream<String, Error> {
@@ -205,7 +265,12 @@ public actor LlamaEngine {
             Task {
                 do {
                     // Tokenize prompt.
-                    let tokens = try tokenize(prompt: prompt, addBos: addBos, vocab: vocab)
+                    let tokens = try tokenize(
+                        prompt: prompt,
+                        addBos: addBos,
+                        parseSpecial: parseSpecial,
+                        vocab: vocab
+                    )
                     guard !tokens.isEmpty else {
                         throw LlamaError.tokenizationFailed
                     }
@@ -214,25 +279,24 @@ public actor LlamaEngine {
                     let mem = llama_get_memory(ctx)
                     llama_memory_clear(mem, true)
 
-                    // Evaluate prompt tokens using batch_get_one for sequential processing.
-                    // For the prompt, we evaluate all tokens at once.
-                    var batch = llama_batch_init(Int32(tokens.count), 0, 1)
-                    for (idx, token) in tokens.enumerated() {
-                        batch.token[idx] = token
-                        batch.pos[idx] = Int32(idx)
-                        batch.n_seq_id[idx] = 1
-                        // Use pre-allocated seq_id from llama_batch_init (no manual alloc).
-                        batch.seq_id[idx]![0] = 0
-                        batch.logits[idx] = (idx == tokens.count - 1) ? 1 : 0
-                    }
-                    batch.n_tokens = Int32(tokens.count)
-
-                    if llama_decode(ctx, batch) != 0 {
+                    // Bound logical prompt batches; llama.cpp further splits these at n_ubatch.
+                    for range in try Self.promptBatchRanges(
+                        tokenCount: tokens.count,
+                        batchSize: config.batchSize
+                    ) {
+                        var batch = llama_batch_init(Int32(range.count), 0, 1)
+                        for (localIndex, tokenIndex) in range.enumerated() {
+                            batch.token[localIndex] = tokens[tokenIndex]
+                            batch.pos[localIndex] = Int32(tokenIndex)
+                            batch.n_seq_id[localIndex] = 1
+                            batch.seq_id[localIndex]![0] = 0
+                            batch.logits[localIndex] = tokenIndex == tokens.count - 1 ? 1 : 0
+                        }
+                        batch.n_tokens = Int32(range.count)
+                        let decodeResult = llama_decode(ctx, batch)
                         llama_batch_free(batch)
-                        throw LlamaError.decodeFailed
+                        guard decodeResult == 0 else { throw LlamaError.decodeFailed }
                     }
-
-                    llama_batch_free(batch)
 
                     // Create sampler chain.
                     let sampler = try createSamplerChain(sampling: sampling, vocab: vocab)
@@ -252,6 +316,29 @@ public actor LlamaEngine {
     }
 
     // MARK: - Streaming Vision Completion
+
+    /// Stream a vision chat after applying the model's embedded chat template.
+    /// Image markers must already be present in the appropriate message content.
+    public func streamVisionChatCompletion(
+        messages: [(role: String, content: String)],
+        images: [Data],
+        addBos: Bool?,
+        stopStrings: [String],
+        sampling: SamplingConfigSwift
+    ) throws -> AsyncThrowingStream<String, Error> {
+        let prompt = applyChatTemplate(messages: messages, model: model, addAssistant: true)
+        guard !prompt.isEmpty else {
+            throw LlamaError.tokenizationFailed
+        }
+        logger.info("Vision chat template applied, prompt length: \(prompt.count, privacy: .public)")
+        return try streamVisionCompletion(
+            prompt: prompt,
+            images: images,
+            addBos: addBos,
+            stopStrings: stopStrings,
+            sampling: sampling
+        )
+    }
 
     public func streamVisionCompletion(
         prompt: String,
@@ -336,7 +423,7 @@ public actor LlamaEngine {
                         chunks,
                         0,                           // n_past = 0 (fresh start)
                         0,                           // seq_id = 0
-                        Int32(config.contextLength),  // n_batch
+                        Int32(config.batchSize),      // configured logical n_batch
                         true,                        // logits_last = true
                         &newNPast
                     )
@@ -366,6 +453,16 @@ public actor LlamaEngine {
 
     public func cancel() {
         isCancelled = true
+    }
+
+    public nonisolated static func promptBatchRanges(
+        tokenCount: Int,
+        batchSize: Int
+    ) throws -> [Range<Int>] {
+        guard tokenCount >= 0, batchSize > 0 else { throw LlamaError.invalidConfiguration }
+        return stride(from: 0, to: tokenCount, by: batchSize).map {
+            $0..<min($0 + batchSize, tokenCount)
+        }
     }
 }
 
@@ -423,22 +520,52 @@ private extension LlamaEngine {
 
     // MARK: - Tokenization
 
-    private func tokenize(prompt: String, addBos: Bool?, vocab: OpaquePointer) throws -> [llama_token] {
-        let textLength = Int32(prompt.lengthOfBytes(using: .utf8))
-        let maxTokens = Int(textLength * 4)
-        var tokens = [llama_token](repeating: 0, count: maxTokens)
-
-        let shouldAddBos = addBos ?? true
-
-        let nTokens = prompt.withCString { cstr in
-            llama_tokenize(vocab, cstr, textLength, &tokens, Int32(maxTokens), shouldAddBos, false)
-        }
-
-        guard nTokens > 0 else {
+    private func tokenize(
+        prompt: String,
+        addBos: Bool?,
+        parseSpecial: Bool,
+        vocab: OpaquePointer
+    ) throws -> [llama_token] {
+        let utf8 = Array(prompt.utf8)
+        guard !utf8.isEmpty, utf8.count <= Int(Int32.max) else {
             throw LlamaError.tokenizationFailed
         }
+        let shouldAddBos = addBos ?? true
 
-        return Array(tokens.prefix(Int(nTokens)))
+        return try utf8.withUnsafeBufferPointer { bytes in
+            guard let baseAddress = bytes.baseAddress else { throw LlamaError.tokenizationFailed }
+            let text = UnsafeRawPointer(baseAddress).assumingMemoryBound(to: CChar.self)
+            let required = llama_tokenize(
+                vocab,
+                text,
+                Int32(bytes.count),
+                nil,
+                0,
+                shouldAddBos,
+                parseSpecial
+            )
+            guard required < 0, required != Int32.min else {
+                throw LlamaError.tokenizationFailed
+            }
+
+            let capacity = Int(-required)
+            var tokens = [llama_token](repeating: 0, count: capacity)
+            let count = tokens.withUnsafeMutableBufferPointer { tokenBuffer in
+                llama_tokenize(
+                    vocab,
+                    text,
+                    Int32(bytes.count),
+                    tokenBuffer.baseAddress,
+                    Int32(capacity),
+                    shouldAddBos,
+                    parseSpecial
+                )
+            }
+            guard count > 0, count <= Int32(capacity) else {
+                throw LlamaError.tokenizationFailed
+            }
+            return Array(tokens.prefix(Int(count)))
+        }
     }
 
     // MARK: - Token to Text
@@ -528,6 +655,8 @@ public struct LlamaConfigSwift: Sendable {
     public let modelPath: String
     public let mmprojPath: String?
     public let contextLength: Int
+    public let batchSize: Int
+    public let microBatchSize: Int
     public let threadCount: Int
     public let useMmap: Bool
     public let f16KV: Bool
@@ -537,6 +666,8 @@ public struct LlamaConfigSwift: Sendable {
         modelPath: String,
         mmprojPath: String? = nil,
         contextLength: Int = 4096,
+        batchSize: Int = 512,
+        microBatchSize: Int = 128,
         threadCount: Int = 2,
         useMmap: Bool = true,
         f16KV: Bool = true,
@@ -544,7 +675,12 @@ public struct LlamaConfigSwift: Sendable {
     ) {
         self.modelPath = modelPath
         self.mmprojPath = mmprojPath
+        precondition(contextLength > 0)
+        precondition(batchSize > 0)
+        precondition(microBatchSize > 0 && microBatchSize <= batchSize)
         self.contextLength = contextLength
+        self.batchSize = batchSize
+        self.microBatchSize = microBatchSize
         self.threadCount = threadCount
         self.useMmap = useMmap
         self.f16KV = f16KV
@@ -579,6 +715,8 @@ public struct SamplingConfigSwift: Sendable {
 public enum LlamaError: Error, LocalizedError {
     case modelLoadFailed(path: String)
     case contextCreationFailed
+    case projectorInitializationFailed
+    case invalidConfiguration
     case modelNotLoaded
     case tokenizationFailed
     case decodeFailed
@@ -588,8 +726,10 @@ public enum LlamaError: Error, LocalizedError {
 
     public var errorDescription: String? {
         switch self {
-        case .modelLoadFailed(let path): return "Failed to load model from: \(path)"
+        case .modelLoadFailed: return "Failed to map the model artifact."
         case .contextCreationFailed: return "Failed to create inference context."
+        case .projectorInitializationFailed: return "Failed to initialize the vision projector."
+        case .invalidConfiguration: return "The inference runtime configuration is invalid."
         case .modelNotLoaded: return "No model is loaded."
         case .tokenizationFailed: return "Failed to tokenize input text."
         case .decodeFailed: return "Token decoding failed."

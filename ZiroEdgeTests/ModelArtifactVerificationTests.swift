@@ -154,7 +154,6 @@ final class ModelArtifactVerificationTests: XCTestCase {
             mmprojSHA256: vision ? (mmprojSHA256 ?? sha256(projectorData)) : nil,
             quantization: "Q4_K_M",
             config: .llama32,
-            minimumDeviceRAM: 0,
             license: LicenseInfo(
                 name: "Test",
                 url: URL(string: "https://example.com/license")!,
@@ -177,7 +176,6 @@ final class ModelArtifactVerificationTests: XCTestCase {
             mmprojSHA256: nil,
             quantization: "Q4_K_M",
             config: .llama32,
-            minimumDeviceRAM: 0,
             license: LicenseInfo(
                 name: "Test",
                 url: URL(string: "https://example.com/license")!,
