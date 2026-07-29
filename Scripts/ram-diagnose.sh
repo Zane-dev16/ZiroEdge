@@ -169,6 +169,16 @@ xcodebuild test \
 UI_TEST_STATUS=${PIPESTATUS[0]}
 set -e
 
+if [[ "$MODE" == device ]] && ((CONTROLLED_WORKLOAD)) && ((UI_TEST_STATUS != 0)); then
+	DEVICE_ID="${DESTINATION#id=}"
+	if ! "$SCRIPT_DIR/collect-termination-sysdiagnose.sh" \
+		"$OUTPUT_DIR/ui-tests.log" \
+		"$DEVICE_ID" \
+		"$OUTPUT_DIR/sysdiagnose"; then
+		echo "[RAM-DIAGNOSE] WARNING: full sysdiagnose collection failed; do not retry the workload blindly" >&2
+	fi
+fi
+
 grep -E '\[ZIRO-MEMORY(-OUTCOME)?\]' "$OUTPUT_DIR/ui-tests.log" >"$OUTPUT_DIR/records.log" || true
 
 ARTIFACT_FAILURE=0

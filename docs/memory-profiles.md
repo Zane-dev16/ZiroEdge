@@ -56,7 +56,11 @@ Use `--profile vision` for the separate E4B vision run. Acceptance requires:
 - retained JSONL, raw logs, and both xcresult bundles.
 
 The workload stops at the first warning or fixed-reserve breach. Missing
-artifacts fail the script. The JSONL can also be exported in DEBUG Settings.
+artifacts fail the script. If the UI test observes an unexpected ZiroEdge
+process termination, the script immediately requests a full device sysdiagnose
+under the run's `sysdiagnose` path before recovering application artifacts. A
+sysdiagnose collection failure is reported explicitly and must not trigger a
+blind workload retry. The JSONL can also be exported in DEBUG Settings.
 
 ## Crash resistance
 
