@@ -37,8 +37,8 @@ bash Scripts/ram-diagnose.sh \
   --expect load \
   --calibration-load \
   --controlled-workload \
-  --model e2b \
-  --profile vision \
+  --model e4b \
+  --profile text \
   --device <UDID>
 ```
 
