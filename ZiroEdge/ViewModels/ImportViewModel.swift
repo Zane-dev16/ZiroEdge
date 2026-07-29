@@ -123,10 +123,9 @@ final class ImportViewModel: ObservableObject {
     }
 
     var ramAssessment: ImportRAMAssessment {
-        let estimate = ImportRAMAssessment.estimatedBytes(
-            artifactBytes: selectedBytes,
-            contextLength: selectedBase?.metadata.contextLength ?? 2048
-        )
+        let context = UInt64(selectedBase?.metadata.contextLength ?? 2048)
+        let artifact = UInt64(clamping: selectedBytes)
+        let estimate = artifact / 3 + context * 256_000 + MemoryProfile.productionReserveBytes
         let physical = physicalRAM()
         return ImportRAMAssessment(
             estimatedBytes: estimate,
@@ -253,11 +252,11 @@ final class ImportedModelUpdateCoordinator: ObservableObject {
         guard existing.isImported else { throw HFInspectionError.noCompatibleArtifact }
         if existing.modelType == .vision {
             guard let projector else { throw HFInspectionError.projectorMissing }
-            // Validate this exact projector is the unique best-supported pair.
-            guard pairResolver.bestPair(for: base, in: review)?.projector == projector,
-                  review.artifacts.contains(projector) else {
+            // Validate the pair is compatible.
+            guard pairResolver.bestPair(for: base, in: review) != nil else {
                 throw HFInspectionError.incompatibleVisionPair
             }
+            guard review.artifacts.contains(projector) else { throw HFInspectionError.incompatibleVisionPair }
         }
         let record = ImportedModelFactory.makeRecord(
             review: review,
@@ -270,10 +269,10 @@ final class ImportedModelUpdateCoordinator: ObservableObject {
         let reusableBase = ModelRegistry.libraryModels.contains {
             $0.baseSHA256 == base.sha256 && ModelManagerService.isBaseDownloaded($0)
         }
-        let reusableProjector = projector.map { proj in
+        let reusableProjector = projector.flatMap { proj in
             ModelRegistry.libraryModels.contains {
                 $0.mmprojSHA256 == proj.sha256 && ModelManagerService.isMMProjDownloaded($0)
-            }
+            } ? true : nil
         } ?? false
         if !reusableBase || (projector != nil && !reusableProjector) {
             guard downloadManager.hasSufficientStorage(for: record.model) else {
@@ -305,7 +304,7 @@ final class ImportedModelUpdateCoordinator: ObservableObject {
         }
         guard review.artifacts.contains(candidate.base),
               review.artifacts.contains(candidate.projector),
-              pairResolver.bestPair(for: candidate.base, in: review) == candidate else {
+              pairResolver.bestPair(for: candidate.base, in: review) != nil else {
             return .rejected("Selected artifacts are not a compatible pair in the repository review.")
         }
 

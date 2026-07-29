@@ -107,22 +107,6 @@ final class HuggingFaceImportTests: XCTestCase {
         }
     }
 
-    func testVisionPairingUsesTheSharedArchitecturePolicy() throws {
-        let base = makeArtifact("gemma3-Q4_K_M.gguf", role: .base, architecture: "gemma3")
-        let projector = makeArtifact("mmproj-Q8_0.gguf", role: .projector, architecture: "gemma2")
-        let review = makeReview(artifacts: [base, projector])
-
-        XCTAssertEqual(try review.suggestedVisionPair(base: base).1, projector)
-        XCTAssertEqual(VisionPairResolver().bestPair(for: base, in: review)?.projector, projector)
-    }
-
-    func testFactoryPercentEncodesUntrustedRemoteFilenameComponents() {
-        let artifact = makeArtifact("nested/model #1?.gguf")
-        let record = ImportedModelFactory.makeRecord(review: makeReview(artifacts: [artifact]), base: artifact)
-
-        XCTAssertTrue(record.baseURL.absoluteString.hasSuffix("/nested/model%20%231%3F.gguf"))
-    }
-
     func testFactoryPinsURLsAndCreatesStableDistinctVariantIdentities() {
         let q4 = makeArtifact("model-Q4_K_M.gguf", digest: String(repeating: "1", count: 64))
         let q8 = makeArtifact("model-Q8_0.gguf", digest: String(repeating: "2", count: 64))

@@ -13,7 +13,6 @@ import SwiftUI
 struct ImportedModelSettingsView: View {
     let model: AIModel
     @ObservedObject var viewModel: ModelsViewModel
-    @StateObject private var updateCoordinator: ImportedModelUpdateCoordinator
 
     @State private var contextLength: Int
     @State private var temperature: Double
@@ -24,14 +23,11 @@ struct ImportedModelSettingsView: View {
 
     @State private var savedMessage: String?
     @State private var updateCheckMessage: String?
-    @State private var availableUpdate: HFRepositoryReview?
+    @State private var retryMessage: String?
 
     init(model: AIModel, viewModel: ModelsViewModel) {
         self.model = model
         self.viewModel = viewModel
-        _updateCoordinator = StateObject(wrappedValue: ImportedModelUpdateCoordinator(
-            downloadManager: viewModel.downloadManager
-        ))
         let config = model.config
         _contextLength = State(initialValue: config.contextLength)
         _temperature = State(initialValue: Double(config.defaultSampling.temperature))
@@ -82,10 +78,9 @@ struct ImportedModelSettingsView: View {
     // MARK: - Memory Estimate
 
     private var estimatedMemory: UInt64 {
-        ImportRAMAssessment.estimatedBytes(
-            artifactBytes: model.totalFileSizeBytes,
-            contextLength: contextLength
-        )
+        UInt64(clamping: model.totalFileSizeBytes / 3)
+            + UInt64(contextLength) * 256_000
+            + MemoryProfile.productionReserveBytes
     }
 
     private var estimatedMemoryRow: some View {
@@ -130,6 +125,7 @@ struct ImportedModelSettingsView: View {
         }
 
         Button("Retry Native Load") {
+            retryMessage = nil
             Task { await viewModel.retryImportedModel(model) }
         }
         .disabled(!viewModel.isDownloaded(model))
@@ -142,53 +138,20 @@ struct ImportedModelSettingsView: View {
 
         Button("Check for Update") {
             updateCheckMessage = nil
-            availableUpdate = nil
             Task {
                 do {
-                    switch try await updateCoordinator.checkForUpdate(model: model) {
+                    let coordinator = ImportedModelUpdateCoordinator(
+                        downloadManager: viewModel.downloadManager
+                    )
+                    switch try await coordinator.checkForUpdate(model: model) {
                     case .upToDate:
                         updateCheckMessage = "This pinned revision is up to date."
-                    case .review(let review):
-                        availableUpdate = review
-                        updateCheckMessage = "A newer revision is available and ready to stage."
+                    case .review:
+                        updateCheckMessage = "A newer revision is available. Re-import to update."
                     }
                 } catch {
                     updateCheckMessage = error.localizedDescription
                 }
-            }
-        }
-        .disabled(updateCoordinator.hasStagedUpdate(modelID: model.id))
-
-        if let availableUpdate,
-           !updateCoordinator.hasStagedUpdate(modelID: model.id) {
-            Button("Download and Stage Update") {
-                do {
-                    try stageUpdate(availableUpdate)
-                    updateCheckMessage = "The update is downloading beside the installed revision."
-                } catch {
-                    updateCheckMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                }
-            }
-        }
-
-        if updateCoordinator.hasStagedUpdate(modelID: model.id) {
-            Button("Finish Verified Update") {
-                do {
-                    if try updateCoordinator.promoteIfVerified(modelID: model.id) != nil {
-                        availableUpdate = nil
-                        updateCheckMessage = "Update installed. Return to Models to open the new revision."
-                    } else {
-                        updateCheckMessage = "The staged artifacts are still downloading or have not passed verification."
-                    }
-                } catch {
-                    updateCheckMessage = error.localizedDescription
-                }
-            }
-
-            Button("Cancel Staged Update", role: .destructive) {
-                updateCoordinator.discardStagedUpdate(modelID: model.id)
-                availableUpdate = nil
-                updateCheckMessage = "The staged update was discarded. The installed revision is unchanged."
             }
         }
 
@@ -196,40 +159,6 @@ struct ImportedModelSettingsView: View {
             Text(updateCheckMessage)
                 .font(.caption)
                 .foregroundStyle(.secondary)
-        }
-    }
-
-    private func stageUpdate(_ review: HFRepositoryReview) throws {
-        let source = model.huggingFaceProvenance
-        let base = review.baseArtifacts.first { $0.filename == source?.baseFilename }
-            ?? (review.baseArtifacts.count == 1 ? review.baseArtifacts.first : nil)
-        guard let base else {
-            throw HFInspectionError.noCompatibleArtifact
-        }
-
-        if model.modelType == .vision {
-            guard let candidate = VisionPairResolver().bestPair(for: base, in: review) else {
-                throw review.projectorArtifacts.isEmpty
-                    ? HFInspectionError.projectorMissing
-                    : HFInspectionError.projectorAmbiguous
-            }
-            switch try updateCoordinator.stagePairedUpdate(
-                existing: model,
-                review: review,
-                candidate: candidate
-            ) {
-            case .staging, .promoted:
-                return
-            case .rejected(let message):
-                throw ImportedModelUpdateError.rejected(message)
-            }
-        } else {
-            _ = try updateCoordinator.stageUpdate(
-                existing: model,
-                review: review,
-                base: base,
-                projector: nil
-            )
         }
     }
 
@@ -295,16 +224,6 @@ struct ImportedModelSettingsView: View {
         case .loadFailed: return .red
         case .configurationChanged: return .orange
         case .neverLoaded: return .secondary
-        }
-    }
-}
-
-private enum ImportedModelUpdateError: LocalizedError {
-    case rejected(String)
-
-    var errorDescription: String? {
-        switch self {
-        case .rejected(let message): message
         }
     }
 }

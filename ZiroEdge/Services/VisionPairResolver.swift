@@ -52,7 +52,7 @@ struct VisionPairResolver: Sendable {
         var candidates: [VisionPairCandidate] = []
         for base in bases {
             for projector in projectors {
-                guard Self.isArchitectureCompatible(base: base, projector: projector) else { continue }
+                guard isArchitectureCompatible(base: base, projector: projector) else { continue }
                 let confidence = scoreConfidence(base: base, projector: projector)
                 candidates.append(VisionPairCandidate(
                     base: base,
@@ -125,15 +125,19 @@ struct VisionPairResolver: Sendable {
     // MARK: - Scoring
 
     /// Check architecture compatibility between base and projector.
-    static func isArchitectureCompatible(base: HFArtifact, projector: HFArtifact) -> Bool {
+    private func isArchitectureCompatible(base: HFArtifact, projector: HFArtifact) -> Bool {
+        // Projectors for vision models are typically "clip" architecture.
+        if projector.architecture == "clip" { return true }
+        // Direct architecture match.
+        if projector.architecture == base.architecture { return true }
+        // Gemma models accept "gemma" or "gemma2"/"gemma3" architecture projectors.
         let baseArch = base.architecture.lowercased()
         let projectorArch = projector.architecture.lowercased()
-        // Projectors for vision models are typically "clip" architecture.
-        if projectorArch == "clip" { return true }
-        // Direct architecture match.
-        if projectorArch == baseArch { return true }
-        // Gemma models accept "gemma" or "gemma2"/"gemma3" architecture projectors.
-        return baseArch.hasPrefix("gemma") && projectorArch.hasPrefix("gemma")
+        if (baseArch.hasPrefix("gemma") || baseArch == "clip") &&
+           (projectorArch.hasPrefix("gemma") || projectorArch == "clip") {
+            return true
+        }
+        return false
     }
 
     /// Score confidence for a base + projector pair.
