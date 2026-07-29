@@ -42,6 +42,13 @@ Catalog artifacts remain available for storage and verification work, but runtim
 
 See [Runtime memory profiles and calibration](docs/memory-profiles.md) for current evidence, disabled profiles, the production formula, and physical calibration commands.
 
+## Documentation
+
+- [Download Specifications](docs/download-spec.md) — Product contract: Pause, Cancel, resume fallback, paired-artifact readiness, verification, repair, and termination.
+- [Download Architecture](docs/download-architecture.md) — Staging pipeline, atomic promotion, durable transfer state, reconciliation, and background restoration.
+- [Download Testing](docs/download-testing.md) — Deterministic transport fixtures, isolated model directories, physical-device coverage, and named regression test map.
+- [Release Gates](docs/release-gates.md) — Catalog hash completeness, clean-download verification, legacy repair, lifecycle QA, offline proof, durable state integrity, and atomic promotion safety.
+
 ## Setup
 
 ```bash
