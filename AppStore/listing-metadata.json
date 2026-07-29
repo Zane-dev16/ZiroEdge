@@ -1,0 +1,80 @@
+{
+  "app": {
+    "name": "ZiroEdge",
+    "subtitle": "Private On-Device AI",
+    "description": "ZiroEdge brings state-of-the-art AI models directly to your iPhone and iPad — with zero data ever leaving your device.\n\n• Chat with Gemma 4 and Llama 3.2 models, fully offline\n• Every word you type and every response stays on your device — no accounts, no cloud, no tracking\n• Streaming responses with markdown rendering let you read as the model thinks\n• Conversation branching lets you explore alternate responses from any message\n• Vision support: snap a photo or pick from your library and the model sees it (Gemma 4 E2B/E4B)\n• Core Data persistence means your conversations survive cold restarts\n• Intelligent memory management keeps the model loaded only when you need it\n\nPrivacy is the foundation, not an afterthought. ZiroEdge never connects to a server for inference, never collects analytics, and never asks you to create an account. The models live on your device, and your conversations stay with you — always.",
+    "promotionalText": "Your conversations are yours alone. ZiroEdge runs AI entirely on device — no cloud, no accounts, no data collection. Download once, chat privately forever.",
+    "keywords": [
+      "ai chat",
+      "offline ai",
+      "private ai",
+      "on-device ai",
+      "llama",
+      "gemma",
+      "local llm",
+      "privacy",
+      "chat assistant",
+      "no account",
+      "fully offline",
+      "ai assistant",
+      "private chat",
+      "vision ai",
+      "multimodal",
+      "markdown",
+      "conversation",
+      "branching chat",
+      "no tracking",
+      "open source"
+    ],
+    "category": {
+      "primary": "Productivity",
+      "secondary": "Utilities"
+    },
+    "copyright": "Copyright © 2026 Irell Zane. All rights reserved.",
+    "version": {
+      "string": "1.0.0",
+      "build": "1"
+    },
+    "rating": {
+      "appleContentDescription": {
+        "cartoonOrFantasyViolence": "NONE",
+        "realisticViolence": "NONE",
+        "prolongedGraphicOrSadisticRealisticViolence": "NONE",
+        "profanityOrCrudeHumor": "NONE",
+        "matureOrSuggestiveThemes": "NONE",
+        "horrorOrFearThemes": "NONE",
+        "medicalOrTreatmentInformation": "NONE",
+        "alcoholTobaccoOrDrugUseOrReferences": "NONE",
+        "gamblingSimulated": "NONE",
+        "sexualContentOrNudity": "NONE",
+        "graphicSexualContentOrNudity": "NONE",
+        "unrestrictedWebAccess": false,
+        "gamblingAndContests": false
+      }
+    }
+  },
+  "privacy": {
+    "policyURL": "https://zane-dev16.github.io/ZiroEdge/privacy.html",
+    "dataCollection": {
+      "collectsData": false,
+      "tracking": false,
+      "thirdPartySDKs": false
+    },
+    "requiredReasons": [
+      {
+        "api": "UserDefaults",
+        "reason": "CA92.1 — Store user preferences (default system prompt, selected model) exclusively on device"
+      },
+      {
+        "api": "DiskSpace",
+        "reason": "E174.1 — Check available storage before downloading large model files"
+      }
+    ]
+  },
+  "support": {
+    "url": "https://github.com/Zane-dev16/ZiroEdge/issues"
+  },
+  "marketing": {
+    "url": "https://ziroedge.app"
+  }
+}
