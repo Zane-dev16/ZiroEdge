@@ -9,7 +9,7 @@ import Foundation
 // MARK: - Prompt Path
 
 /// How the model expects to receive input.
-enum PromptPath: String, Codable, Sendable {
+enum PromptPath: Sendable {
     case chatTemplate       // Uses the model's built-in chat template (e.g. Llama 3.2, Qwen)
     case gemma              // Deterministic Gemma turn formatting with special-token parsing
     case raw                // Bypasses chat template, sends raw text (e.g. translation-specific models)
@@ -18,7 +18,7 @@ enum PromptPath: String, Codable, Sendable {
 // MARK: - Sampling Configuration
 
 /// Tunable sampling parameters. Stored per-conversation, overridable at runtime.
-struct SamplingConfig: Codable, Sendable, Hashable {
+struct SamplingConfig: Sendable, Hashable {
     var temperature: Float     // 0.0 = greedy, higher = more random. Default 0.7.
     var topP: Float            // Nucleus sampling. Default 0.9.
     var topK: Int              // Top-K sampling. Default 40.
@@ -47,7 +47,7 @@ struct SamplingConfig: Codable, Sendable, Hashable {
 
 /// Runtime configuration preset for a specific model.
 /// Encodes how the model should be loaded, prompted, and sampled.
-struct ModelConfiguration: Codable, Sendable, Hashable {
+struct ModelConfiguration: Sendable, Hashable {
     /// How to format prompts for this model.
     let promptPath: PromptPath
 
@@ -81,37 +81,6 @@ struct ModelConfiguration: Codable, Sendable, Hashable {
 
     /// Number of GPU layers. 0 = CPU-only for v1.
     let gpuLayers: Int
-
-    /// Imported models expose only these bounded controls. Unsafe runtime knobs
-    /// remain app-owned constants.
-    static func imported(
-        promptPath: PromptPath,
-        contextLength: Int,
-        sampling: SamplingConfig = .default,
-        addBos: Bool? = nil,
-        stopStrings: [String] = []
-    ) -> ModelConfiguration {
-        let boundedSampling = SamplingConfig(
-            temperature: min(max(sampling.temperature, 0), 2),
-            topP: min(max(sampling.topP, 0), 1),
-            topK: min(max(sampling.topK, 1), 100),
-            maxTokens: min(max(sampling.maxTokens, 64), 4096),
-            repeatPenalty: min(max(sampling.repeatPenalty, 0), 2)
-        )
-        return ModelConfiguration(
-            promptPath: promptPath,
-            addBos: addBos,
-            stopStrings: stopStrings,
-            defaultSampling: boundedSampling,
-            contextLength: min(max(contextLength, 512), 4096),
-            batchSize: 256,
-            microBatchSize: 64,
-            threadCount: 2,
-            useMmap: true,
-            f16KV: true,
-            gpuLayers: 0
-        )
-    }
 
     // MARK: - Presets
 

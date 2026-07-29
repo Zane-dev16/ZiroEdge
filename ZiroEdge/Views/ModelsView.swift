@@ -9,21 +9,12 @@ struct ModelsView: View {
     var body: some View {
         List {
             if !viewModel.hasInstalledModels { introductionSection }
-            Section {
-                Button { viewModel.showingImporter = true } label: {
-                    Label("Import from Hugging Face", systemImage: "square.and.arrow.down")
-                }
-            }
             if viewModel.hasInstalledModels { installedSection }
-            if !viewModel.importedModels.isEmpty { importedSection }
             availableSection
         }
         .listStyle(.insetGrouped)
         .navigationTitle("Models")
         .navigationBarTitleDisplayMode(.large)
-        .sheet(isPresented: $viewModel.showingImporter) {
-            ImportView(downloadManager: viewModel.downloadManager)
-        }
         .alert("Review Download", isPresented: $viewModel.showingDownloadWarning) {
             if viewModel.canConfirmPendingDownload {
                 Button("Download") { viewModel.confirmPendingDownload() }
@@ -63,7 +54,7 @@ struct ModelsView: View {
 
     private var installedSection: some View {
         Section("On This Device") {
-            ForEach(viewModel.curatedModels.filter { viewModel.isDownloaded($0) }) { model in
+            ForEach(viewModel.allModels.filter { viewModel.isDownloaded($0) }) { model in
                 NavigationLink { ModelDetailView(model: model, viewModel: viewModel) } label: {
                     ModelRow(
                         model: model,
@@ -75,19 +66,9 @@ struct ModelsView: View {
         }
     }
 
-    private var importedSection: some View {
-        Section("Imported from Hugging Face") {
-            ForEach(viewModel.importedModels) { model in
-                NavigationLink { ModelDetailView(model: model, viewModel: viewModel) } label: {
-                    modelRow(model)
-                }
-            }
-        }
-    }
-
     private var availableSection: some View {
         Section(viewModel.hasInstalledModels ? "Available to Download" : "Choose a Model") {
-            ForEach(viewModel.curatedModels.filter { !viewModel.isDownloaded($0) }) { model in
+            ForEach(viewModel.allModels.filter { !viewModel.isDownloaded($0) }) { model in
                 HStack(spacing: ZiroTheme.Spacing.small) {
                     NavigationLink { ModelDetailView(model: model, viewModel: viewModel) } label: {
                         modelRow(model)

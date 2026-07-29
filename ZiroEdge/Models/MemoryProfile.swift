@@ -196,36 +196,6 @@ enum MemoryProfileRegistry {
             return hermeticLlamaText
         }
 #endif
-        if let curated = all.first(where: { $0.modelID == modelID }) { return curated }
-        return ImportedModelStore.shared.record(id: modelID).map { importedProfile(for: $0.model) }
-    }
-
-    static func profile(for model: AIModel) -> MemoryProfile? {
-        model.isImported ? importedProfile(for: model) : profile(for: model.id)
-    }
-
-    /// Imported models have no retained device calibration yet. The estimate is
-    /// conservative and only enables the explicit experimental-consent path.
-    static func importedProfile(for model: AIModel) -> MemoryProfile {
-        let contextScale = UInt64(max(model.config.contextLength, 512)) * 256_000
-        let artifactResidentEstimate = UInt64(clamping: model.totalFileSizeBytes / 3)
-        let (estimated, overflow) = artifactResidentEstimate.addingReportingOverflow(contextScale)
-        let revision = model.huggingFaceProvenance?.revision.prefix(12) ?? "unknown"
-        return MemoryProfile(
-            id: "hf-\(model.id)-\(revision)-ctx\(model.config.contextLength)-p1",
-            modelID: model.id,
-            mode: model.modelType == .vision ? .vision : .text,
-            contextLength: model.config.contextLength,
-            batchSize: model.config.batchSize,
-            microBatchSize: model.config.microBatchSize,
-            projectorPolicy: model.requiresMMProj ? .required : .disabled,
-            evidenceStatus: .unvalidated,
-            policyVersion: 1,
-            measuredFullWorkloadPeakDeltaBytes: nil,
-            measuredLoadDeltaBytes: overflow ? UInt64.max / 2 : estimated,
-            safetyMultiplier: MemoryProfile.productionSafetyMultiplier,
-            fixedReserveBytes: MemoryProfile.productionReserveBytes,
-            minimumPhysicalRAMBytes: 1
-        )
+        return all.first { $0.modelID == modelID }
     }
 }

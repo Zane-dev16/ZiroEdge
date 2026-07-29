@@ -10,7 +10,7 @@ import SwiftUI
 struct LicenseView: View {
     var body: some View {
         List {
-            ForEach(ModelRegistry.libraryModels) { model in
+            ForEach(ModelRegistry.allModels) { model in
                 Section(model.displayName) {
                     LabeledContent("License", value: model.license.name)
 

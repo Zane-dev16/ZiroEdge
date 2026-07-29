@@ -178,7 +178,7 @@ actor InferenceService: InferenceServiceProtocol {
         )
 
         // Persist immediately before native construction, including direct service callers.
-        guard let profile = MemoryProfileRegistry.profile(for: model) else {
+        guard let profile = MemoryProfileRegistry.profile(for: model.id) else {
             throw InferenceError.nativeFailure(
                 kind: .memoryPressure,
                 diagnostic: "runtime-profile-missing"

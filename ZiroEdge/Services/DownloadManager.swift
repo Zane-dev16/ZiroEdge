@@ -78,7 +78,6 @@ final class DownloadTask {
         case .base:
             return "base-\(model.baseArtifactStorageID)"
         case .mmproj:
-            if let digest = model.mmprojSHA256 { return "mmproj-hf-\(digest.prefix(24))" }
             return "mmproj-\(model.id)"
         }
     }
@@ -139,21 +138,11 @@ final class DownloadManager: NSObject, ObservableObject {
     }
     private let logger = Logger(subsystem: "com.zanish-labs.ziroedge", category: "download")
     private let fileManager = FileManager.default
-    private let availableDiskSpaceProvider: @MainActor () -> Int64
     private static let chunkSize: Int64 = 100 * 1_024 * 1_024
     private static let chunkedDownloadThreshold: Int64 = 2_147_483_648
     private static let maximumChunkRetries = 3
     // MARK: - Initialization
-    override convenience init() {
-        self.init(availableDiskSpaceProvider: nil)
-    }
-
-    init(availableDiskSpaceProvider: (@MainActor () -> Int64)?) {
-        self.availableDiskSpaceProvider = availableDiskSpaceProvider ?? {
-            guard let values = try? URL(fileURLWithPath: NSHomeDirectory())
-                .resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]) else { return 0 }
-            return values.volumeAvailableCapacityForImportantUsage ?? 0
-        }
+    override init() {
         super.init()
         ModelManagerService.ensureModelsDirectory()
         updateStatusesFromDisk()
@@ -173,7 +162,7 @@ final class DownloadManager: NSObject, ObservableObject {
     }
     /// Check disk and update statuses for all registered models.
     func updateStatusesFromDisk() {
-        for model in ModelRegistry.libraryModels {
+        for model in ModelRegistry.allModels {
             downloadStatuses[model.id] = authoritativeDiskStatus(for: model)
         }
     }
@@ -186,49 +175,40 @@ final class DownloadManager: NSObject, ObservableObject {
                 mmprojState: model.requiresMMProj ? .downloaded : nil
             )
         case .unavailable:
-            let baseTask = DownloadTask(model: model, artifact: .base)
-            let baseState = recoveredState(for: baseTask)
-            let projectorState = model.requiresMMProj
-                ? recoveredState(for: DownloadTask(model: model, artifact: .mmproj))
-                : nil
             return ModelDownloadStatus(
                 modelID: model.id,
-                baseState: baseState,
-                mmprojState: projectorState
+                baseState: .notDownloaded,
+                mmprojState: model.requiresMMProj ? .notDownloaded : nil
             )
         case .repairNeeded:
-            // Preserve verified counterparts while also recovering durable staging
-            // and resume state for missing or invalid artifacts.
-            let baseTask = DownloadTask(model: model, artifact: .base)
-            let baseState: DownloadState = ModelManagerService.isBaseDownloaded(model)
-                ? .downloaded
-                : recoveredState(for: baseTask)
-            let projectorState: DownloadState? = model.requiresMMProj
-                ? (ModelManagerService.isMMProjDownloaded(model)
-                    ? .downloaded
-                    : recoveredState(for: DownloadTask(model: model, artifact: .mmproj)))
-                : nil
+            // Preserve which side of a partial vision pair exists for repair UI,
+            // but never report both sides ready after authoritative validation failed.
+            guard model.requiresMMProj else {
+                return ModelDownloadStatus(modelID: model.id, baseState: .notDownloaded, mmprojState: nil)
+            }
+            let hasBase = ModelManagerService.isBaseDownloaded(model)
+            let hasProjector = ModelManagerService.isMMProjDownloaded(model)
             return ModelDownloadStatus(
                 modelID: model.id,
-                baseState: baseState,
-                mmprojState: projectorState
+                baseState: hasBase && !hasProjector ? .downloaded : .notDownloaded,
+                mmprojState: hasProjector ? .downloaded : .notDownloaded
             )
         }
     }
     // MARK: - Storage Check
     /// Available disk space in bytes.
-    var availableDiskSpace: Int64 { availableDiskSpaceProvider() }
-
-    func storageSafetyMargin(for requiredBytes: Int64) -> Int64 {
-        max(requiredBytes / 20, 500_000_000)
+    var availableDiskSpace: Int64 {
+        guard let values = try? URL(fileURLWithPath: NSHomeDirectory())
+            .resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+        else { return 0 }
+        return values.volumeAvailableCapacityForImportantUsage ?? 0
     }
     /// Whether the device has enough space for the artifacts that are still missing.
     /// Installed verified artifacts are reused and are never staged a second time.
     func hasSufficientStorage(for model: AIModel) -> Bool {
         let required = requiredDownloadBytes(for: model)
         guard required >= 0, required < Int64.max else { return false }
-        let (total, overflow) = required.addingReportingOverflow(storageSafetyMargin(for: required))
-        return !overflow && availableDiskSpace >= total
+        return availableDiskSpace >= required
     }
     func requiredDownloadBytes(for model: AIModel) -> Int64 {
         // These checks include the catalog SHA-256. A same-size GGUF with the
@@ -255,15 +235,6 @@ final class DownloadManager: NSObject, ObservableObject {
         let value = Double(bytes) / Double(unit.threshold)
         return String(format: "%.1f %@", value, unit.suffix)
     }
-    private func recoveredState(for task: DownloadTask) -> DownloadState {
-        guard fileManager.fileExists(atPath: task.stagingURL.path) || fileManager.fileExists(atPath: task.resumeDataURL.path) else {
-            return .notDownloaded
-        }
-        let size = ((try? fileManager.attributesOfItem(atPath: task.stagingURL.path)[.size]) as? NSNumber)?.int64Value ?? 0
-        let progress = task.expectedBytes > 0 ? min(Double(size) / Double(task.expectedBytes), 1) : 0
-        return .paused(progress: progress)
-    }
-
     // MARK: - Download Actions
 
     /// Start downloading a model. Shows cellular warning if needed.
@@ -354,9 +325,7 @@ final class DownloadManager: NSObject, ObservableObject {
     /// Cancel and clean up a download.
     func cancelDownload(for model: AIModel) {
         cancelArtifactDownload(model: model, artifact: .base)
-        if model.requiresMMProj {
-            cancelArtifactDownload(model: model, artifact: .mmproj)
-        }
+        cancelArtifactDownload(model: model, artifact: .mmproj)
         updateStatus(model: model)
     }
 
@@ -373,122 +342,9 @@ final class DownloadManager: NSObject, ObservableObject {
             try? fileManager.removeItem(at: DownloadTask(model: model, artifact: .mmproj).resumeDataURL)
         }
 
-        // Recompute every library entry because another entry may share an artifact.
+        // Recompute every catalog entry because another entry may share the base.
         updateStatusesFromDisk()
         downloadStatuses[model.id] = authoritativeDiskStatus(for: model)
-    }
-
-    // MARK: - Repair
-
-    /// Repair a partially downloaded or corrupt model by downloading only the
-    /// missing or invalid artifacts. Preserves the verified counterpart so a
-    /// vision model with only a broken projector downloads just the projector.
-    func repairDownload(for model: AIModel) {
-        let availability = ModelManagerService.availability(for: model)
-        guard case .repairNeeded(let issues) = availability else {
-            logger.info("repairDownload: model \(model.id) does not need repair")
-            return
-        }
-
-        logger.info("repairDownload: repairing \(model.id) with issues: \(issues.map { String(describing: $0) }.joined(separator: ", "))")
-
-        let baseNeedsRepair = issues.contains { issue in
-            switch issue {
-            case .missing(artifact: .base), .sha256Mismatch, .sizeMismatch, .missingGGUFHeader, .fileNotFound:
-                return true
-            case .missing(artifact: .mmproj), .unknown:
-                return false
-            }
-        }
-        let hasBaseFile = FileManager.default.fileExists(atPath: ModelManagerService.baseModelPath(for: model).path)
-
-        // Only re-download base if it's missing or failed validation.
-        // A verified counterpart is preserved.
-        if baseNeedsRepair || (!hasBaseFile && !ModelManagerService.isBaseDownloaded(model)) {
-            // Remove the corrupt base before re-downloading.
-            if hasBaseFile {
-                try? fileManager.removeItem(at: ModelManagerService.baseModelPath(for: model))
-            }
-            startArtifactDownload(model: model, artifact: .base)
-        }
-
-        // For vision models, also check the projector.
-        if model.requiresMMProj {
-            let mmprojNeedsRepair = issues.contains { issue in
-                switch issue {
-                case .missing(artifact: .mmproj), .sha256Mismatch, .sizeMismatch, .missingGGUFHeader, .fileNotFound:
-                    return true
-                case .missing(artifact: .base), .unknown:
-                    return false
-                }
-            }
-            let hasMMProjFile = FileManager.default.fileExists(atPath: ModelManagerService.mmprojModelPath(for: model).path)
-            if mmprojNeedsRepair || (!hasMMProjFile && !ModelManagerService.isMMProjDownloaded(model)) {
-                if hasMMProjFile {
-                    try? fileManager.removeItem(at: ModelManagerService.mmprojModelPath(for: model))
-                }
-                startArtifactDownload(model: model, artifact: .mmproj)
-            }
-        }
-    }
-
-    // MARK: - Atomic Paired Vision Update
-
-    /// Stage a paired vision-model update. Both the new base and new projector
-    /// download to staging paths that do not collide with the installed pair.
-    /// The installed pair remains usable until both staged artifacts pass all
-    /// checks and are promoted together.
-    func startPairedUpdate(for stagedModel: AIModel) {
-        guard stagedModel.requiresMMProj else {
-            // Text-only models use the standard download path.
-            startDownload(for: stagedModel)
-            return
-        }
-
-        // Verify both artifacts have valid integrity metadata.
-        guard ModelManagerService.isValidSHA256(stagedModel.baseSHA256),
-              let mmprojSHA = stagedModel.mmprojSHA256,
-              ModelManagerService.isValidSHA256(mmprojSHA) else {
-            downloadStatuses[stagedModel.id] = ModelDownloadStatus(
-                modelID: stagedModel.id,
-                baseState: .failed(error: .invalidCatalogMetadata),
-                mmprojState: .failed(error: .invalidCatalogMetadata)
-            )
-            return
-        }
-
-        // Check storage for both artifacts simultaneously.
-        let requiredBytes = stagedModel.baseFileSizeBytes + (stagedModel.mmprojFileSizeBytes ?? 0)
-        let safetyMargin = storageSafetyMargin(for: requiredBytes)
-        let totalNeeded = requiredBytes + safetyMargin
-        guard availableDiskSpace >= totalNeeded else {
-            downloadStatuses[stagedModel.id] = ModelDownloadStatus(
-                modelID: stagedModel.id,
-                baseState: .failed(error: .diskSpaceInsufficient),
-                mmprojState: .failed(error: .diskSpaceInsufficient)
-            )
-            logger.error("Refusing paired update without sufficient storage for both artifacts: \(stagedModel.id)")
-            return
-        }
-
-        print("[DL-PAIRED] startPairedUpdate: \(stagedModel.id)")
-        startStuckWatchdog()
-        ModelManagerService.ensureModelsDirectory()
-
-        // Start both downloads. The staging paths are digest-addressed and
-        // do not collide with the currently installed pair.
-        startArtifactDownload(model: stagedModel, artifact: .base)
-        startArtifactDownload(model: stagedModel, artifact: .mmproj)
-    }
-
-    /// Check if a paired vision update has both artifacts fully verified.
-    /// Returns true only when both base and projector pass all checks.
-    func isPairedUpdateReady(_ model: AIModel) -> Bool {
-        guard model.requiresMMProj else {
-            return ModelManagerService.isBaseDownloaded(model)
-        }
-        return ModelManagerService.isBaseDownloaded(model)
-            && ModelManagerService.isMMProjDownloaded(model)
     }
 
     // MARK: - Private Helpers
@@ -811,24 +667,23 @@ extension DownloadManager {
 
     private func cancelArtifactDownload(model: AIModel, artifact: ArtifactType) {
         let key = artifactTaskKey(model: model, artifact: artifact)
-        let diskTask = DownloadTask(model: model, artifact: artifact)
+        // A sibling catalog entry may observe a shared download, but only the
+        // entry that claimed the writer may cancel and discard its staging data.
+        guard let task = activeTasks[key], task.model.id == model.id else { return }
 
-        // A sibling catalog entry may observe a shared active download, but only
-        // the entry that claimed the writer may cancel and discard its state.
-        if let task = activeTasks[key] {
-            guard task.model.id == model.id else { return }
-            task.isCancelled = true
-            task.task?.cancel()
-            task.chunkTask?.cancel()
-            closeChunkFile(for: task)
-            task.state = .cancelled
-            activeTasks.removeValue(forKey: key)
-        }
+        task.isCancelled = true
+        task.task?.cancel()
+        task.chunkTask?.cancel()
+        closeChunkFile(for: task)
+        task.state = .cancelled
 
-        // Cancellation also cleans durable state recovered after relaunch, when
-        // there is no in-memory active task to cancel.
-        try? fileManager.removeItem(at: diskTask.stagingURL)
-        try? fileManager.removeItem(at: diskTask.resumeDataURL)
+        // Explicit cancellation discards both regular and chunked staging data.
+        try? fileManager.removeItem(at: task.stagingURL)
+
+        // Clean up resume data
+        try? fileManager.removeItem(at: task.resumeDataURL)
+
+        activeTasks.removeValue(forKey: key)
         logger.info("Cancelled download: \(key, privacy: .public)")
     }
 
@@ -846,12 +701,6 @@ extension DownloadManager {
                 task.state = .failed(error: .fileCorrupted)
                 try? fileManager.removeItem(at: task.stagingURL)
                 return .failure(.fileCorrupted)
-            }
-
-            guard ModelManagerService.verifyGGUFHeader(fileURL: task.stagingURL) else {
-                task.state = .failed(error: .structureInvalid(reason: "missing GGUF magic or unsupported version"))
-                try? fileManager.removeItem(at: task.stagingURL)
-                return .failure(.structureInvalid(reason: "missing GGUF magic or unsupported version"))
             }
 
             guard ModelManagerService.isValidSHA256(task.expectedSHA256) else {
@@ -888,7 +737,7 @@ extension DownloadManager {
     }
 
     private func updateStatus(model: AIModel) {
-        var affectedModels = ModelRegistry.libraryModels.filter {
+        var affectedModels = ModelRegistry.allModels.filter {
             $0.baseArtifactStorageID == model.baseArtifactStorageID
         }
         if !affectedModels.contains(where: { $0.id == model.id }) {
