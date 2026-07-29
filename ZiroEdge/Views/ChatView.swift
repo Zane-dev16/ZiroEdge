@@ -363,7 +363,9 @@ private extension ChatView {
             .clipShape(Capsule())
         }
         .disabled(viewModel.isSwitchingModel)
-        .accessibilityLabel("Chat model, \(modelPickerLabel)")
+        .accessibilityLabel(
+            viewModel.isSwitchingModel ? "Loading chat model" : "Chat model, \(modelPickerLabel)"
+        )
         .accessibilityHint("Choose the local model for this conversation")
     }
 
