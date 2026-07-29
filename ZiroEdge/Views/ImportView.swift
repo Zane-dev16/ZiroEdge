@@ -101,7 +101,13 @@ struct ImportView: View {
                     Text(viewModel.ramAssessment.warning ?? "").font(.caption).foregroundStyle(.orange)
                 }
                 Button(viewModel.existingModel == nil ? "Import Selected Model" : "Open Existing Import") {
-                    viewModel.confirmImport()
+                    if viewModel.existingModel == nil {
+                        viewModel.confirmImport()
+                    } else {
+                        // The presenting Models screen already owns navigation to this
+                        // record; return there instead of repeating duplicate detection.
+                        dismiss()
+                    }
                 }
                 .disabled(!viewModel.canConfirm || viewModel.phase == .importing)
             }

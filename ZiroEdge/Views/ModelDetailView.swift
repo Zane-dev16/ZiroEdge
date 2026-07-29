@@ -107,6 +107,7 @@ struct ModelDetailView: View {
 
     private var importedConfigurationSection: some View {
         ImportedModelSettingsView(model: model, viewModel: viewModel)
+            .id(model.id)
     }
 
     // MARK: - Download

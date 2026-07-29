@@ -274,32 +274,40 @@ final class VisionUpdateTests: XCTestCase {
         try baseData.write(to: ModelManagerService.baseModelPath(for: existingRecord.model), options: .atomic)
         defer { ModelManagerService.deleteModel(existingRecord.model) }
 
-        // Create a new staged record.
         let newBaseData = TestModelFixtures.gguf(fill: 0xDD, count: 16)
         let newProjectorData = TestModelFixtures.gguf(fill: 0xEE, count: 16)
-        let stagedRecord = makeVisionRecord(
-            id: "promote-both-test",
-            baseDigest: TestModelFixtures.sha256(newBaseData),
-            projectorDigest: TestModelFixtures.sha256(newProjectorData)
+        let newBase = makeArtifact(
+            "model-Q4_K_M.gguf",
+            digest: TestModelFixtures.sha256(newBaseData),
+            role: .base,
+            size: Int64(newBaseData.count)
         )
-
+        let newProjector = makeArtifact(
+            "mmproj-Q8_0.gguf",
+            digest: TestModelFixtures.sha256(newProjectorData),
+            role: .projector,
+            architecture: "clip",
+            size: Int64(newProjectorData.count)
+        )
+        let review = makeReview(
+            revision: String(repeating: "new", count: 40),
+            artifacts: [newBase, newProjector]
+        )
         let downloadManager = DownloadManager(availableDiskSpaceProvider: { 100_000_000_000 })
-        let coordinator = ImportedModelUpdateCoordinator(
-            store: store,
-            downloadManager: downloadManager
+        let coordinator = ImportedModelUpdateCoordinator(store: store, downloadManager: downloadManager)
+        let stagedModel = try coordinator.stageUpdate(
+            existing: existingRecord.model,
+            review: review,
+            base: newBase,
+            projector: newProjector
         )
+        downloadManager.cancelDownload(for: stagedModel)
+        try newBaseData.write(to: ModelManagerService.baseModelPath(for: stagedModel), options: .atomic)
+        defer { ModelManagerService.deleteModel(stagedModel) }
 
-        // Install only the new base, not the projector.
-        try newBaseData.write(to: ModelManagerService.baseModelPath(for: stagedRecord.model), options: .atomic)
-        defer { ModelManagerService.deleteModel(stagedRecord.model) }
-
-        // The update should NOT promote because both artifacts are not verified.
-        // (We need the staged record in the coordinator's stagedRecords map.)
-        // Since we can't directly inject into stagedRecords, we test via the model.
-        XCTAssertFalse(
-            ModelManagerService.isFullyDownloaded(stagedRecord.model),
-            "Vision model with only base should not be fully downloaded"
-        )
+        XCTAssertNil(try coordinator.promoteIfVerified(modelID: existingRecord.id))
+        XCTAssertTrue(coordinator.hasStagedUpdate(modelID: existingRecord.id))
+        XCTAssertEqual(store.record(id: existingRecord.id)?.provenance.revision, existingRecord.provenance.revision)
     }
 
     // MARK: - Coherent Promotion Switches Identity
@@ -332,23 +340,26 @@ final class VisionUpdateTests: XCTestCase {
         let newProj = makeArtifact("mmproj-Q8_0.gguf", digest: TestModelFixtures.sha256(newProjectorData), role: .projector, architecture: "clip", size: Int64(newProjectorData.count))
         let review = makeReview(revision: newRevision, artifacts: [newBase, newProj])
 
-        let newRecord = ImportedModelFactory.makeRecord(
+        let oldBasePath = ModelManagerService.baseModelPath(for: oldRecord.model)
+        let oldProjectorPath = ModelManagerService.mmprojModelPath(for: oldRecord.model)
+        let downloadManager = DownloadManager(availableDiskSpaceProvider: { 100_000_000_000 })
+        let coordinator = ImportedModelUpdateCoordinator(store: store, downloadManager: downloadManager)
+        let stagedModel = try coordinator.stageUpdate(
+            existing: oldRecord.model,
             review: review,
             base: newBase,
-            projector: newProj,
-            stableID: "switch-identity-test"
+            projector: newProj
         )
-        // Install new artifacts.
-        try newBaseData.write(to: ModelManagerService.baseModelPath(for: newRecord.model), options: .atomic)
-        try newProjectorData.write(to: ModelManagerService.mmprojModelPath(for: newRecord.model), options: .atomic)
-        defer { ModelManagerService.deleteModel(newRecord.model) }
+        downloadManager.cancelDownload(for: stagedModel)
+        try newBaseData.write(to: ModelManagerService.baseModelPath(for: stagedModel), options: .atomic)
+        try newProjectorData.write(to: ModelManagerService.mmprojModelPath(for: stagedModel), options: .atomic)
+        defer { ModelManagerService.deleteModel(stagedModel) }
 
-        // Update the store directly to simulate promotion.
-        try store.update(id: "switch-identity-test") { $0 = newRecord }
-
-        let updated = store.record(id: "switch-identity-test")
-        XCTAssertNotNil(updated)
-        XCTAssertEqual(updated?.provenance.revision, newRevision)
+        let promoted = try coordinator.promoteIfVerified(modelID: "switch-identity-test")
+        XCTAssertEqual(promoted?.huggingFaceProvenance?.revision, newRevision)
+        XCTAssertEqual(store.record(id: "switch-identity-test")?.provenance.revision, newRevision)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: oldBasePath.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: oldProjectorPath.path))
     }
 
     // MARK: - Relaunch Preserves Pinned Pairing

@@ -83,13 +83,20 @@ final class ImportedModelStore: @unchecked Sendable {
 
     private let lock = NSLock()
     private let fileURL: URL
+    private let writer: (Data, URL) throws -> Void
     private var records: [ImportedModelRecord]
 
-    init(directory: URL? = nil) {
+    init(
+        directory: URL? = nil,
+        writer: @escaping (Data, URL) throws -> Void = {
+            try $0.write(to: $1, options: [.atomic, .completeFileProtection])
+        }
+    ) {
         let root = directory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("ZiroEdge/Models/Imported", isDirectory: true)
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         fileURL = root.appendingPathComponent("registry.json")
+        self.writer = writer
         records = (try? Data(contentsOf: fileURL)).flatMap { try? JSONDecoder().decode([ImportedModelRecord].self, from: $0) } ?? []
     }
 
@@ -151,7 +158,7 @@ final class ImportedModelStore: @unchecked Sendable {
         let snapshot = records
         do {
             let data = try JSONEncoder().encode(snapshot)
-            try data.write(to: fileURL, options: [.atomic, .completeFileProtection])
+            try writer(data, fileURL)
             lock.unlock()
             DispatchQueue.main.async {
                 NotificationCenter.default.post(name: .importedModelsDidChange, object: nil)
@@ -208,7 +215,7 @@ struct HFRepositoryReview: Hashable, Sendable {
         guard projectorArtifacts.count == 1, let projector = projectorArtifacts.first else {
             throw projectorArtifacts.isEmpty ? HFInspectionError.projectorMissing : HFInspectionError.projectorAmbiguous
         }
-        guard projector.architecture == base.architecture || projector.architecture == "clip" else {
+        guard VisionPairResolver.isArchitectureCompatible(base: base, projector: projector) else {
             throw HFInspectionError.incompatibleVisionPair
         }
         return (base, projector)
@@ -394,6 +401,13 @@ struct ImportRAMAssessment: Equatable, Sendable {
     let estimatedBytes: UInt64
     let physicalBytes: UInt64
     let classification: Classification
+
+    static func estimatedBytes(artifactBytes: Int64, contextLength: Int) -> UInt64 {
+        UInt64(clamping: artifactBytes / 3)
+            + UInt64(max(contextLength, 512)) * 256_000
+            + MemoryProfile.productionReserveBytes
+    }
+
     var warning: String? {
         classification == .risky
             ? "This model may exceed available RAM. iOS may terminate ZiroEdge during loading."
@@ -453,9 +467,12 @@ struct ImportedModelFactory {
     }
 
     static func resolveURL(repo: String, revision: String, filename: String) -> URL {
-        let path = filename.split(separator: "/").map(String.init).map {
-            $0.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? $0
-        }.joined(separator: "/")
-        return URL(string: "https://huggingface.co/\(repo)/resolve/\(revision)/\(path)")!
+        let root = URL(string: "https://huggingface.co")!
+        let components = repo.split(separator: "/").map(String.init)
+            + ["resolve", revision]
+            + filename.split(separator: "/").map(String.init)
+        return components.reduce(root) { url, component in
+            url.appendingPathComponent(component, isDirectory: false)
+        }
     }
 }
