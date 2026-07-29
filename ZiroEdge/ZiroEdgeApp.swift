@@ -449,7 +449,7 @@ struct SettingsView: View {
     @State private var appMemoryHeadroom: String = "Loading..."
     @State private var totalRAM: String = "Loading..."
 
-    private static let privacyPolicyURL = URL(string: "https://ziroedge.app/privacy")
+    private static let privacyPolicyURL = URL(string: "https://zane-dev16.github.io/ZiroEdge/privacy.html")
         ?? URL(fileURLWithPath: "/")
 
     /// Models that are currently downloaded on disk.

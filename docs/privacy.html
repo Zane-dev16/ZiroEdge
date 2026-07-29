@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>ZiroEdge — Privacy Policy</title>
+  <meta name="description" content="ZiroEdge is a privacy-first application. All data stays on your device.">
+  <style>
+    :root {
+      color-scheme: light dark;
+      --text: #1d1d1f;
+      --text-secondary: #6e6e73;
+      --bg: #ffffff;
+      --card-bg: #f5f5f7;
+      --border: #d2d2d7;
+      --accent: #0071e3;
+      --divider: #e8e8ed;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --text: #f5f5f7;
+        --text-secondary: #a1a1a6;
+        --bg: #000000;
+        --card-bg: #1c1c1e;
+        --border: #48484a;
+        --accent: #3399ff;
+        --divider: #2c2c2e;
+      }
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      min-height: 100dvh;
+    }
+
+    header {
+      padding: 2rem 1.5rem 1rem;
+      text-align: center;
+      border-bottom: 1px solid var(--divider);
+    }
+    header .badge {
+      display: inline-block;
+      font-size: 0.75rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--accent);
+      background: color-mix(in srgb, var(--accent) 12%, transparent);
+      padding: 0.25rem 0.75rem;
+      border-radius: 999px;
+      margin-bottom: 0.75rem;
+    }
+    header h1 {
+      font-size: 1.75rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+    header .updated {
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+      margin-top: 0.25rem;
+    }
+
+    main {
+      max-width: 680px;
+      margin: 0 auto;
+      padding: 1.5rem 1.25rem 3rem;
+    }
+
+    section {
+      margin-bottom: 2rem;
+    }
+    section h2 {
+      font-size: 1.25rem;
+      font-weight: 600;
+      margin-bottom: 0.5rem;
+      letter-spacing: -0.01em;
+    }
+    section p, section li {
+      color: var(--text-secondary);
+      font-size: 1rem;
+      margin-bottom: 0.5rem;
+    }
+    section ul {
+      padding-left: 1.25rem;
+      margin-bottom: 0.5rem;
+    }
+    section li {
+      margin-bottom: 0.25rem;
+    }
+    section strong {
+      color: var(--text);
+    }
+
+    hr {
+      border: none;
+      border-top: 1px solid var(--divider);
+      margin: 2rem 0;
+    }
+
+    .highlight {
+      background: var(--card-bg);
+      border-radius: 12px;
+      padding: 1rem 1.25rem;
+      margin: 1rem 0;
+      border: 1px solid var(--border);
+    }
+
+    .contact {
+      font-size: 0.95rem;
+      color: var(--text-secondary);
+    }
+    .contact a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+    .contact a:hover { text-decoration: underline; }
+
+    footer {
+      text-align: center;
+      padding: 2rem 1.25rem;
+      border-top: 1px solid var(--divider);
+      margin-top: 2rem;
+    }
+    footer p {
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+      font-style: italic;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <span class="badge">Privacy Policy</span>
+  <h1>ZiroEdge</h1>
+  <p class="updated">Last Updated: July 2026</p>
+</header>
+
+<main>
+
+  <div class="highlight">
+    <strong>ZiroEdge is a privacy-first application.</strong> We believe you should be able to use AI without giving up your data. This policy explains how ZiroEdge handles information — which is to say, it doesn't collect any.
+  </div>
+
+  <section>
+    <h2>Data Collection</h2>
+    <p><strong>ZiroEdge does not collect, store, transmit, or share any personal information.</strong></p>
+    <ul>
+      <li>No account is required to use the app</li>
+      <li>No analytics, crash reporting, or telemetry are included</li>
+      <li>No usage data is sent anywhere</li>
+      <li>No advertising SDKs or tracking frameworks are used</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>On-Device Processing</h2>
+    <p>All AI inference runs entirely on your device. When you send a message to ZiroEdge:</p>
+    <ul>
+      <li>The model processes your input locally using your device's CPU</li>
+      <li>No data is transmitted to external servers during inference</li>
+      <li>No internet connection is required for chatting (after models are downloaded)</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Conversation Storage</h2>
+    <p>Your conversations are stored locally on your device using Apple's Core Data framework. They are not uploaded to any server, cloud service, or external database. You can delete conversations at any time from within the app.</p>
+  </section>
+
+  <section>
+    <h2>Model Downloads</h2>
+    <p>ZiroEdge downloads AI model files (GGUF format) from Hugging Face, a public model repository. These downloads:</p>
+    <ul>
+      <li>Only occur when you explicitly choose to download a model</li>
+      <li>No personal or usage data is sent during the download</li>
+      <li>Model files are stored locally on your device</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Third-Party Services</h2>
+    <p>ZiroEdge integrates with:</p>
+    <ul>
+      <li><strong>Hugging Face</strong> (huggingface.co) — for model file downloads only. No user data is shared.</li>
+      <li><strong>llama.cpp</strong> — the open-source inference engine running locally. No network access.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Your Rights</h2>
+    <p>Since ZiroEdge collects no data:</p>
+    <ul>
+      <li>There is no data to access, correct, or delete beyond what's on your device</li>
+      <li>Deleting the app removes all locally stored conversations and model files</li>
+      <li>You have full control over your data because it never leaves your device</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Children's Privacy</h2>
+    <p>ZiroEdge does not collect any personal information from anyone, including children under 13.</p>
+  </section>
+
+  <section>
+    <h2>Changes to This Policy</h2>
+    <p>This privacy policy may be updated. Changes will be reflected in the app and on our website.</p>
+  </section>
+
+  <hr>
+
+  <section class="contact">
+    <h2>Contact</h2>
+    <p>For questions about this privacy policy, contact: <a href="mailto:itsirellzane@gmail.com">itsirellzane@gmail.com</a></p>
+  </section>
+
+</main>
+
+<footer>
+  <p>ZiroEdge — Your conversations stay on your device, where they belong.</p>
+</footer>
+
+</body>
+</html>

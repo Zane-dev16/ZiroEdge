@@ -131,6 +131,15 @@ final class SettingsTests: XCTestCase {
         }
     }
 
+    func testBundledThirdPartyNoticeIncludesLlamaAndUniqueModelFamilies() throws {
+        let notice = try XCTUnwrap(LicenseView.bundledNotice())
+        XCTAssertTrue(notice.contains("## llama.cpp"))
+        XCTAssertTrue(notice.contains("Llama 3.2 3B"))
+        XCTAssertTrue(notice.contains("Gemma 4 E2B"))
+        XCTAssertTrue(notice.contains("Gemma 4 E4B"))
+        XCTAssertEqual(notice.components(separatedBy: "### Gemma 4 E4B").count - 1, 1)
+    }
+
     func testDownloadDiagnosticsRedactURLsCredentialsPathsAndConversationFields() {
         let input = "url=https://cdn.example/model.gguf?token=secret Authorization=Bearer-secret file:///private/var/mobile/user/resume conversation=private-chat"
         let output = ZiroEdgeApp.sanitizedDiagnosticMessage(input)
@@ -140,10 +149,11 @@ final class SettingsTests: XCTestCase {
     }
 
     func testPrivacyPolicyURL() throws {
-        let privacyURL = URL(string: "https://ziroedge.app/privacy")!
+        let privacyURL = URL(string: "https://zane-dev16.github.io/ZiroEdge/privacy.html")!
         XCTAssertNotNil(privacyURL.scheme)
         XCTAssertNotNil(privacyURL.host)
-        XCTAssertTrue(privacyURL.path.contains("privacy"))
+        XCTAssertEqual(privacyURL.host?.hasSuffix("github.io"), true, "URL should be on GitHub Pages")
+        XCTAssertTrue(privacyURL.path.contains("privacy"), "URL path should contain 'privacy'")
     }
 
     // MARK: - Download Status Integration
