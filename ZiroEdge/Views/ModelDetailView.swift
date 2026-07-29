@@ -8,6 +8,8 @@ import SwiftUI
 struct ModelDetailView: View {
     let model: AIModel
     @ObservedObject var viewModel: ModelsViewModel
+    @State private var showingUpdateImport = false
+    @State private var updateStatusMessage: String?
 
     var body: some View {
         List {
@@ -27,6 +29,7 @@ struct ModelDetailView: View {
             }
             metadataSection
             runtimeSection
+            if model.isImported { importedConfigurationSection }
             downloadSection
             if viewModel.isDownloaded(model) {
                 actionsSection
@@ -34,6 +37,12 @@ struct ModelDetailView: View {
         }
         .navigationTitle(model.displayName)
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $showingUpdateImport) {
+            ImportView(
+                downloadManager: viewModel.downloadManager,
+                repositoryInput: model.huggingFaceProvenance?.repositoryID ?? ""
+            )
+        }
         .alert("Load Safety", isPresented: $viewModel.showingSafetyResetResult) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -50,6 +59,14 @@ struct ModelDetailView: View {
             LabeledContent("Quantization", value: model.quantization)
             LabeledContent("Type", value: model.modelType == .text ? "Text" : "Vision")
             LabeledContent("License", value: model.license.name)
+            if let source = model.huggingFaceProvenance {
+                LabeledContent("Repository", value: source.repositoryID)
+                LabeledContent("Pinned Revision", value: String(source.revision.prefix(12)))
+                LabeledContent("Artifact", value: source.baseFilename)
+                if let projector = source.projectorFilename {
+                    LabeledContent("Projector", value: projector)
+                }
+            }
             if viewModel.isDownloaded(model) {
                 LabeledContent("Storage Used", value: viewModel.diskUsage(for: model))
             }
@@ -86,6 +103,10 @@ struct ModelDetailView: View {
                 }
             }
         }
+    }
+
+    private var importedConfigurationSection: some View {
+        ImportedModelSettingsView(model: model, viewModel: viewModel)
     }
 
     // MARK: - Download

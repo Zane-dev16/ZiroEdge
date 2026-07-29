@@ -29,6 +29,7 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var activeConversationSystemPrompt: String?
     @Published private(set) var hasPersistenceRecovery = false
     @Published private(set) var recoveryExportURL: URL?
+    @Published private(set) var unavailableConversationModelID: String?
 
     // MARK: - Chat UX State
 
@@ -198,13 +199,20 @@ final class ChatViewModel: ObservableObject {
         truncationWarning = nil
         errorMessage = nil
 
-        if let model = ModelRegistry.allModels.first(where: { $0.id == conversation.modelID }) {
+        if let model = ModelRegistry.libraryModels.first(where: { $0.id == conversation.modelID }) {
+            unavailableConversationModelID = nil
             if availableModels.contains(where: { $0.id == model.id }) {
                 await selectModel(model)
             } else {
                 selectedModel = model
                 needsModelRedirect = true
             }
+        } else {
+            // Preserve the transcript but never silently substitute another model
+            // when an imported identity has been forgotten.
+            unavailableConversationModelID = conversation.modelID
+            selectedModel = nil
+            needsModelRedirect = true
         }
         guard loadGeneration == myGeneration else { return }
         isLoadingConversation = false
@@ -220,6 +228,7 @@ final class ChatViewModel: ObservableObject {
         isLoadingConversation = false
         truncationWarning = nil
         activeConversationSystemPrompt = nil
+        unavailableConversationModelID = nil
     }
 
     func createNewConversation(modelID: String? = nil) async -> UUID? {

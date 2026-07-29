@@ -17,7 +17,7 @@ enum HermeticUITestRuntime {
 // MARK: - Model Type
 
 /// Whether a model supports vision (requires mmproj) or text-only.
-enum ModelType: String, Sendable, CaseIterable {
+enum ModelType: String, Codable, Sendable, CaseIterable {
     case vision    // requires paired mmproj.gguf
     case text      // base .gguf only
 }
@@ -25,7 +25,7 @@ enum ModelType: String, Sendable, CaseIterable {
 // MARK: - License Info
 
 /// Per-model license attribution. Displayed in Settings → Licenses.
-struct LicenseInfo: Sendable, Hashable {
+struct LicenseInfo: Codable, Sendable, Hashable {
     let name: String           // e.g. "Apache 2.0", "Meta Llama Community License"
     let url: URL               // Full license text URL
     let copyright: String      // e.g. "Copyright 2024 Meta Platforms, Inc."
@@ -49,6 +49,8 @@ struct AIModel: Identifiable, Hashable, Sendable {
     let quantization: String        // e.g. "Q4_K_M"
     let config: ModelConfiguration  // Per-model presets (prompt format, sampling, etc.)
     let license: LicenseInfo
+    /// Curated entries remain static; imported entries carry immutable Hugging Face provenance.
+    var source: ModelSource = .curated
 
     // MARK: Computed
 
@@ -59,6 +61,9 @@ struct AIModel: Identifiable, Hashable, Sendable {
 
     /// Installed base-artifact key. Calibration may reuse a registered artifact without copying it.
     var baseArtifactStorageID: String {
+        if case .huggingFace(let provenance) = source {
+            return "hf-\(provenance.baseSHA256.prefix(24))"
+        }
         if id == "gemma-4-e4b-q4-text" { return "gemma-4-e4b-q4" }
 #if DEBUG
         if id == "gemma-4-e4b-q4-text-calibration" { return "gemma-4-e4b-q4" }
@@ -72,7 +77,18 @@ struct AIModel: Identifiable, Hashable, Sendable {
     }
 
     var runtimeEligibility: RuntimeEligibility {
-        MemoryProfileRegistry.profile(for: id)?.runtimeEligibility ?? .unavailable
+        if isImported { return .experimental }
+        return MemoryProfileRegistry.profile(for: id)?.runtimeEligibility ?? .unavailable
+    }
+
+    var isImported: Bool {
+        if case .huggingFace = source { return true }
+        return false
+    }
+
+    var huggingFaceProvenance: HuggingFaceProvenance? {
+        guard case .huggingFace(let provenance) = source else { return nil }
+        return provenance
     }
 
     var runtimeEligibilityExplanation: String {
@@ -271,8 +287,16 @@ enum ModelRegistry {
 
     /// Models the current user may select for inference. Experimental profiles
     /// require explicit per-profile consent; unavailable profiles remain catalog-only.
+    static var importedModels: [AIModel] {
+        ImportedModelStore.shared.models
+    }
+
+    static var libraryModels: [AIModel] {
+        allModels + importedModels
+    }
+
     static var selectableModels: [AIModel] {
-        allModels.filter {
+        libraryModels.filter {
             switch $0.runtimeEligibility {
             case .validated: true
             case .experimental: ExperimentalModelConsent.isGranted(for: $0)
@@ -291,7 +315,20 @@ enum ModelRegistry {
 
     /// Look up normal catalog and calibration-only identities by ID.
     static func model(for id: String) -> AIModel? {
-        (allModels + calibrationModels).first { $0.id == id }
+        (libraryModels + calibrationModels).first { $0.id == id }
+    }
+
+    /// Whether a model ID is known to the registry (curated or imported).
+    static func isKnownModelID(_ id: String) -> Bool {
+        model(for: id) != nil
+    }
+
+    /// Determine whether a model referenced by a conversation is unavailable
+    /// and why. Returns nil when the model is available and ready to use.
+    static func unavailableModelReason(for modelID: String) -> UnavailableModelReason? {
+        if model(for: modelID) != nil { return nil }
+        if modelID.hasPrefix("hf-") { return .removed }
+        return .neverExisted
     }
 }
 
@@ -300,12 +337,12 @@ enum ExperimentalModelConsent {
 
     static func isGranted(for model: AIModel, defaults: UserDefaults = .standard) -> Bool {
         guard model.runtimeEligibility == .experimental,
-              let profile = MemoryProfileRegistry.profile(for: model.id) else { return false }
+              let profile = MemoryProfileRegistry.profile(for: model) else { return false }
         return defaults.bool(forKey: prefix + profile.id)
     }
 
     static func setGranted(_ granted: Bool, for model: AIModel, defaults: UserDefaults = .standard) {
-        guard let profile = MemoryProfileRegistry.profile(for: model.id) else { return }
+        guard let profile = MemoryProfileRegistry.profile(for: model) else { return }
         defaults.set(granted, forKey: prefix + profile.id)
     }
 }

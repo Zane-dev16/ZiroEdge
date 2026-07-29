@@ -165,6 +165,18 @@ struct ChatView: View {
             .accessibilityIdentifier("persistenceRecoveryBanner")
         }
 
+        if let missingID = viewModel.unavailableConversationModelID {
+            ZiroStatusBanner(
+                icon: "questionmark.folder.fill",
+                title: "Model unavailable",
+                message: "This conversation used \(missingID), which was removed. Explicitly choose another installed model to continue.",
+                tint: .orange
+            ) {
+                Button("Choose Model") { viewModel.needsModelRedirect = true }
+            }
+            .accessibilityIdentifier("unavailableConversationModelBanner")
+        }
+
         if viewModel.showError, let error = viewModel.errorMessage {
             dismissibleBanner(
                 icon: "exclamationmark.triangle.fill",

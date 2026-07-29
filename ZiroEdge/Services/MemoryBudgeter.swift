@@ -92,7 +92,7 @@ actor MemoryBudgeter {
     func decision(for model: AIModel, allowUnvalidatedCalibration: Bool = false) -> MemoryLoadDecision {
         let processAvailable = metrics.processAvailableMemory()
         let total = metrics.totalRAM()
-        let profile = MemoryProfileRegistry.profile(for: model.id)
+        let profile = MemoryProfileRegistry.profile(for: model)
         var required = try? profile?.requiredProcessHeadroomBytes()
         let reason: MemoryAdmissionFailure?
 
