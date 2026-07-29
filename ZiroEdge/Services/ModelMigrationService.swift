@@ -5,6 +5,7 @@
 // application storage. The journal makes each move resumable after interruption.
 
 import Foundation
+import os
 
 /// The outcome of one versioned model-storage reconciliation.
 enum ModelMigrationResult: Sendable, Equatable {
@@ -19,6 +20,10 @@ enum ModelMigrationService {
     static let currentVersion = 1
 
     private static let fileManager = FileManager.default
+    private static let logger = Logger(
+        subsystem: "com.zanish-labs.ziroedge",
+        category: "model-migration"
+    )
     private static let migrationLock = NSLock()
     private static let migrationMarkerName = ".model-storage-migration"
     private static let migrationJournalName = ".model-storage-migration.journal.json"
@@ -112,8 +117,12 @@ enum ModelMigrationService {
         ]
 
         for directory in directories {
-            try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-            excludeFromBackup(directory)
+            do {
+                try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+                excludeFromBackup(directory)
+            } catch {
+                logger.error("Could not prepare managed model storage: \(error.localizedDescription, privacy: .public)")
+            }
         }
     }
 
@@ -173,8 +182,14 @@ extension ModelMigrationService {
     }
 
     private static func loadJournal() -> MigrationManifest? {
-        guard let data = try? Data(contentsOf: migrationJournalURL) else { return nil }
-        return try? JSONDecoder().decode(MigrationManifest.self, from: data)
+        guard fileManager.fileExists(atPath: migrationJournalURL.path) else { return nil }
+        do {
+            let data = try Data(contentsOf: migrationJournalURL)
+            return try JSONDecoder().decode(MigrationManifest.self, from: data)
+        } catch {
+            logger.warning("Ignoring unreadable model-migration journal: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
     }
 
     private static func writeJournal(_ manifest: MigrationManifest) throws {
@@ -489,7 +504,11 @@ extension ModelMigrationService {
         var values = URLResourceValues()
         values.isExcludedFromBackup = true
         var mutableURL = url
-        try? mutableURL.setResourceValues(values)
+        do {
+            try mutableURL.setResourceValues(values)
+        } catch {
+            logger.warning("Could not exclude managed model storage from backup: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     private static func removeEmptyLegacyDirectories() {
@@ -501,7 +520,11 @@ extension ModelMigrationService {
 
         for child in children {
             guard (try? child.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else { continue }
-            try? fileManager.removeItem(at: child)
+            do {
+                try fileManager.removeItem(at: child)
+            } catch {
+                logger.warning("Could not remove empty legacy model directory: \(error.localizedDescription, privacy: .public)")
+            }
         }
     }
 }

@@ -11,6 +11,7 @@ struct RuntimeServices {
     let conversationListViewModel: ConversationListViewModel
     let downloadManager: DownloadManager
     let modelsViewModel: ModelsViewModel
+    let offlineAvailabilityReport: OfflineAvailabilityReport
 }
 
 @MainActor
@@ -193,6 +194,12 @@ final class AppRuntime: ObservableObject {
             downloadStatusProvider: downloadManager
         )
         chatViewModel.conversationListViewModel = conversationListViewModel
+        let offlineReport = OfflineAvailabilityGuard.sweep()
+        let modelsVM = ModelsViewModel(
+            downloadManager: downloadManager,
+            lifecycleManager: lifecycleManager,
+            offlineAvailabilityReport: offlineReport
+        )
         return RuntimeServices(
             persistence: persistence,
             inferenceService: inferenceService,
@@ -202,10 +209,8 @@ final class AppRuntime: ObservableObject {
             chatViewModel: chatViewModel,
             conversationListViewModel: conversationListViewModel,
             downloadManager: downloadManager,
-            modelsViewModel: ModelsViewModel(
-                downloadManager: downloadManager,
-                lifecycleManager: lifecycleManager
-            )
+            modelsViewModel: modelsVM,
+            offlineAvailabilityReport: offlineReport
         )
     }
 }

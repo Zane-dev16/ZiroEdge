@@ -27,7 +27,6 @@ enum DownloadTransportValidator {
     ) -> DownloadError? {
         guard let response else {
             logger.error("[TRANSPORT] no HTTP response")
-            print("[TRANSPORT] FAIL: no HTTP response")
             return .contentRejected(reason: "the server response was not available")
         }
 
@@ -35,98 +34,68 @@ enum DownloadTransportValidator {
         let contentLength = response.expectedContentLength
         let contentType = response.value(forHTTPHeaderField: "Content-Type") ?? "nil"
         let contentRange = response.value(forHTTPHeaderField: "Content-Range") ?? "nil"
-        print("[TRANSPORT] HTTP \(statusCode) contentLength=\(contentLength) contentType=\(contentType) contentRange=\(contentRange)")
-        print("[TRANSPORT] expectedBytes=\(expectedBytes) expectedOffset=\(expectedOffset) bodyURL=\(bodyURL.lastPathComponent)")
         logger.info("[TRANSPORT] HTTP \(statusCode), contentLength=\(contentLength), expectedBytes=\(expectedBytes), expectedOffset=\(expectedOffset)")
 
         guard (200...299).contains(statusCode) else {
             if statusCode == 401 || statusCode == 403 {
-                print("[TRANSPORT] FAIL: authorization required (HTTP \(statusCode))")
                 return .authorizationRequired(statusCode: statusCode)
             }
-            print("[TRANSPORT] FAIL: HTTP error \(statusCode)")
             return .httpStatus(code: statusCode)
         }
 
-        if expectedOffset > 0 {
-            print("[TRANSPORT] resume mode: checking Content-Range for offset \(expectedOffset)")
-            guard statusCode == 206,
-                  let contentRange = parseContentRange(response.value(forHTTPHeaderField: "Content-Range")) else {
-                print("[TRANSPORT] FAIL: expected 206 with Content-Range but got \(statusCode) with range=\(response.value(forHTTPHeaderField: "Content-Range") ?? "nil")")
+        var expectedBodyBytes = expectedBytes
+        if statusCode == 206 {
+            guard let contentRange = parseContentRange(
+                response.value(forHTTPHeaderField: "Content-Range")
+            ) else {
                 return .rangeMismatch(expectedOffset: expectedOffset, actualOffset: nil)
             }
-
-            print("[TRANSPORT] parsed Content-Range: start=\(contentRange.start) end=\(contentRange.end) total=\(contentRange.total)")
-
             guard contentRange.start == expectedOffset else {
-                print("[TRANSPORT] FAIL: range start mismatch — expected \(expectedOffset) got \(contentRange.start)")
                 return .rangeMismatch(
                     expectedOffset: expectedOffset,
                     actualOffset: contentRange.start
                 )
             }
-
-            guard contentRange.total == expectedBytes else {
-                print("[TRANSPORT] FAIL: total mismatch — expected \(expectedBytes) got \(contentRange.total)")
-                return .rangeMismatch(
-                    expectedOffset: expectedOffset,
-                    actualOffset: contentRange.total
-                )
-            }
-
-            // A range must fit inside the advertised total. Besides rejecting
-            // malformed servers, this guard prevents overflow in rangeLength.
-            guard contentRange.end < contentRange.total,
+            guard contentRange.total == expectedBytes,
+                  contentRange.end < contentRange.total,
                   contentRange.end < Int64.max else {
-                print("[TRANSPORT] FAIL: range end (\(contentRange.end)) >= total (\(contentRange.total))")
                 return .rangeMismatch(
                     expectedOffset: expectedOffset,
                     actualOffset: contentRange.start
                 )
             }
-
             let rangeLength = contentRange.end - contentRange.start + 1
             let responseLength = response.expectedContentLength
-            if responseLength >= 0 && responseLength != rangeLength {
-                print("[TRANSPORT] FAIL: response length mismatch — Content-Range length=\(rangeLength) Content-Length=\(responseLength)")
+            guard responseLength < 0 || responseLength == rangeLength else {
                 return .rangeMismatch(
                     expectedOffset: expectedOffset,
                     actualOffset: contentRange.start
                 )
             }
-            print("[TRANSPORT] resume range validation PASSED")
-        } else if statusCode == 206 {
-            let actualOffset = parseContentRange(response.value(forHTTPHeaderField: "Content-Range"))?.start
-            print("[TRANSPORT] FAIL: unexpected 206 without expected offset, actualOffset=\(String(describing: actualOffset))")
-            return .rangeMismatch(expectedOffset: 0, actualOffset: actualOffset)
+            expectedBodyBytes = rangeLength
+        } else if expectedOffset > 0 {
+            return .rangeMismatch(expectedOffset: expectedOffset, actualOffset: nil)
         }
 
         guard let actualBytes = fileSize(at: bodyURL) else {
-            print("[TRANSPORT] FAIL: cannot read body file at \(bodyURL.path)")
             return .contentRejected(reason: "the response body could not be read")
         }
-        print("[TRANSPORT] body file size=\(actualBytes) bytes")
         guard actualBytes > 0 else {
-            print("[TRANSPORT] FAIL: body file is empty")
             return .contentRejected(reason: "the response body was empty")
         }
 
         if isTextualResponse(response: response, bodyURL: bodyURL) {
-            print("[TRANSPORT] FAIL: body appears to be textual (auth/error page)")
             return .contentRejected(reason: "the response body is an authentication or web error message")
         }
 
-        guard actualBytes == expectedBytes else {
-            print("[TRANSPORT] FAIL: size mismatch — expected \(expectedBytes) got \(actualBytes)")
-            return .sizeMismatch(expected: expectedBytes, actual: actualBytes)
+        guard actualBytes == expectedBodyBytes else {
+            return .sizeMismatch(expected: expectedBodyBytes, actual: actualBytes)
         }
 
         guard ModelManagerService.verifyGGUFHeader(fileURL: bodyURL) else {
-            print("[TRANSPORT] FAIL: GGUF header check failed")
             return .structureInvalid(reason: "missing GGUF magic or unsupported version")
         }
 
-        print("[TRANSPORT] ALL CHECKS PASSED")
         return nil
     }
 

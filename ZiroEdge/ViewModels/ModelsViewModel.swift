@@ -14,8 +14,11 @@ final class ModelsViewModel: ObservableObject {
 
     @Published var showingDownloadWarning = false
     @Published var pendingDownloadModel: AIModel?
+    @Published var pendingDownloadIncludesVision = true
     @Published var showingDeleteConfirmation = false
     @Published var pendingDeleteModel: AIModel?
+    @Published var showingCancelConfirmation = false
+    @Published var pendingCancelModel: AIModel?
     @Published var showingExperimentalConsent = false
     @Published var pendingExperimentalModel: AIModel?
     @Published var showingSafetyResetResult = false
@@ -25,6 +28,7 @@ final class ModelsViewModel: ObservableObject {
 
     let downloadManager: DownloadManager
     let lifecycleManager: ModelLifecycleManager
+    private let launchOfflineAvailabilityReport: OfflineAvailabilityReport
 
     // MARK: - Computed
 
@@ -47,9 +51,14 @@ final class ModelsViewModel: ObservableObject {
 
     private var cancellable: Any?
 
-    init(downloadManager: DownloadManager, lifecycleManager: ModelLifecycleManager) {
+    init(
+        downloadManager: DownloadManager,
+        lifecycleManager: ModelLifecycleManager,
+        offlineAvailabilityReport: OfflineAvailabilityReport = OfflineAvailabilityGuard.sweep()
+    ) {
         self.downloadManager = downloadManager
         self.lifecycleManager = lifecycleManager
+        self.launchOfflineAvailabilityReport = offlineAvailabilityReport
 
         // Forward download manager changes to trigger UI updates
         cancellable = downloadManager.objectWillChange
@@ -71,6 +80,21 @@ final class ModelsViewModel: ObservableObject {
         downloadManager.status(for: model).isReady
     }
 
+    /// Whether the launch-time offline sweep verified this model and the
+    /// download coordinator still considers its local artifacts ready.
+    func isVerifiedForOfflineUse(_ model: AIModel) -> Bool {
+        guard case .ready = launchOfflineAvailabilityReport.models[model.id] else {
+            return false
+        }
+        return downloadManager.status(for: model).isReady
+    }
+
+    /// Total bytes owned by managed model storage, including partial and
+    /// quarantined artifacts rather than installed models alone.
+    var managedStorageUsage: String {
+        downloadManager.managedStorageBreakdown().formattedTotal
+    }
+
     /// Disk usage for a specific model.
     func diskUsage(for model: AIModel) -> String {
         guard isDownloaded(model) else { return "" }
@@ -90,43 +114,71 @@ final class ModelsViewModel: ObservableObject {
         return ByteCountFormatter.string(fromByteCount: total, countStyle: .file)
     }
 
-    /// Initiate a download, presenting one consolidated confirmation for all risks.
-    func initiateDownload(for model: AIModel) {
-        if downloadManager.networkMonitor.isOnCellular || !downloadManager.hasSufficientStorage(for: model) {
+    /// Initiate a capability-specific download with one consolidated risk review.
+    func initiateDownload(for model: AIModel, includeOptionalProjector: Bool = true) {
+        if downloadManager.networkMonitor.isOnCellular
+            || !downloadManager.hasSufficientStorage(
+                for: model,
+                includeOptionalProjector: includeOptionalProjector
+            ) {
             pendingDownloadModel = model
+            pendingDownloadIncludesVision = includeOptionalProjector
             showingDownloadWarning = true
             return
         }
-        downloadManager.startDownload(for: model)
+        downloadManager.startDownload(
+            for: model,
+            includeOptionalProjector: includeOptionalProjector
+        )
     }
 
     var pendingDownloadWarningMessage: String {
         guard let model = pendingDownloadModel else { return "Review the download details before continuing." }
         var concerns: [String] = []
         if downloadManager.networkMonitor.isOnCellular {
-            concerns.append("You are using cellular data for a \(model.formattedSize) download.")
+            let bytes = downloadManager.requiredDownloadBytes(
+                for: model,
+                includeOptionalProjector: pendingDownloadIncludesVision
+            )
+            concerns.append("You are using cellular data for a \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)) download.")
         }
-        if !downloadManager.hasSufficientStorage(for: model) {
-            concerns.append("Only \(downloadManager.formattedAvailableSpace()) is available, less than the recommended \(model.formattedSize).")
+        if !downloadManager.hasSufficientStorage(
+            for: model,
+            includeOptionalProjector: pendingDownloadIncludesVision
+        ) {
+            concerns.append(downloadManager.insufficientStorageMessage(
+                for: model,
+                includeOptionalProjector: pendingDownloadIncludesVision
+            ))
         }
         return concerns.joined(separator: "\n\n")
     }
 
     var canConfirmPendingDownload: Bool {
         guard let model = pendingDownloadModel else { return false }
-        return downloadManager.hasSufficientStorage(for: model)
+        return downloadManager.hasSufficientStorage(
+            for: model,
+            includeOptionalProjector: pendingDownloadIncludesVision
+        )
     }
 
     func confirmPendingDownload() {
         guard let model = pendingDownloadModel,
-              downloadManager.hasSufficientStorage(for: model) else { return }
+              downloadManager.hasSufficientStorage(
+                for: model,
+                includeOptionalProjector: pendingDownloadIncludesVision
+              ) else { return }
         showingDownloadWarning = false
-        downloadManager.startDownload(for: model)
+        downloadManager.startDownload(
+            for: model,
+            includeOptionalProjector: pendingDownloadIncludesVision
+        )
         pendingDownloadModel = nil
     }
 
     func cancelPendingDownload() {
         pendingDownloadModel = nil
+        pendingDownloadIncludesVision = true
         showingDownloadWarning = false
     }
 
@@ -180,9 +232,34 @@ final class ModelsViewModel: ObservableObject {
         downloadManager.resumeDownload(for: model)
     }
 
-    /// Cancel a download.
+    /// Request download cancellation with confirmation.
+    func requestCancelDownload(for model: AIModel) {
+        pendingCancelModel = model
+        showingCancelConfirmation = true
+    }
+
+    /// Pause every active artifact and retry only missing or invalid ones.
+    /// Verified artifacts on disk are never replaced.
+    func retryInvalidArtifacts(for model: AIModel) {
+        downloadManager.retryInvalidArtifacts(for: model)
+    }
+
+    /// Cancel a download while preserving resumable state.
     func cancelDownload(for model: AIModel) {
         downloadManager.cancelDownload(for: model)
+    }
+
+    /// Confirm the pending cancellation.
+    func confirmCancelDownload() {
+        guard let model = pendingCancelModel else { return }
+        showingCancelConfirmation = false
+        downloadManager.cancelDownload(for: model)
+        pendingCancelModel = nil
+    }
+
+    /// Discard partial download state and staging files.
+    func discardPartialDownload(for model: AIModel) {
+        downloadManager.discardPartialDownload(for: model)
     }
 
     /// Request model deletion.
@@ -191,11 +268,12 @@ final class ModelsViewModel: ObservableObject {
         showingDeleteConfirmation = true
     }
 
-    /// Confirm deletion.
+    /// Confirm deletion. Unloads the model first if it shares the currently loaded base artifact.
     func confirmDelete() async {
         guard let model = pendingDeleteModel else { return }
         // The engine may mmap the artifact. Finish unloading before deleting it.
-        if lifecycleManager.activeModel?.id == model.id {
+        if let active = lifecycleManager.activeModel,
+           !downloadManager.isSafeToDelete(model, activeModel: active) {
             await lifecycleManager.unloadCurrentModel()
         }
         downloadManager.deleteModel(model)

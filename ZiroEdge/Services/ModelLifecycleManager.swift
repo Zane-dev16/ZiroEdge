@@ -455,12 +455,13 @@ enum ModelManagerService {
         guard verifyGGUFHeader(fileURL: path),
               let attrs = try? FileManager.default.attributesOfItem(atPath: path.path),
               let fileSize = attrs[.size] as? Int64,
-              fileSize == expectedBytes else {
-            // Incomplete and non-GGUF files cannot be resumed as installed artifacts.
-            try? FileManager.default.removeItem(at: path)
+              fileSize == expectedBytes,
+              verifySHA256(fileURL: path, expected: expectedSHA) else {
+            quarantineInvalidArtifact(at: path, storageID: model.id)
+            markRepairNeeded(for: model)
             return false
         }
-        return verifySHA256(fileURL: path, expected: expectedSHA)
+        return true
     }
 
     /// Whether a model is fully downloaded AND passes validation (GGUF header, size, SHA-256).
@@ -576,8 +577,8 @@ extension ModelManagerService {
         }
 #endif
         // Missing or malformed integrity metadata is a catalog configuration error.
-        guard isValidSHA256(model.baseSHA256),
-              !model.requiresMMProj || model.mmprojSHA256.map(isValidSHA256) == true else {
+        guard model.catalogUnavailableReason == nil,
+              ModelCatalogValidator.catalogFailureReason(models: ModelRegistry.allModels) == nil else {
             return .unavailable
         }
 
@@ -589,21 +590,15 @@ extension ModelManagerService {
             issues.append(.missing(artifact: .base))
         } else if !verifyGGUFHeader(fileURL: basePath) {
             issues.append(.missingGGUFHeader)
+        } else if fileSize(at: basePath) != model.baseFileSizeBytes {
+            issues.append(.sizeMismatch)
         } else {
-            // SHA-256 check.
             guard let actualSHA = computeSHA256(fileURL: basePath) else {
                 issues.append(.sha256Mismatch)
                 return .repairNeeded(issues: issues)
             }
             if actualSHA != model.baseSHA256 {
                 issues.append(.sha256Mismatch)
-            }
-            // Size check.
-            if let attrs = try? FileManager.default.attributesOfItem(atPath: basePath.path),
-               let fileSize = attrs[.size] as? Int64 {
-                if fileSize != model.baseFileSizeBytes {
-                    issues.append(.sizeMismatch)
-                }
             }
         }
 
@@ -614,6 +609,8 @@ extension ModelManagerService {
                 issues.append(.missing(artifact: .mmproj))
             } else if !verifyGGUFHeader(fileURL: mmprojPath) {
                 issues.append(.missingGGUFHeader)
+            } else if fileSize(at: mmprojPath) != model.mmprojFileSizeBytes {
+                issues.append(.sizeMismatch)
             } else if let expectedSHA = model.mmprojSHA256 {
                 guard let actualSHA = computeSHA256(fileURL: mmprojPath) else {
                     issues.append(.sha256Mismatch)
@@ -639,6 +636,12 @@ import CryptoKit
 extension ModelManagerService {
     /// Compute SHA-256 of a file by streaming in 64 KB chunks.
     /// Avoids loading the entire file into memory (critical for multi-GB GGUFs).
+    private static func fileSize(at url: URL) -> Int64? {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let size = attributes[.size] as? NSNumber else { return nil }
+        return size.int64Value
+    }
+
     static func computeSHA256(fileURL: URL) -> String? {
         guard let handle = try? FileHandle(forReadingFrom: fileURL) else { return nil }
         defer { try? handle.close() }
@@ -682,6 +685,24 @@ extension ModelManagerService {
     /// Quarantine area for files that failed validation.
     static var quarantineDirectory: URL {
         managedStorageDirectory.appendingPathComponent("Quarantine", isDirectory: true)
+    }
+
+    static func quarantineInvalidArtifact(at source: URL, storageID: String) {
+        guard FileManager.default.fileExists(atPath: source.path) else { return }
+        ModelMigrationService.ensureManagedDirectories()
+        let safeID = storageID.replacingOccurrences(
+            of: "[^A-Za-z0-9._-]",
+            with: "-",
+            options: .regularExpression
+        )
+        let destination = quarantineDirectory.appendingPathComponent(
+            "\(safeID)-\(UUID().uuidString.lowercased()).quarantined"
+        )
+        do {
+            try FileManager.default.moveItem(at: source, to: destination)
+        } catch {
+            try? FileManager.default.removeItem(at: source)
+        }
     }
 
     /// Legacy models directory (pre-#4 location in Documents).

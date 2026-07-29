@@ -5,6 +5,7 @@ import SwiftUI
 
 @main
 struct ZiroEdgeApp: App {
+    @UIApplicationDelegateAdaptor(ZiroEdgeAppDelegate.self) private var appDelegate
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @StateObject private var runtime = AppRuntime()
@@ -15,7 +16,7 @@ struct ZiroEdgeApp: App {
 
     static func diagnosticLog(_ message: String) {
         let ts = ISO8601DateFormatter().string(from: Date())
-        let line = "[\(ts)] \(message)\n"
+        let line = "[\(ts)] \(sanitizedDiagnosticMessage(message))\n"
         let url = diagnosticLogURL
         if let handle = try? FileHandle(forWritingTo: url) {
             handle.seekToEndOfFile()
@@ -24,6 +25,24 @@ struct ZiroEdgeApp: App {
         } else {
             try? line.write(to: url, atomically: true, encoding: .utf8)
         }
+    }
+
+    static func sanitizedDiagnosticMessage(_ message: String) -> String {
+        var sanitized = message
+        let patterns = [
+            #"https?://[^\s]+"#,
+            #"file://[^\s]+"#,
+            #"/(?:private/)?var/(?:mobile|folders)/[^\s]+"#,
+            #"(?i)(?:authorization|bearer|token|signature|credential|conversation)=?[^\s]*"#
+        ]
+        for pattern in patterns {
+            sanitized = sanitized.replacingOccurrences(
+                of: pattern,
+                with: "<redacted>",
+                options: .regularExpression
+            )
+        }
+        return sanitized
     }
 
     var body: some Scene {
@@ -47,6 +66,7 @@ struct ZiroEdgeApp: App {
                     }
                     guard phase == .background,
                           case .ready(let services) = runtime.state else { return }
+                    services.downloadManager.handleBackgroundTransition()
                     Task {
                         await services.lifecycleManager.handleBackgroundTransition()
                         let failures = await services.persistence.flushPendingWrites()
@@ -536,6 +556,26 @@ struct SettingsView: View {
                     Text("App Memory Headroom is the memory iOS allowed ZiroEdge at the latest model load check, or a current sample before the first check. It is not unused device RAM.")
                 }
 
+                Section("Download Diagnostics") {
+                    let hasStructuredLog = FileManager.default.fileExists(atPath: DownloadDiagnosticRecorder.logURL.path)
+
+                    if hasStructuredLog {
+                        if let summaryURL = DownloadDiagnosticRecorder.shared.writeSummary() {
+                            ShareLink(item: summaryURL) {
+                                Label("Export Structured Summary", systemImage: "square.and.arrow.up")
+                            }
+                            .accessibilityIdentifier("export-download-summary")
+                        }
+                        ShareLink(item: DownloadDiagnosticRecorder.logURL) {
+                            Label("Export JSONL Event Log", systemImage: "doc.text.magnifyingglass")
+                        }
+                        .accessibilityIdentifier("export-download-jsonl")
+                    } else {
+                        Text("No download events recorded yet")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
                 // Legal section.
                 Section("Legal") {
                     NavigationLink {
@@ -593,7 +633,7 @@ struct SettingsView: View {
     }
 
     private func formattedTotalDiskUsage() -> String {
-        ModelManagerService.formattedDiskUsage()
+        downloadManager.managedStorageBreakdown().formattedTotal
     }
 
     @MainActor

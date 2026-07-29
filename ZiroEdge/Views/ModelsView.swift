@@ -35,6 +35,17 @@ struct ModelsView: View {
         } message: {
             Text("Delete \(viewModel.pendingDeleteModel?.displayName ?? "this model")? You can download it again later.")
         }
+        .confirmationDialog(
+            "Cancel Download",
+            isPresented: $viewModel.showingCancelConfirmation
+        ) {
+            Button("Cancel Download", role: .destructive) {
+                viewModel.confirmCancelDownload()
+            }
+            Button("Keep Downloading", role: .cancel) {}
+        } message: {
+            Text("Cancelling stops the current transfer and preserves resumable progress for \(viewModel.pendingCancelModel?.displayName ?? "this model"). Use Discard Partial Download to start over.")
+        }
     }
 
     private var introductionSection: some View {
@@ -53,16 +64,20 @@ struct ModelsView: View {
     }
 
     private var installedSection: some View {
-        Section("On This Device") {
+        Section {
             ForEach(viewModel.allModels.filter { viewModel.isDownloaded($0) }) { model in
                 NavigationLink { ModelDetailView(model: model, viewModel: viewModel) } label: {
                     ModelRow(
                         model: model,
-                        subtitle: "\(model.runtimeEligibility.label) · \(model.quantization) · \(viewModel.diskUsage(for: model)) used",
+                        subtitle: installedSubtitle(for: model),
                         status: .installed
                     )
                 }
             }
+        } header: {
+            Text("On This Device")
+        } footer: {
+            Text("Managed model storage: \(viewModel.managedStorageUsage), including installed, in-progress, resumable, and quarantined files.")
         }
     }
 
@@ -74,7 +89,7 @@ struct ModelsView: View {
                         modelRow(model)
                     }
                     if viewModel.status(for: model).isDownloading {
-                        Button { viewModel.cancelDownload(for: model) } label: {
+                        Button { viewModel.requestCancelDownload(for: model) } label: {
                             Image(systemName: "xmark.circle.fill")
                                 .font(.title3)
                         }
@@ -125,7 +140,7 @@ struct ModelsView: View {
     @ViewBuilder
     private func downloadIndicator(_ model: AIModel, status: ModelDownloadStatus) -> some View {
         switch status.displayState {
-        case .downloading(let progress):
+        case .downloading(let progress), .resuming(let progress), .pausing(let progress):
             VStack(alignment: .trailing, spacing: ZiroTheme.Spacing.xSmall) {
                 ProgressView(value: progress).frame(width: 64)
                 Text("\(Int(progress * 100))%")
@@ -160,6 +175,23 @@ struct ModelsView: View {
         }
     }
 
+    private func installedSubtitle(for model: AIModel) -> String {
+        var details = [capabilityLabel(model), model.runtimeEligibility.label]
+        if viewModel.isVerifiedForOfflineUse(model) {
+            details.append("Verified for offline use")
+        } else {
+            details.append("Installed locally — offline verification pending")
+        }
+        details.append("\(viewModel.diskUsage(for: model)) used")
+        return details.joined(separator: " · ")
+    }
+
+    private func capabilityLabel(_ model: AIModel) -> String {
+        let status = viewModel.status(for: model)
+        if model.allowsTextOnlyCapability && !status.isVisionReady { return "Text only" }
+        return model.modelType == .vision ? "Text + images" : "Text"
+    }
+
     private func runtimeTint(_ eligibility: RuntimeEligibility) -> Color {
         switch eligibility {
         case .validated: .green
@@ -171,7 +203,9 @@ struct ModelsView: View {
     private func statusAccessibilityLabel(_ status: ModelDownloadStatus) -> String {
         switch status.displayState {
         case .downloading(let progress): return "downloading, \(Int(progress * 100)) percent complete"
+        case .pausing(let progress): return "pausing, \(Int(progress * 100)) percent complete"
         case .paused(let progress): return "paused, \(Int(progress * 100)) percent complete"
+        case .resuming(let progress): return "resuming, \(Int(progress * 100)) percent complete"
         case .verifying: return "verifying download"
         case .failed: return "download failed"
         case .cancelled: return "download cancelled"

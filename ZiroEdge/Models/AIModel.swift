@@ -66,9 +66,31 @@ struct AIModel: Identifiable, Hashable, Sendable {
         return id
     }
 
-    /// Whether this model requires a paired mmproj download.
+    /// E2B is one product whose base supports text chat while its projector adds images.
+    var allowsTextOnlyCapability: Bool { id == "gemma-4-e2b-q4" }
+
+    /// Whether this runtime identity requires a paired projector.
     var requiresMMProj: Bool {
         modelType == .vision && mmprojURL != nil
+    }
+
+    /// Runtime identity for a verified base when the optional projector is absent.
+    var textOnlyRuntimeVariant: AIModel {
+        AIModel(
+            id: id,
+            displayName: displayName,
+            description: "\(displayName) text chat",
+            modelType: .text,
+            baseURL: baseURL,
+            mmprojURL: nil,
+            baseFileSizeBytes: baseFileSizeBytes,
+            mmprojFileSizeBytes: nil,
+            baseSHA256: baseSHA256,
+            mmprojSHA256: nil,
+            quantization: quantization,
+            config: config,
+            license: license
+        )
     }
 
     var runtimeEligibility: RuntimeEligibility {
@@ -89,6 +111,76 @@ struct AIModel: Identifiable, Hashable, Sendable {
     /// Human-readable file size (e.g. "2.1 GB").
     var formattedSize: String {
         ByteCountFormatter.string(fromByteCount: totalFileSizeBytes, countStyle: .file)
+    }
+
+    /// A useful fail-closed reason when this catalog row cannot be verified.
+    var catalogUnavailableReason: String? {
+        ModelCatalogValidator.failureReason(for: self)
+    }
+}
+
+/// Runtime counterpart to the release catalog checker. UI and orchestration use
+/// this before touching the network so malformed production metadata fails closed.
+enum ModelCatalogValidator {
+    /// Increment when production artifact identities or integrity metadata change.
+    static let catalogVersion = "1"
+
+    static func failureReason(for model: AIModel) -> String? {
+        guard isCanonicalArtifactURL(model.baseURL) else {
+            return "The model download URL is not a canonical HTTPS GGUF URL."
+        }
+        guard model.baseFileSizeBytes > 0 else {
+            return "The model catalog does not contain a positive base artifact size."
+        }
+        guard isLowercaseSHA256(model.baseSHA256) else {
+            return "The model catalog does not contain a verified base SHA-256."
+        }
+
+        if model.modelType == .vision {
+            guard let projectorURL = model.mmprojURL,
+                  isCanonicalArtifactURL(projectorURL),
+                  let projectorBytes = model.mmprojFileSizeBytes,
+                  projectorBytes > 0,
+                  let projectorSHA = model.mmprojSHA256,
+                  isLowercaseSHA256(projectorSHA) else {
+                return "Vision is unavailable because projector integrity metadata is incomplete."
+            }
+        } else if model.mmprojURL != nil || model.mmprojFileSizeBytes != nil || model.mmprojSHA256 != nil {
+            return "The text-only catalog row contains inconsistent projector metadata."
+        }
+        return nil
+    }
+
+    static func catalogFailureReason(models: [AIModel]) -> String? {
+        var ids = Set<String>()
+        var storage: [String: (URL, Int64, String)] = [:]
+        for model in models {
+            if !ids.insert(model.id).inserted { return "The model catalog contains a duplicate model identity."
+            }
+            if let reason = failureReason(for: model) { return "\(model.displayName): \(reason)" }
+
+            let identity = (model.baseURL, model.baseFileSizeBytes, model.baseSHA256)
+            if let existing = storage[model.baseArtifactStorageID],
+               existing.0 != identity.0 || existing.1 != identity.1 || existing.2 != identity.2 {
+                return "The model catalog maps conflicting artifacts to the same storage identity."
+            }
+            storage[model.baseArtifactStorageID] = identity
+        }
+        return nil
+    }
+
+    private static func isCanonicalArtifactURL(_ url: URL) -> Bool {
+        guard url.scheme?.lowercased() == "https",
+              url.host?.isEmpty == false,
+              url.user == nil,
+              url.password == nil,
+              url.path.lowercased().hasSuffix(".gguf"),
+              url.fragment == nil else { return false }
+        return URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.isEmpty ?? true
+    }
+
+    private static func isLowercaseSHA256(_ value: String) -> Bool {
+        value.count == 64 && value.allSatisfy { ("0"..."9").contains(String($0)) || ("a"..."f").contains(String($0)) }
     }
 }
 

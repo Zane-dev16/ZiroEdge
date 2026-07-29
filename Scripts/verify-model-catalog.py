@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import re
 import sys
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TypedDict
 from urllib.parse import urlparse
@@ -164,12 +166,20 @@ def validate_metadata(artifacts: list[CatalogArtifact]) -> None:
         destinations.add(destination)
 
 
-def verify_download(artifact: CatalogArtifact, timeout: int) -> None:
+def sanitize_provenance(url: str) -> str:
+    parsed = urlparse(url)
+    host = parsed.hostname or "unknown-host"
+    authority = f"{host}:{parsed.port}" if parsed.port else host
+    return f"{parsed.scheme}://{authority}{parsed.path}"
+
+
+def verify_download(artifact: CatalogArtifact, timeout: int) -> dict[str, object]:
     expected_size = artifact["size"]
     expected_hash = str(artifact["sha256"]).lower()
     actual_size = 0
     digest = hashlib.sha256()
     request_chunk_size = 64 * 1024 * 1024
+    final_provenance = str(artifact["url"])
 
     with tempfile.NamedTemporaryFile(
         prefix="ziroedge-catalog-", suffix=".gguf"
@@ -185,6 +195,7 @@ def verify_download(artifact: CatalogArtifact, timeout: int) -> None:
             )
             received_this_request = 0
             with urlopen(request, timeout=timeout) as response:
+                final_provenance = sanitize_provenance(response.geturl())
                 if actual_size > 0 and response.status != 206:
                     raise ValueError("server stopped honoring ranged verification")
                 while True:
@@ -212,6 +223,16 @@ def verify_download(artifact: CatalogArtifact, timeout: int) -> None:
                 f"{label}: expected {expected_hash}, downloaded {actual_hash}"
             )
         print(f"verified {label}: {actual_size} bytes, {actual_hash}")
+        return {
+            "model": artifact["model"],
+            "kind": artifact["kind"],
+            "canonicalSource": artifact["url"],
+            "finalProvenance": final_provenance,
+            "size": actual_size,
+            "sha256": actual_hash,
+            "verifiedAt": datetime.now(timezone.utc).isoformat(),
+            "command": "python3 Scripts/verify-model-catalog.py",
+        }
 
 
 def main() -> int:
@@ -227,6 +248,16 @@ def main() -> int:
         action="append",
         help="verify only this model ID (repeatable); default is every production artifact",
     )
+    parser.add_argument(
+        "--evidence",
+        type=Path,
+        help="write sanitized JSON release evidence to this path",
+    )
+    parser.add_argument(
+        "--metadata-only",
+        action="store_true",
+        help="validate catalog metadata without downloading artifacts",
+    )
     args = parser.parse_args()
 
     try:
@@ -241,8 +272,16 @@ def main() -> int:
             raise ValueError(
                 "none of the requested model IDs exist in the production catalog"
             )
-        for artifact in selected:
-            verify_download(artifact, args.timeout)
+        evidence = []
+        if not args.metadata_only:
+            for artifact in selected:
+                evidence.append(verify_download(artifact, args.timeout))
+        if args.evidence:
+            args.evidence.parent.mkdir(parents=True, exist_ok=True)
+            args.evidence.write_text(
+                json.dumps({"artifacts": evidence}, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
     except Exception as error:  # noqa: BLE001 - release check should report one concise failure
         print(f"catalog verification failed: {error}", file=sys.stderr)
         return 1

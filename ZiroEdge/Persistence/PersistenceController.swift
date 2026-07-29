@@ -117,10 +117,19 @@ actor PersistenceController {
             description.type = NSInMemoryStoreType
             container.persistentStoreDescriptions = [description]
         case .store(let url):
-            let description = NSPersistentStoreDescription(url: url)
+            container.persistentStoreDescriptions = [NSPersistentStoreDescription(url: url)]
+        }
+
+        // Every SQLite store uses Core Data's inferred lightweight migration.
+        // A schema release still requires a new .xcdatamodel version; incompatible
+        // changes without an inferred mapping fail through the recovery UI rather
+        // than crashing at launch.
+        for description in container.persistentStoreDescriptions
+            where description.type != NSInMemoryStoreType {
             description.shouldMigrateStoreAutomatically = true
             description.shouldInferMappingModelAutomatically = true
-            container.persistentStoreDescriptions = [description]
+            description.setOption(true as NSNumber, forKey: NSMigratePersistentStoresAutomaticallyOption)
+            description.setOption(true as NSNumber, forKey: NSInferMappingModelAutomaticallyOption)
         }
 
         container.viewContext.automaticallyMergesChangesFromParent = true

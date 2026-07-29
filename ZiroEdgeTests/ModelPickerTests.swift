@@ -14,8 +14,16 @@ final class ModelPickerTests: XCTestCase {
     /// A mock download status provider that allows controlling which models are "downloaded".
     private class MockDownloadStatusProvider: ModelDownloadStatusProvider {
         var readyModelIDs: Set<String> = []
+        var textOnlyModelIDs: Set<String> = []
 
         func status(for model: AIModel) -> ModelDownloadStatus {
+            if textOnlyModelIDs.contains(model.id) {
+                return ModelDownloadStatus(
+                    baseState: .downloaded,
+                    mmprojState: .notDownloaded,
+                    allowsTextOnly: true
+                )
+            }
             if readyModelIDs.contains(model.id) {
                 return ModelDownloadStatus(
                     baseState: .downloaded,
@@ -128,6 +136,30 @@ final class ModelPickerTests: XCTestCase {
 
         ExperimentalModelConsent.setGranted(true, for: model)
         XCTAssertEqual(viewModel.availableModels, [model])
+    }
+
+    func testE2BBaseOnlyExposesOneTextRuntimeAndDisablesVision() {
+        let provider = MockDownloadStatusProvider()
+        provider.textOnlyModelIDs = [ModelRegistry.gemma4_e2b.id]
+        let viewModel = makeViewModel(provider: provider)
+
+        let available = viewModel.availableModels
+        XCTAssertEqual(available.count, 1)
+        XCTAssertEqual(available.first?.id, ModelRegistry.gemma4_e2b.id)
+        XCTAssertEqual(available.first?.modelType, .text)
+        XCTAssertFalse(available.first?.requiresMMProj ?? true)
+    }
+
+    func testE2BFullyInstalledExposesVisionRuntime() {
+        let provider = MockDownloadStatusProvider()
+        provider.readyModelIDs = [ModelRegistry.gemma4_e2b.id]
+        let viewModel = makeViewModel(provider: provider)
+
+        let available = viewModel.availableModels
+        XCTAssertEqual(available.count, 1)
+        XCTAssertEqual(available.first?.id, ModelRegistry.gemma4_e2b.id)
+        XCTAssertEqual(available.first?.modelType, .vision)
+        XCTAssertTrue(available.first?.requiresMMProj ?? false)
     }
 
     func testAvailableModelsEmptyWhenNoneDownloaded() throws {

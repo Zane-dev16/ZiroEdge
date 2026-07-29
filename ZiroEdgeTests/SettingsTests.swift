@@ -131,6 +131,14 @@ final class SettingsTests: XCTestCase {
         }
     }
 
+    func testDownloadDiagnosticsRedactURLsCredentialsPathsAndConversationFields() {
+        let input = "url=https://cdn.example/model.gguf?token=secret Authorization=Bearer-secret file:///private/var/mobile/user/resume conversation=private-chat"
+        let output = ZiroEdgeApp.sanitizedDiagnosticMessage(input)
+        for secret in ["cdn.example", "secret", "/private/var/mobile", "private-chat"] {
+            XCTAssertFalse(output.contains(secret))
+        }
+    }
+
     func testPrivacyPolicyURL() throws {
         let privacyURL = URL(string: "https://ziroedge.app/privacy")!
         XCTAssertNotNil(privacyURL.scheme)

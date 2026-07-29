@@ -66,6 +66,13 @@ final class DownloadManagerTests: XCTestCase {
         XCTAssertTrue(state.isActive)
     }
 
+    func testDownloadStatePausingAndResumingAreActive() {
+        XCTAssertTrue(DownloadState.pausing(progress: 0.2).isActive)
+        XCTAssertTrue(DownloadState.resuming(progress: 0.2).isActive)
+        XCTAssertTrue(DownloadState.pausing(progress: 0.2).isDownloading)
+        XCTAssertTrue(DownloadState.resuming(progress: 0.2).isDownloading)
+    }
+
     func testDownloadStatePausedProperties() {
         let state = DownloadState.paused(progress: 0.5)
         XCTAssertFalse(state.isDownloaded)
@@ -169,6 +176,67 @@ final class DownloadManagerTests: XCTestCase {
         XCTAssertEqual(status.overallProgress, 1.0)
     }
 
+    func testOptionalVisionProductIsTextReadyWithBaseButNotVisionReady() {
+        let status = ModelDownloadStatus(
+            baseState: .downloaded,
+            mmprojState: .notDownloaded,
+            allowsTextOnly: true
+        )
+        XCTAssertTrue(status.isReady)
+        XCTAssertFalse(status.isVisionReady)
+    }
+
+    func testE2BRequiredStorageExcludesProjectorWhenTextOnlyRequested() {
+        let model = ModelRegistry.gemma4_e2b
+        ModelManagerService.ensureModelsDirectory()
+        let full = downloadManager.requiredDownloadBytes(for: model, includeOptionalProjector: true)
+        let textOnly = downloadManager.requiredDownloadBytes(for: model, includeOptionalProjector: false)
+        XCTAssertEqual(textOnly + Int64(model.mmprojFileSizeBytes ?? 0), full)
+        XCTAssertGreaterThan(full, textOnly)
+    }
+
+    func testE2BDisplayStateWhenBaseOnlyInstalled() {
+        let status = ModelDownloadStatus(
+            modelID: ModelRegistry.gemma4_e2b.id,
+            baseState: .downloaded,
+            mmprojState: .notDownloaded,
+            baseExpectedBytes: ModelRegistry.gemma4_e2b.baseFileSizeBytes,
+            mmprojExpectedBytes: ModelRegistry.gemma4_e2b.mmprojFileSizeBytes,
+            allowsTextOnly: true
+        )
+        XCTAssertEqual(status.displayState, .downloaded)
+        XCTAssertTrue(status.isReady)
+        XCTAssertFalse(status.isVisionReady)
+    }
+
+    func testE2BStatusDoesNotAdvertiseVisionWhenProjectorMissing() {
+        let status = ModelDownloadStatus(
+            modelID: ModelRegistry.gemma4_e2b.id,
+            baseState: .downloaded,
+            mmprojState: .notDownloaded,
+            allowsTextOnly: true
+        )
+        let visionReady = status.isVisionReady
+        XCTAssertFalse(visionReady)
+    }
+
+    func testE2BUpgradePathSkipsBaseRedownload() {
+        // Simulate base installed, projector missing.
+        // The status must reflect that only the projector needs downloading.
+        let status = ModelDownloadStatus(
+            modelID: ModelRegistry.gemma4_e2b.id,
+            baseState: .downloaded,
+            mmprojState: .notDownloaded,
+            baseExpectedBytes: ModelRegistry.gemma4_e2b.baseFileSizeBytes,
+            mmprojExpectedBytes: ModelRegistry.gemma4_e2b.mmprojFileSizeBytes,
+            allowsTextOnly: true
+        )
+        XCTAssertTrue(status.isReady, "Text-ready even without projector")
+        XCTAssertFalse(status.isVisionReady, "Not vision-ready without projector")
+        // The display should not show downloading since both are stable states.
+        XCTAssertFalse(status.isDownloading)
+    }
+
     func testModelDownloadStatusVisionReady() {
         let status = ModelDownloadStatus(baseState: .downloaded, mmprojState: .downloaded)
         XCTAssertTrue(status.isReady)
@@ -189,6 +257,16 @@ final class DownloadManagerTests: XCTestCase {
             mmprojState: .downloading(progress: 0.4)
         )
         XCTAssertEqual(status.overallProgress, 0.6, accuracy: 0.01)
+    }
+
+    func testVisionProgressIsWeightedByArtifactBytes() {
+        let status = ModelDownloadStatus(
+            baseState: .downloading(progress: 0.5),
+            mmprojState: .downloaded,
+            baseExpectedBytes: 900,
+            mmprojExpectedBytes: 100
+        )
+        XCTAssertEqual(status.overallProgress, 0.55, accuracy: 0.001)
     }
 
     func testModelDownloadStatusPreservesPausedProgress() {
@@ -232,6 +310,9 @@ final class DownloadManagerTests: XCTestCase {
         XCTAssertTrue(downloadManager.hasSufficientStorage(for: tinyModel))
     }
 
+}
+
+extension DownloadManagerTests {
     func testSameSizeWrongDigestBaseRequiresFullReplacement() throws {
         let corrupt = TestModelFixtures.gguf(fill: 0x11)
         let expected = TestModelFixtures.gguf(fill: 0x22, count: corrupt.count)
@@ -239,7 +320,10 @@ final class DownloadManagerTests: XCTestCase {
         try TestModelFixtures.install(corrupt, for: model)
         defer { ModelManagerService.deleteModel(model) }
 
-        XCTAssertEqual(downloadManager.requiredDownloadBytes(for: model), Int64(expected.count))
+        XCTAssertEqual(
+            downloadManager.requiredDownloadBytes(for: model),
+            Int64(expected.count) + DownloadManager.storageSafetyMarginBytes
+        )
         XCTAssertFalse(ModelManagerService.isBaseDownloaded(model))
     }
 
@@ -252,7 +336,10 @@ final class DownloadManagerTests: XCTestCase {
         try corruptProjector.write(to: ModelManagerService.mmprojModelPath(for: model), options: .atomic)
         defer { ModelManagerService.deleteModel(model) }
 
-        XCTAssertEqual(downloadManager.requiredDownloadBytes(for: model), Int64(expectedProjector.count))
+        XCTAssertEqual(
+            downloadManager.requiredDownloadBytes(for: model),
+            Int64(expectedProjector.count) + DownloadManager.storageSafetyMarginBytes
+        )
         XCTAssertTrue(ModelManagerService.isBaseDownloaded(model))
         XCTAssertFalse(ModelManagerService.isMMProjDownloaded(model))
     }
@@ -294,8 +381,7 @@ final class DownloadManagerTests: XCTestCase {
         ModelManagerService.ensureModelsDirectory()
 
         // Create a fake partial file
-        let basePath = ModelManagerService.baseModelPath(for: model)
-        let tmpPath = basePath.appendingPathExtension("tmp")
+        let tmpPath = DownloadTask(model: model, artifact: .base).stagingURL
         FileManager.default.createFile(atPath: tmpPath.path, contents: Data("partial".utf8))
 
         XCTAssertTrue(FileManager.default.fileExists(atPath: tmpPath.path))
@@ -323,8 +409,7 @@ final class DownloadManagerTests: XCTestCase {
         )
         ModelManagerService.ensureModelsDirectory()
 
-        let mmprojPath = ModelManagerService.mmprojModelPath(for: model)
-        let mmprojTmpPath = mmprojPath.appendingPathExtension("tmp")
+        let mmprojTmpPath = DownloadTask(model: model, artifact: .mmproj).stagingURL
         FileManager.default.createFile(atPath: mmprojTmpPath.path, contents: Data("partial-mmproj".utf8))
 
         XCTAssertTrue(FileManager.default.fileExists(atPath: mmprojTmpPath.path))
@@ -409,10 +494,140 @@ final class DownloadManagerTests: XCTestCase {
 
     // MARK: - Download Error
 
+}
+
+extension DownloadManagerTests {
     func testDownloadErrorDescriptions() {
         XCTAssertEqual(DownloadError.networkError.localizedDescription, "Network connection failed")
         XCTAssertEqual(DownloadError.diskSpaceInsufficient.localizedDescription, "Not enough disk space")
         XCTAssertEqual(DownloadError.sha256Mismatch.localizedDescription, "File integrity check failed")
         XCTAssertEqual(DownloadError.cancelled.localizedDescription, "Download was cancelled")
+    }
+
+    // MARK: - Cancel vs Pause distinction
+
+    func testCancelSetsCancelledState() {
+        let model = ModelRegistry.llama32_3B
+        let task = DownloadTask(model: model, artifact: .base)
+        task.state = .downloading(progress: 0.5)
+        downloadManager.activeTasks[task.storageID] = task
+        downloadManager.updateStatus(model: model)
+
+        downloadManager.cancelDownload(for: model)
+
+        XCTAssertEqual(downloadManager.status(for: model).baseState, .notDownloaded)
+    }
+
+    func testPauseWithoutTransferOrResumeFailsClearly() {
+        let model = ModelRegistry.llama32_3B
+        let task = DownloadTask(model: model, artifact: .base)
+        task.state = .downloading(progress: 0.3)
+        task.progress = 0.3
+        downloadManager.activeTasks[task.storageID] = task
+        downloadManager.updateStatus(model: model)
+
+        downloadManager.pauseDownload(for: model)
+
+        // A synthetic task without a URLSession task or durable resume state
+        // cannot be published as paused.
+        let status = downloadManager.status(for: model)
+        XCTAssertEqual(status.baseState, .failed(error: .networkError))
+
+        downloadManager.cancelDownload(for: model)
+    }
+
+    func testCancelRemovesActiveTask() {
+        let model = ModelRegistry.llama32_3B
+        let task = DownloadTask(model: model, artifact: .base)
+        task.state = .downloading(progress: 0.5)
+        let key = task.storageID
+        downloadManager.activeTasks[key] = task
+
+        downloadManager.cancelDownload(for: model)
+
+        XCTAssertNil(downloadManager.activeTasks[key])
+    }
+
+    func testPausePreservesActiveTask() {
+        let model = ModelRegistry.llama32_3B
+        let task = DownloadTask(model: model, artifact: .base)
+        task.state = .downloading(progress: 0.3)
+        let key = task.storageID
+        downloadManager.activeTasks[key] = task
+
+        downloadManager.pauseDownload(for: model)
+
+        // Active task should still exist after pause
+        XCTAssertNotNil(downloadManager.activeTasks[key])
+
+        downloadManager.cancelDownload(for: model)
+    }
+
+    // MARK: - Single-flight (duplicate prevention)
+
+    func testDuplicateStartIsPreventedByActiveTaskTracking() {
+        let model = ModelRegistry.llama32_3B
+        let task1 = DownloadTask(model: model, artifact: .base)
+        let task2 = DownloadTask(model: model, artifact: .base)
+
+        XCTAssertTrue(downloadManager.registerActiveTaskIfAbsent(task1))
+        XCTAssertFalse(downloadManager.registerActiveTaskIfAbsent(task2))
+        XCTAssertEqual(task1.storageID, task2.storageID)
+
+        downloadManager.activeTasks.removeValue(forKey: task1.storageID)
+    }
+
+    func testHasActiveDownloadReflectsRegistration() {
+        let model = ModelRegistry.llama32_3B
+
+        XCTAssertFalse(downloadManager.hasActiveDownload(model: model, artifact: .base))
+
+        let task = DownloadTask(model: model, artifact: .base)
+        downloadManager.activeTasks[task.storageID] = task
+
+        XCTAssertTrue(downloadManager.hasActiveDownload(model: model, artifact: .base))
+
+        downloadManager.activeTasks.removeValue(forKey: task.storageID)
+    }
+
+    // MARK: - Resume state management
+
+    func testResumeFromFailedState() {
+        let model = ModelRegistry.llama32_3B
+        let task = DownloadTask(model: model, artifact: .base)
+        task.state = .failed(error: .networkError)
+        task.isPaused = true  // Failed but resumable
+        task.progress = 0.25
+        downloadManager.activeTasks[task.storageID] = task
+        downloadManager.updateStatus(model: model)
+
+        // Resume should transition to resuming state
+        downloadManager.resumeDownload(for: model)
+
+        let status = downloadManager.status(for: model)
+        // Should be resuming or downloading (transition may be instant for chunked)
+        XCTAssertTrue(status.isDownloading || status.baseState == .resuming(progress: 0.25))
+
+        downloadManager.cancelDownload(for: model)
+    }
+
+    func testDisplayStateAggregatesPausedAcrossArtifacts() {
+        let status = ModelDownloadStatus(
+            baseState: .paused(progress: 0.5),
+            mmprojState: .paused(progress: 0.3),
+            baseExpectedBytes: 1000,
+            mmprojExpectedBytes: 1000
+        )
+        // displayState shows paused with weighted progress
+        XCTAssertEqual(status.displayState, .paused(progress: 0.4))
+    }
+
+    func testDisplayStateAggregatesPausingAcrossArtifacts() {
+        let status = ModelDownloadStatus(
+            baseState: .pausing(progress: 0.5),
+            mmprojState: .downloading(progress: 0.8)
+        )
+        // Pausing takes display priority over downloading
+        XCTAssertEqual(status.displayState, .pausing(progress: 0.65))
     }
 }

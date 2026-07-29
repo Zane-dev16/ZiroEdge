@@ -220,6 +220,45 @@ final class ModelRegistryTests: XCTestCase {
         XCTAssertEqual(model?.quantization, "Q4_K_M")
     }
 
+    // MARK: - E2B Capability Choice
+
+    func testE2BAllowsTextOnlyCapabilityAndOtherModelsDoNot() {
+        XCTAssertTrue(ModelRegistry.gemma4_e2b.allowsTextOnlyCapability)
+        XCTAssertFalse(ModelRegistry.llama32_3B.allowsTextOnlyCapability)
+        XCTAssertFalse(ModelRegistry.gemma4_e4b.allowsTextOnlyCapability)
+        XCTAssertFalse(ModelRegistry.gemma4_e4b_text.allowsTextOnlyCapability)
+    }
+
+    func testE2BTextOnlyVariantDoesNotRequireProjector() {
+        let variant = ModelRegistry.gemma4_e2b.textOnlyRuntimeVariant
+        XCTAssertEqual(variant.id, ModelRegistry.gemma4_e2b.id)
+        XCTAssertEqual(variant.modelType, .text)
+        XCTAssertFalse(variant.requiresMMProj)
+        XCTAssertNil(variant.mmprojURL)
+        XCTAssertNil(variant.mmprojSHA256)
+        XCTAssertNil(variant.mmprojFileSizeBytes)
+    }
+
+    func testE2BVisionReadyRequiresBothArtifacts() {
+        let baseOnly = ModelDownloadStatus(
+            modelID: ModelRegistry.gemma4_e2b.id,
+            baseState: .downloaded,
+            mmprojState: .notDownloaded,
+            allowsTextOnly: true
+        )
+        XCTAssertTrue(baseOnly.isReady, "E2B base-only must be ready for text")
+        XCTAssertFalse(baseOnly.isVisionReady, "E2B base-only must not advertise vision")
+
+        let full = ModelDownloadStatus(
+            modelID: ModelRegistry.gemma4_e2b.id,
+            baseState: .downloaded,
+            mmprojState: .downloaded,
+            allowsTextOnly: true
+        )
+        XCTAssertTrue(full.isReady)
+        XCTAssertTrue(full.isVisionReady, "E2B with projector must be vision-ready")
+    }
+
     func testGemma4E4BTextIsReleaseCatalogIdentitySharingOnlyTheBaseArtifact() {
         let text = ModelRegistry.gemma4_e4b_text
         let vision = ModelRegistry.gemma4_e4b

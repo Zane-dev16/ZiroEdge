@@ -39,6 +39,17 @@ struct ModelDetailView: View {
         } message: {
             Text(viewModel.safetyResetMessage)
         }
+        .confirmationDialog(
+            "Cancel Download",
+            isPresented: $viewModel.showingCancelConfirmation
+        ) {
+            Button("Cancel Download", role: .destructive) {
+                viewModel.confirmCancelDownload()
+            }
+            Button("Keep Downloading", role: .cancel) {}
+        } message: {
+            Text("Cancelling stops the current transfer and preserves resumable progress for \(viewModel.pendingCancelModel?.displayName ?? "this model"). Use Discard Partial Download to start over.")
+        }
     }
 
     // MARK: - Metadata
@@ -101,10 +112,20 @@ struct ModelDetailView: View {
                         .font(.subheadline)
                         .foregroundStyle(.orange)
                 }
-                downloadButton
+                if model.allowsTextOnlyCapability {
+                    capabilityDownloadButtons
+                } else {
+                    downloadButton
+                }
 
             case .downloading(let progress):
                 downloadingRow(progress: progress)
+
+            case .pausing(let progress):
+                transferTransitionRow(label: "Saving resume data…", progress: progress)
+
+            case .resuming(let progress):
+                transferTransitionRow(label: "Resuming…", progress: progress)
 
             case .paused(let progress):
                 VStack(alignment: .leading, spacing: ZiroTheme.Spacing.small) {
@@ -124,7 +145,7 @@ struct ModelDetailView: View {
                         .buttonStyle(.borderedProminent)
 
                         Button(role: .destructive) {
-                            viewModel.cancelDownload(for: model)
+                            viewModel.requestCancelDownload(for: model)
                         } label: {
                             Label("Cancel", systemImage: "xmark.circle.fill")
                         }
@@ -143,8 +164,19 @@ struct ModelDetailView: View {
                 HStack {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundStyle(.green)
-                    Text("Downloaded")
+                    Text(status.isVisionReady ? "Text + Image Processing" : "Text Only")
                         .foregroundStyle(.green)
+                }
+                if model.allowsTextOnlyCapability && !status.isVisionReady {
+                    Button {
+                        viewModel.initiateDownload(for: model, includeOptionalProjector: true)
+                    } label: {
+                        Label(
+                            "Add Image Processing · \(ByteCountFormatter.string(fromByteCount: model.mmprojFileSizeBytes ?? 0, countStyle: .file))",
+                            systemImage: "photo.badge.plus"
+                        )
+                    }
+                    .buttonStyle(.borderedProminent)
                 }
 
             case .failed(let error):
@@ -156,7 +188,18 @@ struct ModelDetailView: View {
                             .font(.caption)
                             .foregroundStyle(.red)
                     }
-                    retryButton
+                    partialOutcomeSummary(for: status)
+                    HStack(spacing: 12) {
+                        retryButton
+                        if status.partialOutcomes.contains(where: { $0.isBase }) {
+                            Button {
+                                viewModel.retryInvalidArtifacts(for: model)
+                            } label: {
+                                Label("Retry Only Invalid", systemImage: "arrow.trianglehead.clockwise")
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                    }
                 }
 
             case .cancelled:
@@ -173,6 +216,32 @@ struct ModelDetailView: View {
         }
     }
 
+    private var capabilityDownloadButtons: some View {
+        VStack(alignment: .leading, spacing: ZiroTheme.Spacing.medium) {
+            Button {
+                viewModel.initiateDownload(for: model, includeOptionalProjector: false)
+            } label: {
+                Label(
+                    "Text Only · \(ByteCountFormatter.string(fromByteCount: model.baseFileSizeBytes, countStyle: .file))",
+                    systemImage: "text.bubble"
+                )
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(ZiroPrimaryButtonStyle())
+
+            Button {
+                viewModel.initiateDownload(for: model, includeOptionalProjector: true)
+            } label: {
+                Label("Text + Image Processing · \(model.formattedSize)", systemImage: "photo")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            Text("Both choices reuse any verified E2B files already on this device.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
     private var downloadButton: some View {
         Button {
             viewModel.initiateDownload(for: model)
@@ -184,6 +253,18 @@ struct ModelDetailView: View {
         }
         .buttonStyle(ZiroPrimaryButtonStyle())
         .accessibilityHint("Downloads the model for offline use")
+    }
+
+    private func transferTransitionRow(label: String, progress: Double) -> some View {
+        HStack {
+            ProgressView()
+            VStack(alignment: .leading) {
+                Text(label)
+                Text("\(Int(progress * 100))% complete")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
     }
 
     private func downloadingRow(progress: Double) -> some View {
@@ -208,12 +289,57 @@ struct ModelDetailView: View {
                 .controlSize(.small)
 
                 Button(role: .destructive) {
-                    viewModel.cancelDownload(for: model)
+                    viewModel.requestCancelDownload(for: model)
                 } label: {
                     Label("Cancel", systemImage: "xmark.circle.fill")
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func partialOutcomeSummary(for status: ModelDownloadStatus) -> some View {
+        let outcomes = status.partialOutcomes
+        if !outcomes.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(outcomes.indices, id: \.self) { idx in
+                switch outcomes[idx] {
+                case .baseDownloaded:
+                    Label("Base model verified", systemImage: "checkmark.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.green)
+                case .baseFailed(let error):
+                    Label("Base: \(error.localizedDescription)", systemImage: "xmark.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                case .baseDownloading(let progress):
+                    Label("Base downloading (\(Int(progress * 100))%)", systemImage: "arrow.down.circle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                case .basePaused(let progress):
+                    Label("Base paused (\(Int(progress * 100))%)", systemImage: "pause.circle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                case .projectorDownloaded:
+                    Label("Projector verified", systemImage: "checkmark.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.green)
+                case .projectorFailed(let error):
+                    Label("Projector: \(error.localizedDescription)", systemImage: "xmark.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                case .projectorDownloading(let progress):
+                    Label("Projector downloading (\(Int(progress * 100))%)", systemImage: "arrow.down.circle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                case .projectorPaused(let progress):
+                    Label("Projector paused (\(Int(progress * 100))%)", systemImage: "pause.circle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+                }
             }
         }
     }
