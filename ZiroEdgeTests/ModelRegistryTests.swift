@@ -94,12 +94,18 @@ final class ModelRegistryTests: XCTestCase {
 
     func testCatalogIncludesEveryRequiredRuntimeIdentityWhileEligibilityIsGated() {
         XCTAssertEqual(ModelRegistry.allModels.count, 4)
-        XCTAssertEqual(ModelRegistry.productionModels, [ModelRegistry.gemma4_e2b])
+        XCTAssertEqual(
+            ModelRegistry.productionModels,
+            [ModelRegistry.gemma4_e2b, ModelRegistry.gemma4_e4b_text]
+        )
         XCTAssertEqual(ModelRegistry.gemma4_e2b.runtimeEligibility, .validated)
         XCTAssertEqual(ModelRegistry.llama32_3B.runtimeEligibility, .unavailable)
-        XCTAssertEqual(ModelRegistry.gemma4_e4b_text.runtimeEligibility, .unavailable)
+        XCTAssertEqual(ModelRegistry.gemma4_e4b_text.runtimeEligibility, .validated)
         XCTAssertEqual(ModelRegistry.gemma4_e4b.runtimeEligibility, .unavailable)
-        XCTAssertEqual(ModelRegistry.availableModels(deviceRAM: 16_000_000_000), [ModelRegistry.gemma4_e2b])
+        XCTAssertEqual(
+            ModelRegistry.availableModels(deviceRAM: 16_000_000_000),
+            [ModelRegistry.gemma4_e2b, ModelRegistry.gemma4_e4b_text]
+        )
         XCTAssertTrue(ModelRegistry.availableModels(deviceRAM: 500_000_000).isEmpty)
     }
 

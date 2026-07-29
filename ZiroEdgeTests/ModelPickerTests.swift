@@ -15,8 +15,15 @@ final class ModelPickerTests: XCTestCase {
     private class MockDownloadStatusProvider: ModelDownloadStatusProvider {
         var readyModelIDs: Set<String> = []
         var textOnlyModelIDs: Set<String> = []
+        var unverifiedModelIDs: Set<String> = []
 
         func status(for model: AIModel) -> ModelDownloadStatus {
+            if unverifiedModelIDs.contains(model.id) {
+                return ModelDownloadStatus(
+                    baseState: .failed(error: .sha256Mismatch),
+                    mmprojState: model.requiresMMProj ? .notDownloaded : nil
+                )
+            }
             if textOnlyModelIDs.contains(model.id) {
                 return ModelDownloadStatus(
                     baseState: .downloaded,
@@ -138,6 +145,35 @@ final class ModelPickerTests: XCTestCase {
         XCTAssertEqual(viewModel.availableModels, [model])
     }
 
+    func testInstalledVerifiedE4BTextAppearsInPickerWithoutVision() {
+        let provider = MockDownloadStatusProvider()
+        provider.readyModelIDs = [ModelRegistry.gemma4_e4b_text.id, ModelRegistry.gemma4_e4b.id]
+
+        let available = makeViewModel(provider: provider).availableModels
+
+        XCTAssertTrue(available.contains(ModelRegistry.gemma4_e4b_text))
+        XCTAssertFalse(available.contains(ModelRegistry.gemma4_e4b))
+        XCTAssertEqual(
+            available.first(where: { $0.id == ModelRegistry.gemma4_e4b_text.id })?.modelType,
+            .text
+        )
+    }
+
+    func testUninstalledE4BTextDoesNotAppearInPicker() {
+        let viewModel = makeViewModel()
+
+        XCTAssertFalse(viewModel.availableModels.contains(ModelRegistry.gemma4_e4b_text))
+    }
+
+    func testUnverifiedE4BTextDoesNotAppearInPicker() {
+        let provider = MockDownloadStatusProvider()
+        provider.unverifiedModelIDs = [ModelRegistry.gemma4_e4b_text.id]
+
+        let viewModel = makeViewModel(provider: provider)
+
+        XCTAssertFalse(viewModel.availableModels.contains(ModelRegistry.gemma4_e4b_text))
+    }
+
     func testE2BBaseOnlyExposesOneTextRuntimeAndDisablesVision() {
         let provider = MockDownloadStatusProvider()
         provider.textOnlyModelIDs = [ModelRegistry.gemma4_e2b.id]
@@ -189,6 +225,19 @@ final class ModelPickerTests: XCTestCase {
 
         let savedID = UserDefaults.standard.string(forKey: "lastUsedModelID")
         XCTAssertEqual(savedID, model.id)
+    }
+
+    func testAutoSelectRestoresPersistedVerifiedE4BTextSelection() {
+        let provider = MockDownloadStatusProvider()
+        let model = ModelRegistry.gemma4_e4b_text
+        provider.readyModelIDs = [ModelRegistry.gemma4_e2b.id, model.id]
+        UserDefaults.standard.set(model.id, forKey: ChatViewModel.DefaultsKeys.lastUsedModelID)
+
+        let viewModel = makeViewModel(provider: provider)
+        viewModel.autoSelectModel()
+
+        XCTAssertEqual(viewModel.selectedModel, model)
+        XCTAssertFalse(viewModel.needsModelRedirect)
     }
 
     // MARK: - Model Switching State Tests

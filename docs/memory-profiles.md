@@ -22,11 +22,32 @@ When replacing an already loaded model, native unload must finish and a five-sec
 | Profile | Runtime shape | Evidence | Production |
 | --- | --- | --- | --- |
 | Gemma 4 E2B vision | projector required, context 4096, batch 512, microbatch 128 | Accepted on target `00008140-000178A1362B001C`: five measured cycles, 20 text prompts, five image turns, background/foreground, peak delta 798,559,232 bytes, required headroom 1,750,000,000 bytes | Validated |
-| Gemma 4 E4B text calibration | no projector, context 512, batch 256, microbatch 64, mmap enabled, CPU settings unchanged | Unvalidated | Disabled |
+| Gemma 4 E4B text | no projector, context 512, batch 256, microbatch 64, mmap enabled, CPU settings unchanged | Accepted on target `00008140-000178A1362B001C`: five cold cycles, 20 text prompts, background/foreground, peak delta 306,270,168 bytes, required headroom 1,150,000,000 bytes | Validated |
 | Gemma 4 E4B vision | projector required, context 4096, batch 512, microbatch 128 | Unvalidated | Disabled |
 | Llama 3.2 3B text | context 4096, batch 512, microbatch 128 | Unvalidated | Disabled |
 
-The retained E2B load-only delta remains 790,334,488 bytes for diagnostic history; production admission uses the larger accepted full-workload peak of 798,559,232 bytes. Configured context, batch, and microbatch values are specified runtime controls, not measurements. Evidence is retained under `test-output/memory-diagnostic-e2b-round1-warm-20260726T165800Z/`.
+The retained E2B load-only delta remains 790,334,488 bytes for diagnostic history; production admission uses the larger accepted full-workload peak of 798,559,232 bytes. Configured context, batch, and microbatch values are specified runtime controls, not measurements. E2B evidence is retained under `test-output/memory-diagnostic-e2b-round1-warm-20260726T165800Z/`.
+
+The E4B text production calculation is exact integer policy arithmetic:
+
+- measured full-workload peak delta: `306,270,168` bytes;
+- multiply by 1.25: `382,837,710` bytes;
+- round up to the next 100,000,000 bytes: `400,000,000` bytes;
+- add the fixed reserve: `400,000,000 + 750,000,000 = 1,150,000,000` bytes required process headroom;
+- minimum physical RAM: `8,054,095,872` bytes.
+
+This acceptance promotes only the E4B **text** identity with no projector and the exact 512/256/64 runtime controls. It does not validate or enable the E4B vision identity. The accepted E4B run is retained under `test-output/memory-diagnostic-20260729T061035Z/`, with these evidence artifacts:
+
+- `calibration-summary.json`
+- `memory-diagnostic.jsonl`
+- `ui-tests.log`
+- `unit-tests.log`
+- `ui-tests.xcresult`
+- `unit-tests.xcresult`
+- `records.log`
+- `run-start-utc.txt`
+
+The summary records run ID `C1041520-844C-43B4-A697-78BA6D7FFCDC`, `accepted: true`, five cycles, and 20 prompts. The accepted artifact was `gemma-4-E4B-it-Q4_K_M.gguf`, 5,335,273,056 bytes, SHA-256 `9d23b7b4cd3c6c6c9ffadd7a9b1e16448621005b80a803e85afa3ca2c48714e3`.
 
 ## Physical calibration
 

@@ -63,17 +63,32 @@ final class MemoryProfileTests: XCTestCase {
         XCTAssertNil(profile.measuredFullWorkloadPeakDeltaBytes)
     }
 
-    func testE4BVariantsAreNotProductionModelsUntilIndividuallyValidated() {
+    func testAcceptedE4BTextProfileUsesExactProductionShapeAndCalculation() throws {
+        let profile = MemoryProfileRegistry.e4bText
+
+        XCTAssertEqual(profile.modelID, ModelRegistry.gemma4_e4b_text.id)
+        XCTAssertEqual(profile.mode, .text)
+        XCTAssertEqual(profile.contextLength, 512)
+        XCTAssertEqual(profile.batchSize, 256)
+        XCTAssertEqual(profile.microBatchSize, 64)
+        XCTAssertEqual(profile.projectorPolicy, .disabled)
+        XCTAssertEqual(profile.evidenceStatus, .validated)
+        XCTAssertEqual(profile.measuredFullWorkloadPeakDeltaBytes, 306_270_168)
+        XCTAssertEqual(profile.minimumPhysicalRAMBytes, 8_054_095_872)
+        XCTAssertEqual(try profile.requiredProcessHeadroomBytes(), 1_150_000_000)
+    }
+
+    func testE4BTextPromotionDoesNotPromoteVisionOrCalibrationIdentity() {
+        XCTAssertTrue(ModelRegistry.productionModels.contains { $0.id == ModelRegistry.gemma4_e4b_text.id })
         XCTAssertFalse(ModelRegistry.productionModels.contains { $0.id == ModelRegistry.gemma4_e4b.id })
-        XCTAssertFalse(ModelRegistry.productionModels.contains { $0.id == ModelRegistry.gemma4_e4b_text.id })
         XCTAssertFalse(ModelRegistry.productionModels.contains { $0.id == ModelRegistry.gemma4E4BTextCalibration.id })
         XCTAssertTrue(ModelRegistry.calibrationModels.contains { $0.id == ModelRegistry.gemma4E4BTextCalibration.id })
         XCTAssertEqual(
             ModelManagerService.baseModelPath(for: ModelRegistry.gemma4_e4b),
             ModelManagerService.baseModelPath(for: ModelRegistry.gemma4_e4b_text)
         )
-        XCTAssertEqual(MemoryProfileRegistry.e4bText.projectorPolicy, .disabled)
-        XCTAssertEqual(MemoryProfileRegistry.e4bText.mode, .text)
+        XCTAssertEqual(MemoryProfileRegistry.e4bVision.evidenceStatus, .unvalidated)
+        XCTAssertEqual(MemoryProfileRegistry.e4bVision.projectorPolicy, .required)
     }
 
     func testArtifactSizeDoesNotChangeMemoryAdmission() async {

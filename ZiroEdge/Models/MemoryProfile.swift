@@ -144,11 +144,13 @@ enum MemoryProfileRegistry {
         minimumPhysicalRAMBytes: 8_054_095_872
     )
 
+    /// Accepted physical-device evidence: test-output/memory-diagnostic-20260729T061035Z/.
+    /// This promotion applies only to the no-projector 512/256/64 text runtime shape.
     static let e4bText = MemoryProfile(
         id: "gemma4-e4b-text-p1", modelID: ModelRegistry.gemma4_e4b_text.id,
         mode: .text, contextLength: 512, batchSize: 256, microBatchSize: 64,
-        projectorPolicy: .disabled, evidenceStatus: .unvalidated, policyVersion: 1,
-        measuredFullWorkloadPeakDeltaBytes: nil, measuredLoadDeltaBytes: nil,
+        projectorPolicy: .disabled, evidenceStatus: .validated, policyVersion: 1,
+        measuredFullWorkloadPeakDeltaBytes: 306_270_168, measuredLoadDeltaBytes: nil,
         safetyMultiplier: 1.25, fixedReserveBytes: 750_000_000,
         minimumPhysicalRAMBytes: 8_054_095_872
     )
