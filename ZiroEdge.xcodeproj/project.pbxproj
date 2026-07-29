@@ -46,6 +46,7 @@
 		838E305373F3089C2A384226 /* ModelMigrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB6503688D985EAD5140D5FA /* ModelMigrationTests.swift */; };
 		87C8C4160FDE2944CF890D0A /* DownloadManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5366D39F754D5F2CBE06ADD3 /* DownloadManagerTests.swift */; };
 		882A6F6AE2CA8305FD36264B /* RAMDiagnosticTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D4D5F9E57ADBB8C89FB27FC /* RAMDiagnosticTests.swift */; };
+		89FDF43AFCC905D098565544 /* ConversationHistoryEligibilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 816C6B541E5012339E31CAB1 /* ConversationHistoryEligibilityTests.swift */; };
 		8A5F0F2DCAB0221F57D83B0A /* RAMDiagnosticUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B419666F06F2A205EEB84328 /* RAMDiagnosticUITests.swift */; };
 		8F7F776200E4CB69FA6ABF24 /* ModelDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 387DC457818126F788BDBB8A /* ModelDetailView.swift */; };
 		94D00310384A39694C397008 /* PersistenceFailure.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA21BAD9C35A80778AADBEE7 /* PersistenceFailure.swift */; };
@@ -134,6 +135,7 @@
 		7BEC15C6D7B950F3212F5EDE /* CDConversation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CDConversation.swift; sourceTree = "<group>"; };
 		7DDE172A4D2ECAC5AA71B1A5 /* SmokeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmokeTests.swift; sourceTree = "<group>"; };
 		7F52B00138CB2DC2FC76F4FB /* TitleGeneratorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TitleGeneratorTests.swift; sourceTree = "<group>"; };
+		816C6B541E5012339E31CAB1 /* ConversationHistoryEligibilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationHistoryEligibilityTests.swift; sourceTree = "<group>"; };
 		837D4E9D79793ABF9EBE0FAE /* UITestBase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UITestBase.swift; sourceTree = "<group>"; };
 		8B200FFD16CAEE03D809DBBA /* AppRuntimeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppRuntimeTests.swift; sourceTree = "<group>"; };
 		8DCD7FFE76AE246F76E8AB1D /* ZiroEdgeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZiroEdgeApp.swift; sourceTree = "<group>"; };
@@ -312,6 +314,7 @@
 			children = (
 				8B200FFD16CAEE03D809DBBA /* AppRuntimeTests.swift */,
 				CDA3D7504BF8CD7CDA9BE445 /* ChatUXTests.swift */,
+				816C6B541E5012339E31CAB1 /* ConversationHistoryEligibilityTests.swift */,
 				5366D39F754D5F2CBE06ADD3 /* DownloadManagerTests.swift */,
 				A4C0C18181BD64FAAE5DAB39 /* InferenceFailureTests.swift */,
 				5D861E7A20FC93579F190D59 /* LoadSafetyStoreTests.swift */,
@@ -495,6 +498,7 @@
 			files = (
 				80E347B69410E8E556F84E20 /* AppRuntimeTests.swift in Sources */,
 				9E55E4716493115AFEB5D119 /* ChatUXTests.swift in Sources */,
+				89FDF43AFCC905D098565544 /* ConversationHistoryEligibilityTests.swift in Sources */,
 				87C8C4160FDE2944CF890D0A /* DownloadManagerTests.swift in Sources */,
 				C9150288BF4874F03BA7E6FC /* InferenceFailureTests.swift in Sources */,
 				1240A6F4A0B7F0AADB9B9E85 /* LoadSafetyStoreTests.swift in Sources */,

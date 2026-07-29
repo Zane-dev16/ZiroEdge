@@ -166,12 +166,16 @@ struct ChatView: View {
         }
 
         if viewModel.showError, let error = viewModel.errorMessage {
-            dismissibleBanner(
-                icon: "exclamationmark.triangle.fill",
-                message: error,
-                tint: .red,
-                identifier: "errorBanner"
-            ) { viewModel.showError = false }
+            if viewModel.isStartupError {
+                startupErrorBanner(message: error)
+            } else {
+                dismissibleBanner(
+                    icon: "exclamationmark.triangle.fill",
+                    message: error,
+                    tint: .red,
+                    identifier: "errorBanner"
+                ) { viewModel.showError = false }
+            }
         }
 
         if let warning = viewModel.truncationWarning {
@@ -185,6 +189,21 @@ struct ChatView: View {
                 viewModel.visionWarning = nil
             }
         }
+    }
+
+    private func startupErrorBanner(message: String) -> some View {
+        ZiroStatusBanner(
+            icon: "exclamationmark.triangle.fill",
+            message: message,
+            tint: .red
+        ) {
+            HStack(spacing: ZiroTheme.Spacing.medium) {
+                Button("Retry") { Task { await viewModel.retryStartup() } }
+                    .accessibilityIdentifier("retryStartupButton")
+                Button("Dismiss") { viewModel.showError = false }
+            }
+        }
+        .accessibilityIdentifier("errorBanner")
     }
 
     private func dismissibleBanner(

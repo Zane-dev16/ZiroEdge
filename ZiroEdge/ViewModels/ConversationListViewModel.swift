@@ -37,7 +37,7 @@ final class ConversationListViewModel: ObservableObject {
     func loadConversations() async {
         isLoading = true
         defer { isLoading = false }
-        switch await persistence.fetchConversationsResult() {
+        switch await persistence.fetchConversationsResult(historyEligibleOnly: true) {
         case .success(let fetched):
             conversations = fetched
             errorMessage = nil

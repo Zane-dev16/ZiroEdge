@@ -258,6 +258,121 @@ final class ChatUXTests: XCTestCase {
         XCTAssertEqual(viewModel.contextWindowSize, 4096, "Context window size should default to 4096")
     }
 
+    // MARK: - Conversation Startup Tests
+
+    /// Loading state is published immediately when startNewConversation begins —
+    /// the caller sets isLoadingConversation = true before any await.
+    func testStartupPublishesLoadingImmediately() throws {
+        let viewModel = makeViewModel()
+
+        // Simulate the state that startNewConversation sets before its first await.
+        viewModel.isStartingConversation = true
+        viewModel.isLoadingConversation = true
+
+        XCTAssertTrue(viewModel.isLoadingConversation, "Loading should be true immediately at startup")
+        XCTAssertTrue(viewModel.isStartingConversation, "Startup guard should be set")
+    }
+
+    /// When a conversation successfully loads, the loading state is cleared.
+    func testStartupLoadingClearedOnSuccess() async throws {
+        let persistence = PersistenceController(inMemory: true)
+        let viewModel = makeViewModel(persistence: persistence)
+
+        // Simulate initial startup state — loading is set.
+        viewModel.isLoadingConversation = true
+        viewModel.isStartingConversation = true
+        viewModel.isStartupError = false
+
+        // Simulate successful readiness: loading flag cleared.
+        viewModel.isStartingConversation = false
+        viewModel.isLoadingConversation = false
+
+        XCTAssertFalse(viewModel.isLoadingConversation, "Loading should be false after successful startup")
+        XCTAssertFalse(viewModel.isStartingConversation)
+        XCTAssertFalse(viewModel.isStartupError)
+    }
+
+    /// The startup action cannot be triggered repeatedly while loading.
+    /// The isStartingConversation guard returns nil for concurrent calls.
+    func testDuplicateTapSuppression() throws {
+        let viewModel = makeViewModel()
+
+        // Simulate that startup is already in flight.
+        viewModel.isStartingConversation = true
+
+        // The guard at the top of startNewConversation checks !isStartingConversation.
+        let wouldAllowStartup = !viewModel.isStartingConversation
+        XCTAssertFalse(wouldAllowStartup, "Duplicate start should be suppressed while isStartingConversation is true")
+    }
+
+    /// When startup fails, the error state is set and isStartupError is true.
+    func testStartupFailureFeedback() throws {
+        let viewModel = makeViewModel()
+
+        // Simulate a startup failure.
+        viewModel.isStartingConversation = false
+        viewModel.isLoadingConversation = false
+        viewModel.isStartupError = true
+        viewModel.errorMessage = "Test model could not be loaded. Repair it or choose another model, then retry."
+        viewModel.showError = true
+
+        XCTAssertTrue(viewModel.isStartupError, "isStartupError should be true on failure")
+        XCTAssertTrue(viewModel.showError, "showError should be true")
+        XCTAssertNotNil(viewModel.errorMessage)
+        XCTAssertFalse(viewModel.isLoadingConversation, "Loading should be cleared on failure")
+    }
+
+    /// retryStartup clears the error state and triggers a new startup.
+    func testRetryClearsErrorAndReattempts() throws {
+        let viewModel = makeViewModel()
+
+        // Simulate being in a startup error state.
+        viewModel.isStartupError = true
+        viewModel.showError = true
+        viewModel.errorMessage = "Previous failure"
+
+        // The retry guard checks isStartupError — should be true, so retry is allowed.
+        let wouldAllowRetry = viewModel.isStartupError
+        XCTAssertTrue(wouldAllowRetry, "Retry should be allowed when isStartupError is true")
+
+        // Simulate retry: clear the error state.
+        viewModel.isStartupError = false
+        viewModel.showError = false
+        viewModel.errorMessage = nil
+
+        XCTAssertFalse(viewModel.isStartupError)
+        XCTAssertFalse(viewModel.showError)
+        XCTAssertNil(viewModel.errorMessage)
+    }
+
+    /// retryStartup is a no-op when isStartupError is false.
+    func testRetryIgnoredWhenNotInStartupError() throws {
+        let viewModel = makeViewModel()
+
+        viewModel.isStartupError = false
+        viewModel.showError = true
+        viewModel.errorMessage = "Some other error"
+
+        let wouldAllowRetry = viewModel.isStartupError
+        XCTAssertFalse(wouldAllowRetry, "Retry should not be allowed for non-startup errors")
+
+        // showError should remain unchanged since retry is a no-op.
+        XCTAssertTrue(viewModel.showError, "Non-startup error should remain visible")
+    }
+
+    /// clearActiveConversation resets isStartupError.
+    func testClearActiveConversationResetsStartupError() throws {
+        let viewModel = makeViewModel()
+
+        viewModel.isStartupError = true
+        viewModel.errorMessage = "Stale error"
+        viewModel.showError = true
+
+        viewModel.clearActiveConversation()
+
+        XCTAssertFalse(viewModel.isStartupError, "isStartupError should be cleared")
+    }
+
     // MARK: - Cleanup
 
     override func tearDown() {

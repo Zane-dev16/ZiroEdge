@@ -351,11 +351,10 @@ struct MainView: View {
                 showModelsFromPicker = true
                 return
             }
-            await chatViewModel.selectModel(model)
-            guard lifecycleManager.activeModel?.id == model.id else { return }
-            guard let id = await conversationListViewModel.createConversation(modelID: model.id) else { return }
+            guard let id = await chatViewModel.startNewConversation(model: model) else { return }
+            await conversationListViewModel.loadConversations()
+            conversationListViewModel.selectedConversationID = id
             if navigateInCompactLayout { compactPath = [id] }
-            await chatViewModel.loadConversation(id)
         }
     }
 

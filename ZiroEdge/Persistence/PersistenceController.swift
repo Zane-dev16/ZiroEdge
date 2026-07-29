@@ -746,7 +746,9 @@ extension PersistenceController {
         (try? fetchConversationsResult().get()) ?? []
     }
 
-    func fetchConversationsResult() -> Result<[ConversationPayload], PersistenceFailure> {
+    func fetchConversationsResult(
+        historyEligibleOnly: Bool = false
+    ) -> Result<[ConversationPayload], PersistenceFailure> {
         let context = viewContext
         var result: Result<[ConversationPayload], PersistenceFailure> = .success([])
         context.performAndWait {
@@ -757,6 +759,7 @@ extension PersistenceController {
                 let objects = try context.fetch(request)
                 var payloads: [ConversationPayload] = []
                 for conversation in objects {
+                    if historyEligibleOnly && !conversation.isHistoryEligible { continue }
                     guard let id = conversation.id, let title = conversation.title, let modelID = conversation.modelID else {
                         result = .failure(PersistenceFailure(category: .corruptData, operation: .fetch, domain: "ZiroEdge.Persistence", code: 422))
                         return

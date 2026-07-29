@@ -25,7 +25,9 @@ final class ChatViewModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var showError: Bool = false
     @Published var streamingText: String = ""
-    @Published private(set) var isLoadingConversation = false
+    @Published var isLoadingConversation = false
+    @Published var isStartingConversation = false
+    @Published var isStartupError = false
     @Published private(set) var activeConversationSystemPrompt: String?
     @Published private(set) var hasPersistenceRecovery = false
     @Published private(set) var recoveryExportURL: URL?
@@ -110,7 +112,14 @@ final class ChatViewModel: ObservableObject {
 
     /// All models that are fully downloaded and available for use.
     var availableModels: [AIModel] {
-        ModelRegistry.selectableModels.filter { downloadStatusProvider.status(for: $0).isReady }
+        ModelRegistry.selectableModels.compactMap { model in
+            let status = downloadStatusProvider.status(for: model)
+            guard status.isReady else { return nil }
+            if model.allowsTextOnlyCapability && !status.isVisionReady {
+                return model.textOnlyRuntimeVariant
+            }
+            return model
+        }
     }
 
     /// Auto-select a model for a new conversation. Uses the fallback chain:
@@ -199,8 +208,8 @@ final class ChatViewModel: ObservableObject {
         errorMessage = nil
 
         if let model = ModelRegistry.allModels.first(where: { $0.id == conversation.modelID }) {
-            if availableModels.contains(where: { $0.id == model.id }) {
-                await selectModel(model)
+            if let readyVariant = availableModels.first(where: { $0.id == model.id }) {
+                await selectModel(readyVariant)
             } else {
                 selectedModel = model
                 needsModelRedirect = true
@@ -218,27 +227,67 @@ final class ChatViewModel: ObservableObject {
         streamingText = ""
         tokenCount = 0
         isLoadingConversation = false
+        isStartupError = false
         truncationWarning = nil
         activeConversationSystemPrompt = nil
     }
 
-    func createNewConversation(modelID: String? = nil) async -> UUID? {
-        let resolvedModelID = modelID ?? selectedModel?.id ?? ModelRegistry.llama32_3B.id
+    /// Single-flight startup covering model readiness, persistence creation,
+    /// and transcript loading. Loading feedback is published before the first await.
+    func startNewConversation(model: AIModel) async -> UUID? {
+        guard !isStartingConversation else { return nil }
+        isStartingConversation = true
+        isLoadingConversation = true
+        isStartupError = false
+        errorMessage = nil
+        defer {
+            isStartingConversation = false
+            if activeConversationID == nil { isLoadingConversation = false }
+        }
+
+        await selectModel(model)
+        guard lifecycleManager.activeModel?.id == model.id else {
+            errorMessage = "\(model.displayName) could not be loaded. Repair it or choose another model, then retry."
+            showError = true
+            isStartupError = true
+            return nil
+        }
+
         let defaultPrompt = UserDefaults.standard.string(forKey: DefaultsKeys.defaultSystemPrompt)
         let result = await persistence.createConversationResult(
             title: "New Conversation",
-            modelID: resolvedModelID,
+            modelID: model.id,
             systemPrompt: defaultPrompt?.nilIfBlank
         )
         guard case .success(let id) = result else {
             if case .failure(let error) = result {
-                errorMessage = error.localizedDescription
+                errorMessage = "Could not start the conversation. \(error.localizedDescription)"
                 showError = true
+                isStartupError = true
             }
             return nil
         }
         await loadConversation(id)
-        return id
+        return activeConversationID == id ? id : nil
+    }
+
+    /// Retry a failed conversation startup using the last selected model.
+    func retryStartup() async -> UUID? {
+        guard isStartupError else { return nil }
+        isStartupError = false
+        showError = false
+        errorMessage = nil
+        return await createNewConversation()
+    }
+
+    func createNewConversation(modelID: String? = nil) async -> UUID? {
+        let resolvedID = modelID ?? selectedModel?.id ?? ModelRegistry.llama32_3B.id
+        guard let model = ModelRegistry.model(for: resolvedID) else {
+            errorMessage = "The selected model is no longer available. Choose a model and retry."
+            showError = true
+            return nil
+        }
+        return await startNewConversation(model: model)
     }
 
 }

@@ -60,6 +60,23 @@ extension CDConversation {
         (messages as? Set<CDChatMessage>)?.count ?? 0
     }
 
+    /// History begins only after a real assistant response is durably complete.
+    /// Cancellation and interruption markers are recovery state, not answers.
+    /// Markers may appear anywhere in the content (partial response before cancellation).
+    var isHistoryEligible: Bool {
+        sortedMessages.contains { message in
+            guard message.validatedMessageRole == .assistant,
+                  !message.isStreaming else { return false }
+            let content = (message.content ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !content.isEmpty else { return false }
+            let isCancelledOrInterrupted = content.contains("_[Generation cancelled]_")
+                || content.contains("_[Generation was interrupted]_")
+                || content.contains("_[Interrupted — app was closed]_")
+            return !isCancelledOrInterrupted
+        }
+    }
+
     /// Whether this conversation is a branch of another.
     var isBranch: Bool {
         parentBranchID != nil
