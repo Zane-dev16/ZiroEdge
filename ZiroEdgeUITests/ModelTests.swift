@@ -116,7 +116,7 @@ final class PhysicalE4BTextUITests: XCTestCase {
             "Chat input did not contain the exact required prompt; value was '\(String(describing: input.value))'"
         )
 
-        let completedAssistantCount = app.staticTexts.matching(
+        let completedAssistantCount = app.descendants(matching: .any).matching(
             NSPredicate(format: "label BEGINSWITH %@", "Assistant said: ")
         ).count
         let sendButton = app.buttons["Send message"].firstMatch
@@ -202,7 +202,7 @@ final class PhysicalE4BTextUITests: XCTestCase {
         afterCount baseline: Int,
         timeout: TimeInterval
     ) throws -> XCUIElement {
-        let finalResponses = app.staticTexts.matching(
+        let finalResponses = app.descendants(matching: .any).matching(
             NSPredicate(format: "label BEGINSWITH %@", "Assistant said: ")
         )
         let deadline = Date().addingTimeInterval(timeout)
