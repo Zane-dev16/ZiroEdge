@@ -336,7 +336,7 @@ extension ChatViewModel {
 
         guard let conversationID = await validateSendPreconditions(
             text: text, hasImages: hasImages
-        ) else { return }
+        ), let sampling = selectedModel?.config.defaultSampling else { return }
 
         inputText = ""
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
@@ -369,7 +369,7 @@ extension ChatViewModel {
         await startStreaming(
             generationID: generationID,
             conversationID: conversationID, history: history, images: imagesToSend,
-            hasImages: hasImages, isFirstExchange: isFirstExchange,
+            sampling: sampling, hasImages: hasImages, isFirstExchange: isFirstExchange,
             firstUserMessage: firstUserMessage
         )
         clearImages()
@@ -378,7 +378,7 @@ extension ChatViewModel {
     private func startStreaming(
         generationID: UUID,
         conversationID: UUID, history: [ChatMessagePayload], images: [Data],
-        hasImages: Bool, isFirstExchange: Bool, firstUserMessage: String
+        sampling: SamplingConfig, hasImages: Bool, isFirstExchange: Bool, firstUserMessage: String
     ) async {
         let onToken: @Sendable (String) -> Void = { [weak self] token in
             Task { @MainActor [weak self] in
@@ -422,13 +422,13 @@ extension ChatViewModel {
         if hasImages {
             await sessionActor.startVisionStream(
                 conversationID: conversationID, messages: history, images: images,
-                systemPrompt: systemPrompt, sampling: .default,
+                systemPrompt: systemPrompt, sampling: sampling,
                 onToken: onToken, onComplete: onComplete, onError: onError
             )
         } else {
             await sessionActor.startStream(
                 conversationID: conversationID, messages: history,
-                systemPrompt: systemPrompt, sampling: .default,
+                systemPrompt: systemPrompt, sampling: sampling,
                 onToken: onToken, onComplete: onComplete, onError: onError
             )
         }
