@@ -32,8 +32,6 @@ enum DownloadTransportValidator {
 
         let statusCode = response.statusCode
         let contentLength = response.expectedContentLength
-        let contentType = response.value(forHTTPHeaderField: "Content-Type") ?? "nil"
-        let contentRange = response.value(forHTTPHeaderField: "Content-Range") ?? "nil"
         logger.info("[TRANSPORT] HTTP \(statusCode), contentLength=\(contentLength), expectedBytes=\(expectedBytes), expectedOffset=\(expectedOffset)")
 
         guard (200...299).contains(statusCode) else {

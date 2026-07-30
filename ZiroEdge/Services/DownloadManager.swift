@@ -817,7 +817,6 @@ extension DownloadManager: URLSessionDownloadDelegate, URLSessionDataDelegate {
                   let task = activeTasks[key],
                   task.task === downloadTask else { return }
             let response = downloadTask.response as? HTTPURLResponse
-            let statusCode = response?.statusCode ?? -1
             let artifactLabel = task.artifact.label
             let transferCID = DownloadDiagnosticRecorder.transferCorrelationID(modelID: task.model.id, artifact: artifactLabel)
             DownloadDiagnosticRecorder.shared.record(
@@ -951,8 +950,6 @@ extension DownloadManager: URLSessionDownloadDelegate, URLSessionDataDelegate {
                     failureCategory: category,
                     failureSummary: error.localizedDescription
                 )
-            }
-            if let nsError {
             }
             if let resumeData = nsError?.userInfo[NSURLSessionDownloadTaskResumeData] as? Data {
                 downloadTask.resumeData = resumeData
