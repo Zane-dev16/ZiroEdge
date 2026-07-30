@@ -520,6 +520,21 @@ private extension LlamaEngine {
 
     // MARK: - Tokenization
 
+    /// Measures a prompt with the tokenizer loaded from the current model.
+    public func tokenCount(
+        prompt: String,
+        addBos: Bool?,
+        parseSpecial: Bool = false
+    ) throws -> Int {
+        guard let vocab = vocabulary else { throw LlamaError.modelNotLoaded }
+        return try tokenize(
+            prompt: prompt,
+            addBos: addBos,
+            parseSpecial: parseSpecial,
+            vocab: vocab
+        ).count
+    }
+
     private func tokenize(
         prompt: String,
         addBos: Bool?,

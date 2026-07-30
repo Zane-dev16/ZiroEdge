@@ -321,8 +321,25 @@ extension InferenceService {
                 sampling: engineSampling
             )
         case .gemma:
+            let prompt: String
+            if currentModel?.id == ModelRegistry.gemma4_e4b_text.id {
+                let generationReserve = min(max(sampling.maxTokens, 1), 64)
+                prompt = try await Self.compactGemmaPrompt(
+                    messages: messages,
+                    systemPrompt: systemPrompt,
+                    maximumPromptTokens: config.contextLength - generationReserve
+                ) { candidate in
+                    try await eng.tokenCount(
+                        prompt: candidate,
+                        addBos: config.addBos,
+                        parseSpecial: true
+                    )
+                }
+            } else {
+                prompt = Self.formatGemmaPrompt(messages: messages, systemPrompt: systemPrompt)
+            }
             stream = try await eng.streamCompletion(
-                prompt: Self.formatGemmaPrompt(messages: messages, systemPrompt: systemPrompt),
+                prompt: prompt,
                 addBos: config.addBos,
                 parseSpecial: true,
                 stopStrings: config.stopStrings,
@@ -580,6 +597,41 @@ extension InferenceService {
         }
         result.append(contentsOf: messages.map { (role: $0.role.rawValue, content: $0.content) })
         return result
+    }
+
+    static func compactGemmaPrompt(
+        messages: [ChatMessagePayload],
+        systemPrompt: String?,
+        maximumPromptTokens: Int,
+        tokenCount: (String) async throws -> Int
+    ) async rethrows -> String {
+        var retainedMessages = messages
+        var prompt = formatGemmaPrompt(messages: retainedMessages, systemPrompt: systemPrompt)
+
+        while try await tokenCount(prompt) > maximumPromptTokens,
+              let range = oldestCompleteExchange(in: retainedMessages) {
+            retainedMessages.removeSubrange(range)
+            prompt = formatGemmaPrompt(messages: retainedMessages, systemPrompt: systemPrompt)
+        }
+        return prompt
+    }
+
+    private static func oldestCompleteExchange(
+        in messages: [ChatMessagePayload]
+    ) -> ClosedRange<Int>? {
+        guard let newestUserIndex = messages.lastIndex(where: { $0.role == .user }) else {
+            return nil
+        }
+        for userIndex in messages.indices
+        where userIndex < newestUserIndex && messages[userIndex].role == .user {
+            let nextUserIndex = messages[(userIndex + 1)...]
+                .firstIndex(where: { $0.role == .user }) ?? messages.endIndex
+            if let assistantIndex = messages[(userIndex + 1)..<nextUserIndex]
+                .firstIndex(where: { $0.role == .assistant }) {
+                return userIndex...assistantIndex
+            }
+        }
+        return nil
     }
 
     static func formatGemmaPrompt(

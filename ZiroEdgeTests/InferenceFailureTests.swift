@@ -30,6 +30,53 @@ final class InferenceFailureTests: XCTestCase {
         )
     }
 
+    func testGemmaPromptCompactionDropsOldestCompleteExchangesAndPreservesShortHistory() async throws {
+        let longHistory = [
+            ChatMessagePayload(
+                role: .user,
+                content: "Old question " + String(repeating: "detail ", count: 30)
+            ),
+            ChatMessagePayload(
+                role: .assistant,
+                content: "Old answer " + String(repeating: "detail ", count: 30)
+            ),
+            ChatMessagePayload(role: .user, content: "Recent question."),
+            ChatMessagePayload(role: .assistant, content: "Recent answer."),
+            ChatMessagePayload(role: .user, content: "Newest prompt must survive.")
+        ]
+        let shortHistory = Array(longHistory.suffix(3))
+        let tokenCount: (String) async throws -> Int = { $0.utf8.count }
+        let shortPrompt = InferenceService.formatGemmaPrompt(
+            messages: shortHistory,
+            systemPrompt: nil
+        )
+
+        let compacted = try await InferenceService.compactGemmaPrompt(
+            messages: longHistory,
+            systemPrompt: nil,
+            maximumPromptTokens: 512 - 64,
+            tokenCount: tokenCount
+        )
+        let unchanged = try await InferenceService.compactGemmaPrompt(
+            messages: shortHistory,
+            systemPrompt: nil,
+            maximumPromptTokens: 512 - 64,
+            tokenCount: tokenCount
+        )
+
+        XCTAssertEqual(compacted, shortPrompt)
+        XCTAssertEqual(unchanged, shortPrompt)
+        XCTAssertFalse(compacted.contains("Old question"))
+        XCTAssertFalse(compacted.contains("Old answer"))
+        XCTAssertTrue(compacted.contains("Newest prompt must survive."))
+        XCTAssertLessThanOrEqual(compacted.utf8.count + 64, 512)
+        XCTAssertTrue(compacted.hasSuffix("<start_of_turn>model\n"))
+        XCTAssertEqual(
+            compacted.components(separatedBy: "<start_of_turn>").count - 1,
+            compacted.components(separatedBy: "<end_of_turn>").count
+        )
+    }
+
     func testNativeFailuresRetainDistinctSanitizedCategories() {
         let categories: [NativeFailureKind] = [
             .modelMapping,
