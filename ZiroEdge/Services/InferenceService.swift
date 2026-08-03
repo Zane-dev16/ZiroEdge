@@ -175,6 +175,7 @@ actor InferenceService: InferenceServiceProtocol {
             useMmap: config.useMmap,
             f16KV: config.f16KV,
             gpuLayers: config.gpuLayers,
+            useAccelerator: config.useAccelerator,
             diagnosticHandler: { event in
                 guard let stage = InferenceDiagnosticStage(rawValue: event.stage.rawValue),
                       let state = InferenceDiagnosticState(rawValue: event.state.rawValue) else { return }

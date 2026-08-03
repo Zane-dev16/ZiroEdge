@@ -107,7 +107,23 @@ public actor LlamaEngine {
         modelParams.use_mmap = config.useMmap
         modelParams.n_gpu_layers = Int32(config.gpuLayers)
 
-        guard let loadedModel = llama_model_load_from_file(config.modelPath, modelParams) else {
+        let modelPointer: OpaquePointer?
+        if config.useAccelerator {
+            modelPointer = llama_model_load_from_file(config.modelPath, modelParams)
+        } else {
+            // The E4B multimodal graph aborts inside the BLAS backend while
+            // allocating image-prefill workspaces. Restrict this model to the
+            // general CPU device; native llama.cpp evaluation remains unchanged.
+            var devices: [OpaquePointer?] = [
+                ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU),
+                nil
+            ]
+            modelPointer = devices.withUnsafeMutableBufferPointer { buffer in
+                modelParams.devices = buffer.baseAddress
+                return llama_model_load_from_file(config.modelPath, modelParams)
+            }
+        }
+        guard let loadedModel = modelPointer else {
             llama_backend_free()
             isBackendInitialized = false
             throw LlamaError.modelLoadFailed(path: config.modelPath)
@@ -867,6 +883,7 @@ public struct LlamaConfigSwift: Sendable {
     public let useMmap: Bool
     public let f16KV: Bool
     public let gpuLayers: Int
+    public let useAccelerator: Bool
     public let diagnosticHandler: (@Sendable (LlamaDiagnosticEvent) -> Void)?
 
     public init(
@@ -879,6 +896,7 @@ public struct LlamaConfigSwift: Sendable {
         useMmap: Bool = true,
         f16KV: Bool = true,
         gpuLayers: Int = 0,
+        useAccelerator: Bool = true,
         diagnosticHandler: (@Sendable (LlamaDiagnosticEvent) -> Void)? = nil
     ) {
         self.modelPath = modelPath
@@ -893,6 +911,7 @@ public struct LlamaConfigSwift: Sendable {
         self.useMmap = useMmap
         self.f16KV = f16KV
         self.gpuLayers = gpuLayers
+        self.useAccelerator = useAccelerator
         self.diagnosticHandler = diagnosticHandler
     }
 }

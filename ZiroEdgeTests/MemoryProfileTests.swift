@@ -85,6 +85,7 @@ final class MemoryProfileTests: XCTestCase {
         XCTAssertEqual(model.config.contextLength, 4096)
         XCTAssertEqual(model.config.batchSize, 256)
         XCTAssertEqual(model.config.microBatchSize, 64)
+        XCTAssertFalse(model.config.useAccelerator)
         XCTAssertEqual(profile.contextLength, model.config.contextLength)
         XCTAssertEqual(profile.batchSize, model.config.batchSize)
         XCTAssertEqual(profile.microBatchSize, model.config.microBatchSize)

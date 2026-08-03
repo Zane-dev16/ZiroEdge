@@ -82,6 +82,9 @@ struct ModelConfiguration: Sendable, Hashable {
     /// Number of GPU layers. 0 = CPU-only for v1.
     let gpuLayers: Int
 
+    /// Whether accelerator-class CPU companions such as BLAS may receive ops.
+    let useAccelerator: Bool
+
     // MARK: - Presets
 
     /// Llama 3.2 — uses built-in chat template.
@@ -96,7 +99,8 @@ struct ModelConfiguration: Sendable, Hashable {
         threadCount: 2,
         useMmap: true,
         f16KV: true,
-        gpuLayers: 0
+        gpuLayers: 0,
+        useAccelerator: true
     )
 
     /// SmolVLM — vision model, raw prompt path. (Phase 2)
@@ -111,7 +115,8 @@ struct ModelConfiguration: Sendable, Hashable {
         threadCount: 2,
         useMmap: true,
         f16KV: true,
-        gpuLayers: 0
+        gpuLayers: 0,
+        useAccelerator: true
     )
 
     /// Gemma 4 — vision model, chat template. Requires BOS token.
@@ -126,7 +131,8 @@ struct ModelConfiguration: Sendable, Hashable {
         threadCount: 2,
         useMmap: true,
         f16KV: true,
-        gpuLayers: 0
+        gpuLayers: 0,
+        useAccelerator: true
     )
 
     /// E4B vision keeps the full context while bounding native multimodal
@@ -142,7 +148,8 @@ struct ModelConfiguration: Sendable, Hashable {
         threadCount: 2,
         useMmap: true,
         f16KV: true,
-        gpuLayers: 0
+        gpuLayers: 0,
+        useAccelerator: false
     )
 
     /// E4B text-only runtime shape. It shares the base artifact with E4B vision
@@ -158,7 +165,8 @@ struct ModelConfiguration: Sendable, Hashable {
         threadCount: 2,
         useMmap: true,
         f16KV: true,
-        gpuLayers: 0
+        gpuLayers: 0,
+        useAccelerator: true
     )
 
 #if DEBUG
@@ -174,7 +182,8 @@ struct ModelConfiguration: Sendable, Hashable {
         threadCount: 2,
         useMmap: true,
         f16KV: true,
-        gpuLayers: 0
+        gpuLayers: 0,
+        useAccelerator: true
     )
 #endif
 
@@ -190,6 +199,7 @@ struct ModelConfiguration: Sendable, Hashable {
         threadCount: 2,
         useMmap: true,
         f16KV: true,
-        gpuLayers: 0
+        gpuLayers: 0,
+        useAccelerator: true
     )
 }
