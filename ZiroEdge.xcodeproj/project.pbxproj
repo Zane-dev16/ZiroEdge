@@ -44,6 +44,7 @@
 		68E931510047D5F6407C810C /* MemoryProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5332CEBDE19F3D7C0E1CEE1C /* MemoryProfile.swift */; };
 		6B18737E73095D7D03349865 /* PersistenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 485FDC26529D0AF9B6E09E0B /* PersistenceTests.swift */; };
 		6B453409BFCB1A50CCC640EE /* DesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C563BC0716330716D90F31C /* DesignSystem.swift */; };
+		6DF40596B8A3D132F209FC63 /* VisionPhysicalUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3ECDFEE9FF62D5C415258BF /* VisionPhysicalUITests.swift */; };
 		6E284EC7281342E8F5C26AFC /* ModelPickerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A5A18C444159747CDBEDD3D /* ModelPickerTests.swift */; };
 		6FB1B465A0C9527F0385FF2F /* DurableTransferStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 706E0CCFEECB4F96F4DB42B0 /* DurableTransferStateTests.swift */; };
 		72281CE48FE3448A94C6CDE8 /* TestModelFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1631E6F3835369F5427EC553 /* TestModelFixtures.swift */; };
@@ -96,6 +97,7 @@
 		F0833C8DD27AA2BC75CAC5A8 /* DownloadDiagnosticsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60B5ACA1B08BF000F7CAA057 /* DownloadDiagnosticsTests.swift */; };
 		F308DB4C6A26B32606DFBBDF /* ConversationListViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7AEBED57984673F2549AD67F /* ConversationListViewModel.swift */; };
 		F3FC74980D5CDCA533C7B896 /* MemoryDiagnosticWorkload.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7D23A8928B6ADDC443C1B88 /* MemoryDiagnosticWorkload.swift */; };
+		F88E61C220A7F3A2F37D17B6 /* VisionSmokeWorkload.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEDFCE170C9646AA22585867 /* VisionSmokeWorkload.swift */; };
 		F8CA62762C22A5CD9E09B2F8 /* PairedArtifactCoordinationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F19CDC2A27AA8D87C05842D /* PairedArtifactCoordinationTests.swift */; };
 		FAFB727A010ED8FB1963778B /* DownloadState.swift in Sources */ = {isa = PBXBuildFile; fileRef = C09C23838F2034257261C411 /* DownloadState.swift */; };
 		FDE0F52ABC748EF79A2929A1 /* PersistenceFaultInjector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56DDE5E583F5AFAE2B9B6245 /* PersistenceFaultInjector.swift */; };
@@ -192,6 +194,7 @@
 		B6DA982AEED4B0B01A4DD438 /* AppStoreScreenshotCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStoreScreenshotCapture.swift; sourceTree = "<group>"; };
 		B819FB39EB71743F91968C40 /* PersistenceController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceController.swift; sourceTree = "<group>"; };
 		B97FFCF1F1F8219AD2DE8557 /* PersistenceRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceRecoveryTests.swift; sourceTree = "<group>"; };
+		BEDFCE170C9646AA22585867 /* VisionSmokeWorkload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisionSmokeWorkload.swift; sourceTree = "<group>"; };
 		C09C23838F2034257261C411 /* DownloadState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadState.swift; sourceTree = "<group>"; };
 		C6ADBDBAD091EDC6CCD412E3 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
 		CDA3D7504BF8CD7CDA9BE445 /* ChatUXTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatUXTests.swift; sourceTree = "<group>"; };
@@ -204,6 +207,7 @@
 		DA21BAD9C35A80778AADBEE7 /* PersistenceFailure.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceFailure.swift; sourceTree = "<group>"; };
 		DDB90E3A144D9EADA2BDCE0F /* ModelRegistryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelRegistryTests.swift; sourceTree = "<group>"; };
 		E1A40DF4E9C684D2C73CBEE7 /* LicenseView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LicenseView.swift; sourceTree = "<group>"; };
+		E3ECDFEE9FF62D5C415258BF /* VisionPhysicalUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisionPhysicalUITests.swift; sourceTree = "<group>"; };
 		E4FDCEB0FB8905282D56942E /* TransportValidationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransportValidationTests.swift; sourceTree = "<group>"; };
 		E804CE9CD5E2D9033BD63AA4 /* THIRD_PARTY_NOTICES.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = THIRD_PARTY_NOTICES.md; sourceTree = "<group>"; };
 		E90E46A0BC63141AA92DABA4 /* StoreRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreRecoveryTests.swift; sourceTree = "<group>"; };
@@ -265,6 +269,7 @@
 				A8D94313D2D76FE77C664F93 /* ModelTests.swift */,
 				B419666F06F2A205EEB84328 /* RAMDiagnosticUITests.swift */,
 				7DDE172A4D2ECAC5AA71B1A5 /* SmokeTests.swift */,
+				E3ECDFEE9FF62D5C415258BF /* VisionPhysicalUITests.swift */,
 			);
 			path = ZiroEdgeUITests;
 			sourceTree = "<group>";
@@ -318,6 +323,7 @@
 				EC14064A3EB475793BC2A21E /* ModelMigrationService.swift */,
 				54E6FF39109A4FBD92979287 /* OfflineAvailabilityGuard.swift */,
 				262A76C9592C6D8819EBA905 /* TitleGenerator.swift */,
+				BEDFCE170C9646AA22585867 /* VisionSmokeWorkload.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -614,6 +620,7 @@
 				8A5F0F2DCAB0221F57D83B0A /* RAMDiagnosticUITests.swift in Sources */,
 				66F76D92B9DB37CED1C2AA59 /* SmokeTests.swift in Sources */,
 				B7F90E369C5CF5C206A89482 /* UITestBase.swift in Sources */,
+				6DF40596B8A3D132F209FC63 /* VisionPhysicalUITests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -664,6 +671,7 @@
 				3A8725DD5249D23F4A2CF381 /* StoreRecoveryCoordinator.swift in Sources */,
 				601F0B6819F471C9AC77434E /* StoreRecoveryView.swift in Sources */,
 				61EA4F7A284273D18A1B4DFD /* TitleGenerator.swift in Sources */,
+				F88E61C220A7F3A2F37D17B6 /* VisionSmokeWorkload.swift in Sources */,
 				B298DF37B1DEC3EAC1F7A6F4 /* ZiroEdgeApp.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

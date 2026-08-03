@@ -154,6 +154,8 @@ xcodebuild test \
 	-parallel-testing-enabled NO \
 	-only-testing:ZiroEdgeTests/MemoryBudgeterTests \
 	-only-testing:ZiroEdgeTests/RAMDiagnosticTests \
+	-only-testing:ZiroEdgeTests/MemoryProfileTests \
+	-only-testing:ZiroEdgeTests/InferenceDiagnosticTests \
 	2>&1 | tee "$OUTPUT_DIR/unit-tests.log"
 UNIT_TEST_STATUS=${PIPESTATUS[0]}
 
@@ -230,6 +232,18 @@ PY
 		fi
 	else
 		echo "[RAM-DIAGNOSE] ERROR: devicectl copy of memory-diagnostic.jsonl failed (device may be locked or app terminated)" >&2
+		ARTIFACT_FAILURE=1
+	fi
+
+	INFERENCE_DEST="$OUTPUT_DIR/inference-diagnostic.jsonl"
+	if ! xcrun devicectl device copy from \
+		--device "$DEVICE_ID" \
+		--domain-type appDataContainer \
+		--domain-identifier com.zanish-labs.ziroedge \
+		--source Documents/inference-diagnostic.jsonl \
+		--destination "$INFERENCE_DEST" \
+		--timeout 60 2>&1 || [[ ! -s "$INFERENCE_DEST" ]]; then
+		echo "[RAM-DIAGNOSE] ERROR: complete inference checkpoint JSONL was not retained" >&2
 		ARTIFACT_FAILURE=1
 	fi
 fi

@@ -49,6 +49,8 @@ final class RAMDiagnosticUITests: UITestBase {
             "--memory-diagnostic-reset",
             "--calibration-memory-load",
             "--memory-diagnostic-workload",
+            "--vision-diagnostic",
+            "--vision-diagnostic-reset",
             "--memory-profile-id",
             modelID
         ]
