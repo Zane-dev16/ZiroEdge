@@ -157,7 +157,7 @@ enum MemoryProfileRegistry {
 
     static let e4bVision = MemoryProfile(
         id: "gemma4-e4b-vision-p1", modelID: ModelRegistry.gemma4_e4b.id,
-        mode: .vision, contextLength: 4096, batchSize: 512, microBatchSize: 128,
+        mode: .vision, contextLength: 4096, batchSize: 256, microBatchSize: 64,
         projectorPolicy: .required, evidenceStatus: .unvalidated, policyVersion: 1,
         measuredFullWorkloadPeakDeltaBytes: nil, measuredLoadDeltaBytes: nil,
         safetyMultiplier: 1.25, fixedReserveBytes: 750_000_000,

@@ -129,6 +129,22 @@ struct ModelConfiguration: Sendable, Hashable {
         gpuLayers: 0
     )
 
+    /// E4B vision keeps the full context while bounding native multimodal
+    /// evaluation batches to avoid a BLAS allocation abort during image prefill.
+    static let gemma4E4BVision = ModelConfiguration(
+        promptPath: .gemma,
+        addBos: true,
+        stopStrings: ["<end_of_turn>"],
+        defaultSampling: .greedy,
+        contextLength: 4096,
+        batchSize: 256,
+        microBatchSize: 64,
+        threadCount: 2,
+        useMmap: true,
+        f16KV: true,
+        gpuLayers: 0
+    )
+
     /// E4B text-only runtime shape. It shares the base artifact with E4B vision
     /// but has independent evidence and never initializes a projector.
     static let gemma4E4BText = ModelConfiguration(

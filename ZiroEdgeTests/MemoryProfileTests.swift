@@ -78,6 +78,19 @@ final class MemoryProfileTests: XCTestCase {
         XCTAssertEqual(try profile.requiredProcessHeadroomBytes(), 1_150_000_000)
     }
 
+    func testE4BVisionUsesMemoryBoundedNativeEvaluationShape() {
+        let model = ModelRegistry.gemma4_e4b
+        let profile = MemoryProfileRegistry.e4bVision
+
+        XCTAssertEqual(model.config.contextLength, 4096)
+        XCTAssertEqual(model.config.batchSize, 256)
+        XCTAssertEqual(model.config.microBatchSize, 64)
+        XCTAssertEqual(profile.contextLength, model.config.contextLength)
+        XCTAssertEqual(profile.batchSize, model.config.batchSize)
+        XCTAssertEqual(profile.microBatchSize, model.config.microBatchSize)
+        XCTAssertEqual(profile.evidenceStatus, .unvalidated)
+    }
+
     func testE4BTextPromotionDoesNotPromoteVisionOrCalibrationIdentity() {
         XCTAssertTrue(ModelRegistry.productionModels.contains { $0.id == ModelRegistry.gemma4_e4b_text.id })
         XCTAssertFalse(ModelRegistry.productionModels.contains { $0.id == ModelRegistry.gemma4_e4b.id })
