@@ -212,6 +212,8 @@ struct MainView: View {
     @State private var compactPath: [UUID] = []
 #if DEBUG
     @State private var memoryDiagnosticWorkloadState = "workload-starting"
+    @State private var visionSmokeState = "smoke-starting"
+    @State private var visionSmokeResponse = ""
 #endif
 
     private var hasModels: Bool {
@@ -285,7 +287,8 @@ struct MainView: View {
         }
 #if DEBUG
         .task {
-            guard MemoryDiagnosticRecorder.shared.controlledWorkloadEnabled else { return }
+            guard MemoryDiagnosticRecorder.shared.controlledWorkloadEnabled,
+                  !VisionSmokeWorkload.isEnabled else { return }
             memoryDiagnosticWorkloadState = await MemoryDiagnosticWorkload.run(
                 lifecycleManager: lifecycleManager,
                 inferenceService: inferenceService
@@ -293,8 +296,26 @@ struct MainView: View {
                 memoryDiagnosticWorkloadState = state
             }
         }
+        .task {
+            guard VisionSmokeWorkload.isEnabled else { return }
+            let result = await VisionSmokeWorkload.run(
+                lifecycleManager: lifecycleManager,
+                inferenceService: inferenceService
+            )
+            visionSmokeState = result.outcome
+            visionSmokeResponse = result.response
+        }
         .overlay(alignment: .bottom) {
-            if MemoryDiagnosticRecorder.shared.isEnabled {
+            if VisionSmokeWorkload.isEnabled {
+                VStack {
+                    Text(visionSmokeState)
+                        .accessibilityIdentifier("vision-smoke-state")
+                    Text(visionSmokeResponse)
+                        .accessibilityIdentifier("vision-smoke-response")
+                }
+                .font(.caption2)
+                .padding(4)
+            } else if MemoryDiagnosticRecorder.shared.isEnabled {
                 Text(memoryDiagnosticState)
                     .font(.caption2)
                     .accessibilityIdentifier("memory-diagnostic-state")

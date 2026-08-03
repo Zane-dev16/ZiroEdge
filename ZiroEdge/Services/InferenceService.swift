@@ -130,7 +130,7 @@ actor InferenceService: InferenceServiceProtocol {
         // Unload any existing model first.
         unloadInternal()
 
-        logger.info("Loading model: \(model.id, privacy: .public) from \(baseURL.path, privacy: .public)")
+        logger.info("Loading model: \(model.id, privacy: .public)")
 
 #if DEBUG
         if HermeticUITestRuntime.isEnabled, model.id == ModelRegistry.llama32_3B.id {
@@ -174,7 +174,20 @@ actor InferenceService: InferenceServiceProtocol {
             threadCount: config.threadCount,
             useMmap: config.useMmap,
             f16KV: config.f16KV,
-            gpuLayers: config.gpuLayers
+            gpuLayers: config.gpuLayers,
+            diagnosticHandler: { event in
+                guard let stage = InferenceDiagnosticStage(rawValue: event.stage.rawValue),
+                      let state = InferenceDiagnosticState(rawValue: event.state.rawValue) else { return }
+                InferenceDiagnosticRecorder.shared.record(
+                    modelID: model.id,
+                    requestID: event.requestID,
+                    stage: stage,
+                    state: state,
+                    elapsedMilliseconds: event.elapsedMilliseconds,
+                    primaryCount: event.primaryCount,
+                    secondaryCount: event.secondaryCount
+                )
+            }
         )
 
         // Persist immediately before native construction, including direct service callers.

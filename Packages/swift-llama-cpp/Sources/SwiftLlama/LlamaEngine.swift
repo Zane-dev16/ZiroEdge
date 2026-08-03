@@ -9,6 +9,66 @@ import Foundation
 import llama
 import os
 
+public enum LlamaDiagnosticStage: String, Sendable {
+    case modelLoad
+    case baseLoad
+    case projectorLoad
+    case projectorInitialization
+    case imageDecode
+    case imagePreprocess
+    case imageEmbedding
+    case imageEvaluation
+    case promptTokenization
+    case promptPrefill
+    case firstToken
+    case firstTokenEOS
+    case completion
+    case error
+    case cancellation
+}
+
+public enum LlamaDiagnosticState: String, Sendable {
+    case start
+    case end
+    case event
+    case failure
+    case cancelled
+}
+
+public struct LlamaDiagnosticEvent: Sendable {
+    public let requestID: String?
+    public let stage: LlamaDiagnosticStage
+    public let state: LlamaDiagnosticState
+    public let elapsedMilliseconds: UInt64?
+    public let primaryCount: Int?
+    public let secondaryCount: Int?
+
+    init(
+        requestID: String?,
+        stage: LlamaDiagnosticStage,
+        state: LlamaDiagnosticState,
+        elapsedMilliseconds: UInt64? = nil,
+        primaryCount: Int? = nil,
+        secondaryCount: Int? = nil
+    ) {
+        self.requestID = requestID
+        self.stage = stage
+        self.state = state
+        self.elapsedMilliseconds = elapsedMilliseconds
+        self.primaryCount = primaryCount
+        self.secondaryCount = secondaryCount
+    }
+}
+
+private extension ContinuousClock.Instant {
+    var diagnosticElapsedMilliseconds: UInt64 {
+        let components = duration(to: .now).components
+        guard components.seconds >= 0, components.attoseconds >= 0 else { return 0 }
+        return UInt64(components.seconds) * 1_000
+            + UInt64(components.attoseconds / 1_000_000_000_000_000)
+    }
+}
+
 // MARK: - Llama Engine
 
 /// The core engine wrapping llama.cpp. Actor-isolated for thread safety.
@@ -31,6 +91,13 @@ public actor LlamaEngine {
 
     public init(config: LlamaConfigSwift) throws {
         self.config = config
+        let modelLoadStarted = ContinuousClock.now
+        config.diagnosticHandler?(LlamaDiagnosticEvent(
+            requestID: nil, stage: .modelLoad, state: .start
+        ))
+        config.diagnosticHandler?(LlamaDiagnosticEvent(
+            requestID: nil, stage: .baseLoad, state: .start
+        ))
 
         llama_backend_init()
         isBackendInitialized = true
@@ -47,6 +114,12 @@ public actor LlamaEngine {
         }
         model = loadedModel
         vocabulary = llama_model_get_vocab(loadedModel)
+        config.diagnosticHandler?(LlamaDiagnosticEvent(
+            requestID: nil,
+            stage: .baseLoad,
+            state: .end,
+            elapsedMilliseconds: modelLoadStarted.diagnosticElapsedMilliseconds
+        ))
 
         guard let vocab = vocabulary else {
             llama_model_free(loadedModel)
@@ -77,6 +150,13 @@ public actor LlamaEngine {
 
         // Initialize multimodal context if mmprojPath is provided.
         if let mmprojPath = config.mmprojPath {
+            let projectorStarted = ContinuousClock.now
+            config.diagnosticHandler?(LlamaDiagnosticEvent(
+                requestID: nil, stage: .projectorLoad, state: .start
+            ))
+            config.diagnosticHandler?(LlamaDiagnosticEvent(
+                requestID: nil, stage: .projectorInitialization, state: .start
+            ))
             var mtmdParams = mtmd_context_params_default()
             mtmdParams.n_threads = Int32(config.threadCount)
             mtmdParams.use_gpu = false  // CPU-only for v1
@@ -91,10 +171,28 @@ public actor LlamaEngine {
                 isBackendInitialized = false
                 throw LlamaError.projectorInitializationFailed
             }
+            config.diagnosticHandler?(LlamaDiagnosticEvent(
+                requestID: nil,
+                stage: .projectorInitialization,
+                state: .end,
+                elapsedMilliseconds: projectorStarted.diagnosticElapsedMilliseconds
+            ))
+            config.diagnosticHandler?(LlamaDiagnosticEvent(
+                requestID: nil,
+                stage: .projectorLoad,
+                state: .end,
+                elapsedMilliseconds: projectorStarted.diagnosticElapsedMilliseconds
+            ))
             logger.info("Multimodal context initialized")
         }
 
-        logger.info("Model loaded: \(config.modelPath, privacy: .public) ctx=\(config.contextLength) threads=\(config.threadCount)")
+        config.diagnosticHandler?(LlamaDiagnosticEvent(
+            requestID: nil,
+            stage: .modelLoad,
+            state: .end,
+            elapsedMilliseconds: modelLoadStarted.diagnosticElapsedMilliseconds
+        ))
+        logger.info("Model loaded ctx=\(config.contextLength) threads=\(config.threadCount)")
     }
 
     deinit {
@@ -260,26 +358,31 @@ extension LlamaEngine {
         }
 
         isCancelled = false
+        let requestID = UUID().uuidString.lowercased()
 
         return AsyncThrowingStream<String, Error> { continuation in
             Task {
+                let requestStarted = ContinuousClock.now
                 do {
-                    // Tokenize prompt.
+                    let tokenizationStarted = ContinuousClock.now
+                    emit(requestID, .promptTokenization, .start)
                     let tokens = try tokenize(
                         prompt: prompt,
                         addBos: addBos,
                         parseSpecial: parseSpecial,
                         vocab: vocab
                     )
-                    guard !tokens.isEmpty else {
-                        throw LlamaError.tokenizationFailed
-                    }
+                    guard !tokens.isEmpty else { throw LlamaError.tokenizationFailed }
+                    emit(
+                        requestID, .promptTokenization, .end,
+                        elapsedMilliseconds: tokenizationStarted.diagnosticElapsedMilliseconds,
+                        primaryCount: tokens.count
+                    )
 
-                    // Clear memory.
                     let mem = llama_get_memory(ctx)
                     llama_memory_clear(mem, true)
-
-                    // Bound logical prompt batches; llama.cpp further splits these at n_ubatch.
+                    let prefillStarted = ContinuousClock.now
+                    emit(requestID, .promptPrefill, .start)
                     for range in try Self.promptBatchRanges(
                         tokenCount: tokens.count,
                         batchSize: config.batchSize
@@ -297,18 +400,30 @@ extension LlamaEngine {
                         llama_batch_free(batch)
                         guard decodeResult == 0 else { throw LlamaError.decodeFailed }
                     }
+                    emit(
+                        requestID, .promptPrefill, .end,
+                        elapsedMilliseconds: prefillStarted.diagnosticElapsedMilliseconds,
+                        primaryCount: tokens.count
+                    )
 
-                    // Create sampler chain.
                     let sampler = try createSamplerChain(sampling: sampling, vocab: vocab)
                     defer { llama_sampler_free(sampler) }
-
-                    // Generate tokens using shared generation loop.
-                    try generateTokens(
+                    let generated = try generateTokens(
+                        requestID: requestID,
                         startPos: Int32(tokens.count), sampler: sampler, vocab: vocab,
                         stopStrings: stopStrings, sampling: sampling, continuation: continuation
                     )
+                    emit(
+                        requestID, .completion, .end,
+                        elapsedMilliseconds: requestStarted.diagnosticElapsedMilliseconds,
+                        primaryCount: generated
+                    )
                     continuation.finish()
                 } catch {
+                    emit(
+                        requestID, .error, .failure,
+                        elapsedMilliseconds: requestStarted.diagnosticElapsedMilliseconds
+                    )
                     continuation.finish(throwing: error)
                 }
             }
@@ -355,11 +470,12 @@ extension LlamaEngine {
         }
 
         isCancelled = false
+        let requestID = UUID().uuidString.lowercased()
 
         return AsyncThrowingStream<String, Error> { continuation in
             Task {
+                let requestStarted = ContinuousClock.now
                 do {
-                    // Create bitmaps from image data.
                     var bitmaps: [OpaquePointer?] = []
                     defer {
                         for bitmapPtr in bitmaps {
@@ -368,6 +484,9 @@ extension LlamaEngine {
                     }
 
                     for imageData in images {
+                        let imageStarted = ContinuousClock.now
+                        emit(requestID, .imageDecode, .start, primaryCount: imageData.count)
+                        emit(requestID, .imagePreprocess, .start)
                         var wrapper = mtmd_helper_bitmap_wrapper(bitmap: nil, video_ctx: nil)
                         imageData.withUnsafeBytes { rawPtr in
                             if let addr = rawPtr.baseAddress {
@@ -382,6 +501,18 @@ extension LlamaEngine {
                         guard let bitmap = wrapper.bitmap else {
                             throw LlamaError.visionImageLoadFailed
                         }
+                        let width = Int(mtmd_bitmap_get_nx(bitmap))
+                        let height = Int(mtmd_bitmap_get_ny(bitmap))
+                        emit(
+                            requestID, .imageDecode, .end,
+                            elapsedMilliseconds: imageStarted.diagnosticElapsedMilliseconds,
+                            primaryCount: width, secondaryCount: height
+                        )
+                        emit(
+                            requestID, .imagePreprocess, .end,
+                            elapsedMilliseconds: imageStarted.diagnosticElapsedMilliseconds,
+                            primaryCount: Int(mtmd_bitmap_get_n_bytes(bitmap))
+                        )
                         bitmaps.append(bitmap)
                     }
 
@@ -398,7 +529,8 @@ extension LlamaEngine {
                     }
                     defer { mtmd_input_chunks_free(chunks) }
 
-                    // Tokenize prompt with image markers.
+                    let tokenizationStarted = ContinuousClock.now
+                    emit(requestID, .promptTokenization, .start)
                     var bitmapPtrs = bitmaps
                     let tokenizeResult = prompt.withCString { cstr in
                         inputText.text = cstr
@@ -406,17 +538,23 @@ extension LlamaEngine {
                             mtmd_tokenize(mCtx, chunks, &inputText, bufPtr.baseAddress, images.count)
                         }
                     }
+                    guard tokenizeResult == 0 else { throw LlamaError.tokenizationFailed }
+                    let multimodalTokenCount = Int(mtmd_helper_get_n_tokens(chunks))
+                    emit(
+                        requestID, .promptTokenization, .end,
+                        elapsedMilliseconds: tokenizationStarted.diagnosticElapsedMilliseconds,
+                        primaryCount: multimodalTokenCount,
+                        secondaryCount: images.count
+                    )
 
-                    guard tokenizeResult == 0 else {
-                        throw LlamaError.tokenizationFailed
-                    }
-
-                    // Clear KV memory.
                     let mem = llama_get_memory(ctx)
                     llama_memory_clear(mem, true)
 
-                    // Evaluate all chunks (text + image embeddings).
                     var newNPast: llama_pos = 0
+                    let evaluationStarted = ContinuousClock.now
+                    emit(requestID, .imageEmbedding, .start, primaryCount: images.count)
+                    emit(requestID, .imageEvaluation, .start)
+                    emit(requestID, .promptPrefill, .start)
                     let evalResult = mtmd_helper_eval_chunks(
                         mCtx,
                         ctx,
@@ -428,21 +566,42 @@ extension LlamaEngine {
                         &newNPast
                     )
 
-                    guard evalResult == 0 else {
-                        throw LlamaError.decodeFailed
-                    }
+                    guard evalResult == 0 else { throw LlamaError.decodeFailed }
+                    let evaluationElapsed = evaluationStarted.diagnosticElapsedMilliseconds
+                    emit(
+                        requestID, .imageEmbedding, .end,
+                        elapsedMilliseconds: evaluationElapsed,
+                        primaryCount: multimodalTokenCount
+                    )
+                    emit(
+                        requestID, .imageEvaluation, .end,
+                        elapsedMilliseconds: evaluationElapsed,
+                        primaryCount: Int(newNPast)
+                    )
+                    emit(
+                        requestID, .promptPrefill, .end,
+                        elapsedMilliseconds: evaluationElapsed,
+                        primaryCount: Int(newNPast)
+                    )
 
-                    // Create sampler chain.
                     let sampler = try createSamplerChain(sampling: sampling, vocab: vocab)
                     defer { llama_sampler_free(sampler) }
-
-                    // Generate tokens using shared generation loop.
-                    try generateTokens(
+                    let generated = try generateTokens(
+                        requestID: requestID,
                         startPos: newNPast, sampler: sampler, vocab: vocab,
                         stopStrings: stopStrings, sampling: sampling, continuation: continuation
                     )
+                    emit(
+                        requestID, .completion, .end,
+                        elapsedMilliseconds: requestStarted.diagnosticElapsedMilliseconds,
+                        primaryCount: generated
+                    )
                     continuation.finish()
                 } catch {
+                    emit(
+                        requestID, .error, .failure,
+                        elapsedMilliseconds: requestStarted.diagnosticElapsedMilliseconds
+                    )
                     continuation.finish(throwing: error)
                 }
             }
@@ -467,6 +626,24 @@ extension LlamaEngine {
 }
 
 private extension LlamaEngine {
+    func emit(
+        _ requestID: String?,
+        _ stage: LlamaDiagnosticStage,
+        _ state: LlamaDiagnosticState,
+        elapsedMilliseconds: UInt64? = nil,
+        primaryCount: Int? = nil,
+        secondaryCount: Int? = nil
+    ) {
+        config.diagnosticHandler?(LlamaDiagnosticEvent(
+            requestID: requestID,
+            stage: stage,
+            state: state,
+            elapsedMilliseconds: elapsedMilliseconds,
+            primaryCount: primaryCount,
+            secondaryCount: secondaryCount
+        ))
+    }
+
     // MARK: - Sampler Chain
 
     private func createSamplerChain(
@@ -599,13 +776,14 @@ private extension LlamaEngine {
 
     /// Shared autoregressive generation loop used by both text and vision streaming.
     private func generateTokens(
+        requestID: String,
         startPos: llama_pos,
         sampler: UnsafeMutablePointer<llama_sampler>,
         vocab: OpaquePointer,
         stopStrings: [String],
         sampling: SamplingConfigSwift,
         continuation: AsyncThrowingStream<String, Error>.Continuation
-    ) throws {
+    ) throws -> Int {
         guard let ctx = context else { throw LlamaError.modelNotLoaded }
 
         var nPos = startPos
@@ -613,10 +791,22 @@ private extension LlamaEngine {
         var nGenerated = 0
         let maxTokens = sampling.maxTokens > 0 ? sampling.maxTokens : 2048
 
+        var observedFirstToken = false
         while nPos < Int32(config.contextLength) && nGenerated < maxTokens {
-            if self.isCancelled || Task.isCancelled { break }
+            if self.isCancelled || Task.isCancelled {
+                emit(requestID, .cancellation, .cancelled, primaryCount: nGenerated)
+                break
+            }
 
             let newTokenID = llama_sampler_sample(sampler, ctx, -1)
+            if !observedFirstToken {
+                observedFirstToken = true
+                if newTokenID == self.eosTokenID {
+                    emit(requestID, .firstTokenEOS, .event)
+                } else {
+                    emit(requestID, .firstToken, .event)
+                }
+            }
             if newTokenID == self.eosTokenID { break }
 
             let tokenText = tokenToText(token: newTokenID, vocab: vocab)
@@ -661,6 +851,7 @@ private extension LlamaEngine {
         }
 
         if !pendingBuffer.isEmpty { continuation.yield(pendingBuffer) }
+        return nGenerated
     }
 }
 
@@ -676,6 +867,7 @@ public struct LlamaConfigSwift: Sendable {
     public let useMmap: Bool
     public let f16KV: Bool
     public let gpuLayers: Int
+    public let diagnosticHandler: (@Sendable (LlamaDiagnosticEvent) -> Void)?
 
     public init(
         modelPath: String,
@@ -686,7 +878,8 @@ public struct LlamaConfigSwift: Sendable {
         threadCount: Int = 2,
         useMmap: Bool = true,
         f16KV: Bool = true,
-        gpuLayers: Int = 0
+        gpuLayers: Int = 0,
+        diagnosticHandler: (@Sendable (LlamaDiagnosticEvent) -> Void)? = nil
     ) {
         self.modelPath = modelPath
         self.mmprojPath = mmprojPath
@@ -700,6 +893,7 @@ public struct LlamaConfigSwift: Sendable {
         self.useMmap = useMmap
         self.f16KV = f16KV
         self.gpuLayers = gpuLayers
+        self.diagnosticHandler = diagnosticHandler
     }
 }
 
