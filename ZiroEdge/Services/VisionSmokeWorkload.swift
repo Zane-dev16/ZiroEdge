@@ -49,6 +49,9 @@ enum VisionSmokeWorkload {
             guard !trimmed.isEmpty else {
                 return VisionSmokeResult(outcome: "smoke-empty-response", response: "")
             }
+            guard responseDescribesFixture(trimmed) else {
+                return VisionSmokeResult(outcome: "smoke-ungrounded-response", response: trimmed)
+            }
 
             let events = try InferenceDiagnosticRecorder.shared.readEvents()
                 .filter { $0.modelID == model.id }
@@ -77,11 +80,16 @@ enum VisionSmokeWorkload {
         }
     }
 
-    /// A deterministic red image generated in-process with no user data.
+    /// A deterministic red image with a centered blue square and no user data.
     private static func deterministicImage() throws -> Data {
-        let base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlYl1sAAAAASUVORK5CYII="
+        let base64 = "iVBORw0KGgoAAAANSUhEUgAAAIAAAACACAIAAABMXPacAAAA4ElEQVR42u3RAQkAAAgEse9fWlOIKINLcEslWswCAAAEAIAAABAAAAIAQAAACAAAAQAgAAAEAIAAABAAAAIAQAAACAAAXQC4vggAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD4ACAAAAQAgAAAEAAAAgBAAAAIAAABAABAAAAIAAABACAAAAQAgAAAEAAAGq8BPojDsgW5nPIAAAAASUVORK5CYII="
         guard let data = Data(base64Encoded: base64) else { throw SmokeError.fixtureUnavailable }
         return data
+    }
+
+    static func responseDescribesFixture(_ response: String) -> Bool {
+        let normalized = response.lowercased()
+        return ["red", "blue", "square"].contains { normalized.contains($0) }
     }
 
     private enum SmokeError: Error {

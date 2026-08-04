@@ -93,4 +93,11 @@ final class InferenceDiagnosticTests: XCTestCase {
             "baseLoad.end → projectorInitialization.end"
         )
     }
+
+    @MainActor
+    func testVisionSmokeRequiresAVisualFixtureDetail() {
+        XCTAssertTrue(VisionSmokeWorkload.responseDescribesFixture("A blue square on a red background."))
+        XCTAssertFalse(VisionSmokeWorkload.responseDescribesFixture("The image is completely blank white."))
+        XCTAssertFalse(VisionSmokeWorkload.responseDescribesFixture("I cannot identify the image."))
+    }
 }
