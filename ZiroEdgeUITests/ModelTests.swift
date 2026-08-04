@@ -150,27 +150,33 @@ final class PhysicalE4BTextUITests: XCTestCase {
     }
 
     private func openConversation() throws {
-        let deadline = Date().addingTimeInterval(30)
-        let input = app.textFields["chatInput"].firstMatch
-        if input.exists { return }
+        let newConversation = app.buttons["New Conversation"].firstMatch
+        require(
+            newConversation.waitForExistence(timeout: 30),
+            "Ordinary app did not expose the public New Conversation button within 30 seconds",
+            screenshot: "new_conversation_missing",
+            includeHierarchy: true
+        )
+        newConversation.tap()
 
-        // Use a conversation already visible in the public sidebar. Creating a
-        // conversation can itself depend on model eligibility, which is the
-        // behavior this RED test must observe at the picker rather than bypass.
-        let conversation = app.otherElements.matching(
-            NSPredicate(format: "label CONTAINS %@", " messages, updated ")
-        ).firstMatch
-        let remainingForConversation = max(0, deadline.timeIntervalSinceNow)
-        if conversation.waitForExistence(timeout: remainingForConversation) {
-            conversation.tap()
-            let remainingForInput = max(0, deadline.timeIntervalSinceNow)
-            if input.waitForExistence(timeout: remainingForInput) { return }
+        let input = app.textFields["chatInput"].firstMatch
+        let browseModels = app.buttons["Browse Models"].firstMatch
+        let deadline = Date().addingTimeInterval(30)
+        while Date() < deadline {
+            require(
+                !browseModels.exists,
+                "Public New Conversation redirected to Browse Models instead of ordinary chat",
+                screenshot: "new_conversation_redirected_to_browse_models",
+                includeHierarchy: true
+            )
+            if input.exists { return }
+            RunLoop.current.run(until: Date().addingTimeInterval(1))
         }
 
         require(
             false,
-            "Ordinary app did not expose an existing chat conversation within 30 seconds",
-            screenshot: "chat_navigation_timeout",
+            "Public New Conversation did not expose chat input within 30 seconds",
+            screenshot: "new_conversation_chat_timeout",
             includeHierarchy: true
         )
     }
