@@ -27,6 +27,13 @@ struct ZiroEdgeApp: App {
         }
     }
 
+    static func shouldAutoLoadFirstModel(
+        arguments: [String],
+        controlledWorkloadEnabled: Bool
+    ) -> Bool {
+        arguments.contains("--uitesting") && !controlledWorkloadEnabled
+    }
+
     static func sanitizedDiagnosticMessage(_ message: String) -> String {
         var sanitized = message
         let patterns = [
@@ -122,7 +129,10 @@ struct ZiroEdgeApp: App {
                 ModelMigrationService.migrateIfNeeded()
                 ModelManagerService.ensureModelsDirectory()
                 await services.conversationListViewModel.loadConversations()
-                if CommandLine.arguments.contains("--uitesting") {
+                if Self.shouldAutoLoadFirstModel(
+                    arguments: CommandLine.arguments,
+                    controlledWorkloadEnabled: MemoryDiagnosticRecorder.shared.controlledWorkloadEnabled
+                ) {
                     await services.lifecycleManager.autoLoadFirstModel()
                 }
 #if DEBUG
@@ -276,14 +286,6 @@ struct MainView: View {
 #if DEBUG
         .task {
             guard MemoryDiagnosticRecorder.shared.controlledWorkloadEnabled else { return }
-            for _ in 0..<240 where !lifecycleManager.isModelLoaded {
-                if lifecycleManager.currentState == .loadFailed { break }
-                try? await Task.sleep(for: .milliseconds(250))
-            }
-            guard lifecycleManager.isModelLoaded else {
-                memoryDiagnosticWorkloadState = "workload-failed-initial-load"
-                return
-            }
             memoryDiagnosticWorkloadState = await MemoryDiagnosticWorkload.run(
                 lifecycleManager: lifecycleManager,
                 inferenceService: inferenceService

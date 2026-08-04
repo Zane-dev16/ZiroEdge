@@ -73,4 +73,22 @@ final class RAMDiagnosticTests: XCTestCase {
             )
         )
     }
+
+    func testControlledWorkloadSkipsUITestModelPreload() {
+        XCTAssertFalse(
+            ZiroEdgeApp.shouldAutoLoadFirstModel(
+                arguments: ["ZiroEdge", "--uitesting", "--memory-diagnostic-workload"],
+                controlledWorkloadEnabled: true
+            )
+        )
+    }
+
+    func testStandardUITestingStillPreloadsFirstModel() {
+        XCTAssertTrue(
+            ZiroEdgeApp.shouldAutoLoadFirstModel(
+                arguments: ["ZiroEdge", "--uitesting"],
+                controlledWorkloadEnabled: false
+            )
+        )
+    }
 }
