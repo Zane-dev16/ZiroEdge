@@ -34,6 +34,18 @@ class ValidateMemoryCalibrationTests(unittest.TestCase):
         records.append(self.record(run_id, model_id, "foreground", 5, 20, 995))
         return records
 
+    def vision_records(self):
+        records = self.records()
+        for record in records:
+            record["modelID"] = "gemma-4-e4b-q4"
+        for cycle in range(1, 6):
+            records.append(
+                self.record(
+                    "run", "gemma-4-e4b-q4", "firstImageEval", cycle, None, 1700
+                )
+            )
+        return records
+
     def record(self, run_id, model_id, checkpoint, cycle, turn, footprint):
         return {
             "runID": run_id,
@@ -54,6 +66,42 @@ class ValidateMemoryCalibrationTests(unittest.TestCase):
         self.assertEqual(summary["cycles"], 5)
         self.assertEqual(summary["prompts"], 20)
         self.assertEqual(summary["requiredProcessHeadroomBytes"], 850_000_000)
+
+    def test_complete_vision_run_with_one_image_evaluation_per_cycle_is_accepted(self):
+        summary = validate_records(self.vision_records(), "gemma-4-e4b-q4", "vision")
+        self.assertTrue(summary["accepted"])
+
+    def test_vision_run_with_missing_image_evaluation_is_rejected(self):
+        records = self.vision_records()
+        records = [
+            record
+            for record in records
+            if not (
+                record["checkpoint"] == "firstImageEval" and record["cycle"] == 3
+            )
+        ]
+        with self.assertRaises(CalibrationValidationError):
+            validate_records(records, "gemma-4-e4b-q4", "vision")
+
+    def test_vision_run_with_duplicate_image_evaluation_is_rejected(self):
+        records = self.vision_records()
+        records.append(
+            self.record(
+                "run", "gemma-4-e4b-q4", "firstImageEval", 3, None, 1700
+            )
+        )
+        with self.assertRaises(CalibrationValidationError):
+            validate_records(records, "gemma-4-e4b-q4", "vision")
+
+    def test_vision_run_with_image_evaluation_in_wrong_cycle_is_rejected(self):
+        records = self.vision_records()
+        records.append(
+            self.record(
+                "run", "gemma-4-e4b-q4", "firstImageEval", 6, None, 1700
+            )
+        )
+        with self.assertRaises(CalibrationValidationError):
+            validate_records(records, "gemma-4-e4b-q4", "vision")
 
     def test_cycle_zero_warmup_is_excluded_from_measured_prompt_count(self):
         records = self.records()

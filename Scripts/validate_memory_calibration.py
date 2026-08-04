@@ -69,12 +69,13 @@ def validate_records(records, expected_model_id, mode):
         record
         for record in records
         if record.get("checkpoint") == "firstImageEval"
-        and record.get("cycle") in range(1, 6)
+        and record.get("cycle") != 0
     ]
     if mode == "vision":
         _require(
-            {record.get("cycle") for record in image_turns} == set(range(1, 6)),
-            "missing vision image turns",
+            len(image_turns) == 5
+            and {record.get("cycle") for record in image_turns} == set(range(1, 6)),
+            "vision requires exactly one image evaluation per measured cycle",
         )
     else:
         _require(not image_turns, "text profile unexpectedly evaluated an image")
