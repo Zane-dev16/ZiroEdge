@@ -23,7 +23,7 @@ When replacing an already loaded model, native unload must finish and a five-sec
 | --- | --- | --- | --- |
 | Gemma 4 E2B vision | projector required, context 4096, batch 512, microbatch 128 | Accepted on target `00008140-000178A1362B001C`: five measured cycles, 20 text prompts, five image turns, background/foreground, peak delta 798,559,232 bytes, required headroom 1,750,000,000 bytes | Validated |
 | Gemma 4 E4B text | no projector, context 512, batch 256, microbatch 64, mmap enabled, CPU settings unchanged | Accepted on target `00008140-000178A1362B001C`: five cold cycles, 20 text prompts, background/foreground, peak delta 306,270,168 bytes, required headroom 1,150,000,000 bytes | Validated |
-| Gemma 4 E4B vision | projector required, context 4096, batch 512, microbatch 128 | Unvalidated | Disabled |
+| Gemma 4 E4B vision | projector required, context 4096, batch 256, microbatch 64, image prefill BLAS disabled | Unvalidated | Disabled |
 | Llama 3.2 3B text | context 4096, batch 512, microbatch 128 | Unvalidated | Disabled |
 
 The retained E2B load-only delta remains 790,334,488 bytes for diagnostic history; production admission uses the larger accepted full-workload peak of 798,559,232 bytes. Configured context, batch, and microbatch values are specified runtime controls, not measurements. E2B evidence is retained under `test-output/memory-diagnostic-e2b-round1-warm-20260726T165800Z/`.
