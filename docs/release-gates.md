@@ -1,7 +1,11 @@
 # Release Gates — Download & Model Integrity
 
-Release gates that MUST pass before a build can be shipped. Each gate is automated
-or has a defined verification procedure. A gate that fails blocks the release.
+Release gates that MUST pass before a build can be shipped. Each gate is
+automated or has a defined verification procedure. A gate that fails blocks
+the release.
+
+**Automated checker:** Run `bash Scripts/release-gate-check.sh --evidence-root docs/release-evidence`
+for a single verdict and structured gate checklist.
 
 ---
 
@@ -11,6 +15,7 @@ or has a defined verification procedure. A gate that fails blocks the release.
 SHA-256 hash (lowercase 64-character hex string) and a non-zero file size.
 
 **Check:**
+
 ```bash
 python3 -m unittest discover -s Scripts/Tests -p 'test_verify_model_catalog.py'
 ```
@@ -21,9 +26,10 @@ python3 -m unittest discover -s Scripts/Tests -p 'test_verify_model_catalog.py'
 `ModelCatalogValidator.catalogFailureReason` returns non-nil → all downloads
 are blocked with `.invalidCatalogMetadata`.
 
-**Production status (2026-07-28):** Every production artifact has a canonical
-HTTPS GGUF URL, positive byte size, and authoritative lowercase SHA-256. The
-metadata validator passes and remains fail-closed for incomplete future entries.
+**Status:** Every production artifact has a canonical HTTPS GGUF URL, positive
+byte size, and authoritative lowercase SHA-256. The metadata validator passes
+and remains fail-closed for incomplete future entries. The current catalog
+contains SHA-256 digests at `AIModel.swift:207`.
 
 **Regression test:** `CatalogValidatorRejectsSignedAndIncompleteEntries`
 
@@ -32,17 +38,20 @@ metadata validator passes and remains fail-closed for incomplete future entries.
 ## Gate 2: Clean-Download Verification
 
 **Requirement:** A fresh download of every registered model must pass:
+
 1. HTTP transport validation (status, content type, body structure)
 2. GGUF header check (magic + version)
 3. File size match
 4. Full SHA-256 verification (64 KiB buffer, off-main thread)
 
 **Check:**
+
 ```bash
-python3 Scripts/verify-model-catalog.py
+python3 Scripts/verify-model-catalog.py --evidence docs/release-evidence/catalog-verification.json
 ```
 
 **Automated tests:**
+
 - `LargeGeneratedFixtureVerifiesOffMainWith64KiBBuffer`
 - `PromotionRejectsStructurallyInvalidGGUFBeforeHashing`
 - `PromotionRejectsMissingSHA256`
@@ -50,8 +59,9 @@ python3 Scripts/verify-model-catalog.py
 **Failure mode:** Any verification step fails → download state is `.failed(error:)`
 with specific error. Staging data is discarded (except for disk-space failures).
 
-**Note:** This gate requires network access to download actual model files.
+**Note:** This gate requires network access to download actual model files (~11.5 GB).
 Simulator tests use deterministic fixtures; physical-device tests use real downloads.
+`--metadata-only` is explicitly insufficient for Gate 2.
 
 ---
 
@@ -62,142 +72,247 @@ Simulator tests use deterministic fixtures; physical-device tests use real downl
 installation claims.
 
 **Automated tests:**
-- `ValidLegacyPairMovesIntoManagedInstalledLibrary` — valid pair migrates cleanly
-- `MixedValidityPairInstallsOnlyValidArtifactAndMarksRepair` — partial validity handled
-- `ResumeOnlyLegacyStateMovesToResumeLocation` — resume data preserved
-- `OrphanedStagingDataMovesToManagedStagingLocation` — orphaned staging migrated
-- `AbsentLegacyStorageCreatesCurrentMarkerAndIsIdempotent` — clean first run
-- `InterruptedMigrationRecoversAfterPriorMoveCompleted` — crash during migration
-- `ManagedLocationsAreDistinctAndBackupExcluded` — directory hygiene
 
-**Failure mode:** Any migration test failure → `ModelMigrationService` cannot
-guarantee data integrity for legacy users. Release blocked.
+- `ValidLegacyPairMovesIntoManagedInstalledLibrary`
+- `MixedValidityPairInstallsOnlyValidArtifactAndMarksRepair`
+- `ResumeOnlyLegacyStateMovesToResumeLocation`
+- `OrphanedStagingDataMovesToManagedStagingLocation`
+- `AbsentLegacyStorageCreatesCurrentMarkerAndIsIdempotent`
+- `InterruptedMigrationRecoversAfterPriorMoveCompleted`
+- `ManagedLocationsAreDistinctAndBackupExcluded`
 
----
+**Retained evidence rule:** Gate 3 passes only when the canonical automated iOS
+evidence at `docs/release-evidence/automated-ios/evidence.json` identifies the
+current clean build revision, exact xcodebuild command, immutable retained
+xcresult archive path and matching SHA-256, and an individual passing
+`ModelMigrationTests` outcome. A generic aggregate exit code or mutable xcresult
+directory hash is insufficient.
 
-## Gate 4: Lifecycle QA
-
-**Requirement:** The complete download lifecycle must pass on a physical device:
-1. Fresh install → download model → verify → chat
-2. Pause during download → resume → verify → chat
-3. Cancel download → restart → verify → chat
-4. Background during download → foreground → verify
-5. Force-quit during download → relaunch → resume from durable state → verify
-6. Low storage → download refused → existing models preserved
-7. Airplane Mode → existing models still available → can chat
-
-**Check:** `Scripts/device-test.sh` with the download lifecycle layer.
-
-**Dependency:** This gate is covered by [Issue #16: Complete model-download device lifecycle QA](https://github.com/Zane-dev16/ZiroEdge/issues/16).
-
-**Evidence required:** Logs, screenshots, and assertions covering each lifecycle
-scenario. No model is reported installed unless all required artifacts are verified.
-
-**Regression tests:**
-- `RecreationRestoresPausedProgressWithoutStartingTransfer` (cold start)
-- `CorruptMetadataDegradesToRestartableState` (graceful degradation)
-- `InjectedPromotionFailurePreservesVerifiedInstallationByteForByte` (crash safety)
-- `TestRelaunchInAirplaneModeShowsExistingConversations` (offline after relaunch)
-- `TestColdStartShowsExistingConversationsAndCanLoadModel` (cold start)
+**Failure mode:** Any migration test failure or missing retained named-suite
+evidence → release blocked.
 
 ---
 
-## Gate 5: Offline Proof
+## Gate 4: Privacy Policy Published
 
-**Requirement:** After models are downloaded, the app MUST operate with zero
-network dependency in the hot path:
-1. Model loading: no network calls
-2. Inference: no network calls
-3. Conversation persistence: no network calls
-4. Model status checks: `FileManager` only
-5. Onboarding: `UserDefaults` only
-
-**Automated tests (OfflineVerificationTests):**
-- `DownloadStatusCheckUsesFileManagerOnly`
-- `IsBaseDownloadedUsesVerifiedLocalFixture`
-- `SHA256VerificationIsLocal`
-- `ModelManagerServiceUsesOnlyFileManager`
-- `ModelManagerServiceDirectoryIsLocal`
-- `InferenceServiceProtocolHasNoNetworkMethods`
-- `StreamChatReturnsLocalAsyncStream`
-- `NetworkMonitorDoesNotAffectLocalOperations`
-- `TestRelaunchInAirplaneModeShowsExistingConversations`
-- `TestColdStartShowsExistingConversationsAndCanLoadModel`
-- `TestStreamingWorksOffline`
-- `TestVerifiedFixtureIsAvailableOffline`
-- `TestChatWorksOffline`
+**Requirement:** The privacy policy page must be publicly reachable at the
+canonical URL published in the app and `AppStore/listing-metadata.json`.
 
 **Check:**
+
 ```bash
-xcodebuild test -project ZiroEdge.xcodeproj -scheme ZiroEdge \
-  -only-testing:ZiroEdgeTests/OfflineVerificationTests \
-  -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5' \
-  CODE_SIGN_IDENTITY='' CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO
+python3 Scripts/verify-privacy-policy.py          # live check
+python3 Scripts/verify-privacy-policy.py --local-only  # local content check
 ```
 
-**Failure mode:** Any test that triggers a network call in the hot path is a
-release blocker. The offline verification suite must pass with 0 failures.
-
-**Status note:** The offline verification suite passes in the simulator (see
-RELEASE-VALIDATION.md). Physical-device offline proof is tracked by Issue #16.
+**Failure mode:** 404 or unreachable → release blocked. Live reachability is
+fail-closed; 404 is not downgraded to a warning.
 
 ---
 
-## Gate 6: Durable State Integrity
+## Gate 5: Submission Screenshots
+
+**Requirement:** All required App Store screenshot sizes must have technically
+valid images and authorized human visual approval of review-ready real-app chat,
+models, and settings content, with iPad chat proving split view.
+
+**Check:**
+
+```bash
+bash Scripts/capture-app-store-screenshots.sh
+bash Scripts/capture-appstore-screenshots.sh
+python3 Scripts/verify-screenshots.py ziroedge-docs/app-store-screenshots
+```
+
+**Failure mode:** Any size missing images, failed technical validation, missing
+authorized human visual approval, hermetic/placeholder content, or misleading
+model state → release blocked. Technical validation alone is not review-ready
+evidence. The current manifest is retained as provenance only.
+
+---
+
+## Gate 6: Background Download Lifecycle (Issue #06)
+
+**Requirement:** On a physical device, an in-progress model download must
+preserve truthful state and recover safely across backgrounding, suspension,
+locking, OS termination, force-quit, and reboot.
+
+**Check:**
+
+```bash
+bash Scripts/device-test.sh --layer lifecycle --evidence-dir docs/release-evidence/lifecycle
+```
+
+**Evidence required:**
+
+- Machine-generated: device identifier/name, OS, build revision, catalog version,
+  invoked command, exit status, xcresult hash, screenshot hashes.
+- Operator-entered observations for steps XCTest cannot prove (Airplane Mode,
+  lock/unlock, reboot, radio handoff, storage pressure). Every required scenario
+  must have exactly one `[time] scenario — PASS — specific result` line; mention,
+  `FAIL`, `PENDING`, and free-form presence alone never pass.
+- UI tests and every layer-required unit suite must exit zero, identify the
+  current clean source revision, and retain immutable xcresult archives whose
+  recorded SHA-256 values verify.
+
+**Regression tests:**
+
+- `RecreationRestoresPausedProgressWithoutStartingTransfer`
+- `CorruptMetadataDegradesToRestartableState`
+- `InjectedPromotionFailurePreservesVerifiedInstallationByteForByte`
+
+---
+
+## Gate 7: Offline Operation — E2B/E4B (Issue #07)
+
+**Requirement:** Installed E2B and E4B models must remain discoverable, loadable,
+and usable for advertised capabilities with network access disabled on a
+physical device.
+
+**Check:**
+
+```bash
+bash Scripts/device-test.sh --layer offline --evidence-dir docs/release-evidence/offline
+```
+
+**Named E2B/E4B offline tests** (fail, do not skip, when physical-device layer
+requires those models):
+
+- Airplane Mode launch shows only models with complete artifacts passing
+  current readiness checks.
+- E2B and E4B each load and produce a text response while offline.
+- Vision-ready installs expose correct capability and complete an offline
+  image interaction.
+- Invalid model pairs do not appear ready and provide recovery feedback.
+- Existing conversation history remains usable without network access.
+
+**Failure mode:** Any hot-path network call during model loading, inference,
+or conversation persistence → release blocked.
+
+---
+
+## Gate 8: Physical Download QA Matrix (Issue #08)
+
+**Requirement:** Every network, repetition, and storage condition must have
+an observed result on a physical device, traced to a focused follow-up ticket
+when failing.
+
+**Check:**
+
+```bash
+bash Scripts/device-test.sh --layer qa-full --evidence-dir docs/release-evidence/physical-qa
+```
+
+**Matrix rows:** One row per physical scenario. Each row records setup,
+expectations, observations, evidence, and status (`PENDING`, `PASS`, `FAIL`).
+Simulator coverage is a separate column.
+
+**Failure mapping:** Every failed row must link to a focused ticket URL in
+`docs/qa-failure-map.md`. Missing ticket URLs remain blocking.
+
+---
+
+## Gate 9: Durable State Integrity
 
 **Requirement:** Paused and failed transfers must survive app termination,
 relaunch, and device reboot without corruption or false state.
 
 **Automated tests:**
+
 - `RecreationRestoresPausedProgressWithoutStartingTransfer`
 - `CorruptMetadataDegradesToRestartableState`
 
-**Failure mode:** Corrupt durable state must not prevent the app from functioning.
-It must degrade to a clean `notDownloaded` state.
+**Retained evidence rule:** Gate 9 passes only when the canonical automated iOS
+evidence records the current clean revision, exact command, matching retained
+xcresult archive digest, and an individual passing `DurableTransferStateTests`
+outcome. A generic aggregate exit code or mutable directory hash is insufficient.
+
+**Failure mode:** Corrupt durable state must not prevent the app from functioning,
+and missing retained named-suite evidence blocks release. Corruption must degrade
+to a clean `notDownloaded` state.
 
 ---
 
-## Gate 7: Atomic Promotion Safety
+## Gate 10: Atomic Promotion Safety
 
 **Requirement:** A crash during artifact promotion must not leave the model
 in an unverifiable state. Either the old verified artifact or the new verified
 staging file must survive.
 
 **Automated tests:**
+
 - `InjectedPromotionFailurePreservesVerifiedInstallationByteForByte`
 - `StoreRecoveryTests.testQuarantineCopiesExistingSQLiteTrioByteForByte`
 
-**Failure mode:** Loss of both old and new artifact during promotion is a
-release blocker.
+**Retained evidence rule:** Gate 10 passes only when the canonical automated iOS
+evidence records the current clean revision, exact command, matching retained
+xcresult archive digest, and an individual passing `StoreRecoveryTests` outcome.
+A generic aggregate exit code or mutable directory hash is insufficient.
+
+**Failure mode:** Loss of both old and new artifact during promotion or missing
+retained named-suite evidence is a release blocker.
+
+---
+
+## Gate 11: Failure-to-Ticket Mapping
+
+**Requirement:** Every failed physical QA or offline scenario must link to a
+focused follow-up ticket with reproduction steps and evidence. Generic
+exceptions are not accepted.
+
+**Check:**
+
+```bash
+grep -c 'https://github.com/' docs/qa-failure-map.md
+```
+
+**Failure mode:** Any observed `FAIL` row without a focused ticket URL →
+release blocked. `PENDING` rows remain blocked by Gates 6–8 and carry a local
+owner; they do not justify fabricating or creating a remote ticket without
+authorization.
 
 ---
 
 ## Gate Execution Order
 
-```
+```text
 Gate 1 (Catalog Hashes) ──┐
-                           ├── Must pass before any download
-Gate 2 (Clean Download)  ──┘
-                           │
-Gate 3 (Legacy Repair)   ──┤── Must pass before release
-Gate 6 (Durable State)   ──┤
-Gate 7 (Atomic Promotion) ──┤
-                           │
-Gate 4 (Lifecycle QA)    ──┤── Requires physical device (Issue #16)
-                           │
-Gate 5 (Offline Proof)   ──┘
+Gate 2 (Clean Download)  ─┤── Must pass before any model download
+                          │
+Gate 3 (Legacy Repair)   ─┤── Code-level integrity
+Gate 9 (Durable State)   ─┤
+Gate 10 (Atomic Promo)   ─┤
+                          │
+Gate 4 (Privacy URL)     ─┤── External / manual
+Gate 5 (Screenshots)     ─┤
+                          │
+Gate 6 (Lifecycle QA)    ─┐
+Gate 7 (Offline Proof)   ─┤── Physical device required
+Gate 8 (QA Matrix)       ─┘
+                          │
+Gate 11 (Ticket Map)     ─┘── Final reconciliation
 ```
 
 ---
 
-## Current Gate Status (2026-07-28)
+## Current Gate Status
 
-| Gate | Status | Blocker |
-|------|--------|---------|
-| 1. Catalog Hashes | ✅ Passing | Production metadata validation passes |
-| 2. Clean Download | ⚠️ Metadata-only | Clean-source multi-GB download verification remains pending |
-| 3. Legacy Repair | ✅ Passing | All migration tests pass |
-| 4. Lifecycle QA | 🔲 Pending | Blocked by Issue #16 |
-| 5. Offline Proof | ⚠️ Simulator-only | Physical-device evidence pending (Issue #16) |
-| 6. Durable State | ✅ Passing | DurableTransferStateTests pass |
-| 7. Atomic Promotion | ✅ Passing | Promotion crash-safety verified |
+| Gate | Status | Notes |
+| ------ | -------- | ------- |
+| 1. Catalog Hashes | ✅ Pass | Production metadata validation passes |
+| 2. Clean Download | ❌ Blocking | Round-1 clean-source transfer timed out; success evidence is not available |
+| 3. Legacy Repair | ❌ Blocking | Existing mutable-directory hash evidence is not reproducible; regenerate immutable retained evidence from a clean tree |
+| 4. Privacy Policy | ❌ Blocking | Canonical URL returns HTTP 404; publication requires authorization |
+| 5. Screenshots | ❌ Blocking | Files pass technical checks, but captures are not review-ready and no authorized human visual review is retained; manifest is provenance only |
+| 6. Lifecycle QA | 🔲 Blocking | Physical-device evidence needed; owner: physical QA owner |
+| 7. Offline Proof | 🔲 Blocking | Physical-device offline proof needed; owner: physical QA owner |
+| 8. QA Matrix | 🔲 Blocking | Physical-device QA matrix needed; owner: physical QA owner |
+| 9. Durable State | ❌ Blocking | Regenerate verifiable retained `DurableTransferStateTests` evidence from a clean tree |
+| 10. Atomic Promotion | ❌ Blocking | Regenerate verifiable retained `StoreRecoveryTests` evidence from a clean tree |
+| 11. Ticket Map | ✅ Pass | No observed `FAIL` row currently lacks a ticket; pending rows remain blocked by Gates 6–8 |
+
+**Verdict: NOT_READY** — Gates 2–10 include blockers. Authorized review-ready
+screenshots, live privacy, clean-source catalog verification, physical-device
+evidence, and regenerated clean-tree automated evidence with verifiable retained
+xcresult archives are required. The historical named-suite record remains
+inspectable but does not currently pass Gates 3, 9, or 10.

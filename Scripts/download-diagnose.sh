@@ -3,12 +3,14 @@ set -euo pipefail
 
 # ZiroEdge Download Diagnostic Harness
 # Builds, runs the download UI test, captures all output, and produces a
-# structured analysis report.
+# structured analysis report. Also supports evidence collection for the
+# lifecycle, offline, and qa-full layers.
 #
 # Usage:
 #   bash Scripts/download-diagnose.sh                          # Full diagnostic
 #   bash Scripts/download-diagnose.sh --quick                   # Button-exists only
 #   bash Scripts/download-diagnose.sh --timeout 180             # Monitor seconds
+#   bash Scripts/download-diagnose.sh --evidence-dir PATH       # Evidence output
 #
 # Output:
 #   test-output/download-diagnose/
@@ -17,6 +19,8 @@ set -euo pipefail
 #     screenshots/            — XCTest screenshot attachments
 #     report.md               — structured analysis report
 #     analysis.json           — machine-readable findings
+#     evidence.json           — machine-generated evidence facts (with --evidence-dir)
+#     operator-observations.txt — operator observation prompt (with --evidence-dir)
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -29,6 +33,8 @@ PROJECT="$PROJECT_DIR/ZiroEdge.xcodeproj"
 DEVICE_UDID="${DEVICE_UDID:-}"
 TEST_CLASS="DownloadDiagnosticsTests"
 TEST_METHOD="testDownloadDiagnostic"
+EVIDENCE_DIR=""
+RECORD_EVIDENCE=false
 
 while [[ $# -gt 0 ]]; do
 	case "$1" in
@@ -45,6 +51,11 @@ while [[ $# -gt 0 ]]; do
 		;;
 	--test)
 		TEST_METHOD="$2"
+		shift 2
+		;;
+	--evidence-dir)
+		EVIDENCE_DIR="$2"
+		RECORD_EVIDENCE=true
 		shift 2
 		;;
 	*)
@@ -68,6 +79,11 @@ fi
 echo ">> Using device: $DEVICE_UDID"
 
 # --- Prepare output ---
+if $RECORD_EVIDENCE && [[ -n "$EVIDENCE_DIR" ]]; then
+	OUTPUT_DIR="$EVIDENCE_DIR"
+	LOGS_DIR="$OUTPUT_DIR/logs"
+	SCREENSHOTS_DIR="$OUTPUT_DIR/screenshots"
+fi
 rm -rf "$OUTPUT_DIR"
 mkdir -p "$LOGS_DIR" "$SCREENSHOTS_DIR"
 
@@ -391,4 +407,54 @@ echo "   Analysis:   $ANALYSIS"
 echo "   Logs:       $LOGS_DIR/"
 echo "   Screenshots: $SCREENSHOTS_DIR/"
 echo "   xcresult:   $OUTPUT_DIR/xcresult.xcresult"
+
+# --- Record machine evidence if requested ---
+if $RECORD_EVIDENCE; then
+	EVIDENCE_JSON="$OUTPUT_DIR/evidence.json"
+	OBSERVATIONS_FILE="$OUTPUT_DIR/operator-observations.txt"
+	RECORD_END=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+	BUILD_REVISION=$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null || echo "unknown")
+	DEVICE_NAME=$(xcrun xctrace list devices 2>/dev/null | grep "$DEVICE_UDID" | head -1 | sed -E 's/\([0-9A-Fa-f-]+\)//' | xargs || echo "unknown")
+	DEVICE_OS=$(xcrun xctrace list devices 2>/dev/null | grep "$DEVICE_UDID" | head -1 | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1 || echo "unknown")
+	CATALOG_VERSION=$(/usr/libexec/PlistBuddy -c 'Print :ModelCatalogVersion' "$PROJECT_DIR/ZiroEdge/Info.plist" 2>/dev/null || echo "unknown")
+	XCRESULT_HASH=$(find "$OUTPUT_DIR/xcresult.xcresult" -type f -exec shasum -a 256 {} \; 2>/dev/null | sort | shasum -a 256 | cut -d' ' -f1 || echo "")
+	SCREENSHOT_COUNT=$(find "$SCREENSHOTS_DIR" -name '*.png' -maxdepth 1 2>/dev/null | wc -l | tr -d ' ')
+
+	python3 - "$EVIDENCE_JSON" "$RECORD_END" "$DEVICE_UDID" "$DEVICE_NAME" \
+		"$DEVICE_OS" "$BUILD_REVISION" "$CATALOG_VERSION" "$TEST_EXIT" \
+		"$XCRESULT_HASH" "$SCREENSHOT_COUNT" "$TEST_METHOD" <<'PYDIAGEVID'
+import sys, json
+with open(sys.argv[1], "w") as f:
+    json.dump({
+        "completed_at": sys.argv[2],
+        "device_udid": sys.argv[3],
+        "device_name": sys.argv[4],
+        "device_os": sys.argv[5],
+        "build_revision": sys.argv[6],
+        "catalog_version": sys.argv[7],
+        "exit_code": int(sys.argv[8]),
+        "xcresult_hash": sys.argv[9] or None,
+        "screenshot_count": int(sys.argv[10]),
+        "test_method": sys.argv[11],
+    }, f, indent=2)
+print(f"Evidence written to {sys.argv[1]}")
+PYDIAGEVID
+
+	# Write operator observation prompt
+	cat >"$OBSERVATIONS_FILE" <<DIAGOBS
+# Operator Observations — download diagnostic
+# Recorded: $RECORD_END
+# Device: $DEVICE_NAME ($DEVICE_UDID) running $DEVICE_OS
+# Build: $BUILD_REVISION
+# Test: $TEST_METHOD (exit $TEST_EXIT)
+#
+# Add observations below in the format:
+#   [HH:MM:SS] <scenario> — <observation>
+#
+DIAGOBS
+
+	echo "   Evidence JSON: $EVIDENCE_JSON"
+	echo "   Observations:  $OBSERVATIONS_FILE"
+fi
+
 exit $TEST_EXIT
