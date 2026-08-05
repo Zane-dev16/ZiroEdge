@@ -15,23 +15,31 @@ import sys
 
 def extract_attachments(xcresult_path: str, output_dir: str):
     """Extract image attachments from xcresult, renaming to clean names."""
-    os.makedirs(output_dir, exist_ok=True)
+    try:
+        os.makedirs(output_dir, exist_ok=True)
+    except OSError as error:
+        print(f"Could not create screenshot output directory: {error}", file=sys.stderr)
+        return
 
     # Use xcresulttool export attachments (Xcode 16+)
-    r = subprocess.run(
-        [
-            "xcrun",
-            "xcresulttool",
-            "export",
-            "attachments",
-            "--path",
-            xcresult_path,
-            "--output-path",
-            output_dir,
-        ],
-        capture_output=True,
-        text=True,
-    )
+    try:
+        r = subprocess.run(
+            [
+                "xcrun",
+                "xcresulttool",
+                "export",
+                "attachments",
+                "--path",
+                xcresult_path,
+                "--output-path",
+                output_dir,
+            ],
+            capture_output=True,
+            text=True,
+        )
+    except OSError as error:
+        print(f"Could not run xcresulttool: {error}", file=sys.stderr)
+        return
 
     if r.returncode != 0 and "Exported" not in (r.stdout + r.stderr):
         # Fallback: bulk directory export
@@ -63,31 +71,37 @@ def extract_attachments(xcresult_path: str, output_dir: str):
         exported_path = os.path.join(output_dir, exported_name)
         clean_path = os.path.join(output_dir, clean_name)
         if os.path.isfile(exported_path):
-            os.rename(exported_path, clean_path)
-            count += 1
+            try:
+                os.rename(exported_path, clean_path)
+                count += 1
+            except OSError as error:
+                print(f"Could not rename {exported_name}: {error}", file=sys.stderr)
 
     # Remove the manifest (it referenced the UUID names, now stale)
     if os.path.isfile(manifest_path):
-        os.remove(manifest_path)
+        try:
+            os.remove(manifest_path)
+        except OSError as error:
+            print(f"Could not remove stale manifest: {error}", file=sys.stderr)
 
-    if count > 0:
-        print(f"Extracted {count} screenshots to {output_dir}")
-        for f in sorted(os.listdir(output_dir)):
-            if f.endswith(".png"):
-                fpath = os.path.join(output_dir, f)
-                size = os.path.getsize(fpath)
-                print(f"  {f} ({size:,} bytes)")
-    else:
-        # Maybe the files already have clean names (bulk export fallback)
+    try:
         pngs = sorted(f for f in os.listdir(output_dir) if f.endswith(".png"))
-        if pngs:
-            print(f"Extracted {len(pngs)} screenshots to {output_dir}")
-            for f in pngs:
-                fpath = os.path.join(output_dir, f)
-                size = os.path.getsize(fpath)
-                print(f"  {f} ({size:,} bytes)")
-        else:
-            print("No screenshots extracted", file=sys.stderr)
+    except OSError as error:
+        print(f"Could not list extracted screenshots: {error}", file=sys.stderr)
+        return
+
+    if count > 0 or pngs:
+        print(f"Extracted {len(pngs)} screenshots to {output_dir}")
+        for filename in pngs:
+            path = os.path.join(output_dir, filename)
+            try:
+                size = os.path.getsize(path)
+            except OSError as error:
+                print(f"Could not inspect {filename}: {error}", file=sys.stderr)
+                continue
+            print(f"  {filename} ({size:,} bytes)")
+    else:
+        print("No screenshots extracted", file=sys.stderr)
 
 
 def _bulk_export(xcresult: str, output_dir: str):
