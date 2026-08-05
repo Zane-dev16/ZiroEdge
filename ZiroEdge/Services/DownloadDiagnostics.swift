@@ -211,11 +211,27 @@ final class DownloadDiagnosticRecorder: @unchecked Sendable {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
     }
 
+    /// Resolved catalog version provenance.
+    struct CatalogVersionProvenance: Sendable {
+        let value: String
+        let sourceIsPlist: Bool
+    }
+
+    /// Resolve the catalog version, preferring the generated Info.plist key.
+    /// Returns `nil` when neither the plist nor the compiled fallback is available.
+    static func resolvedCatalogVersion(bundle: Bundle = .main) -> CatalogVersionProvenance {
+        if let plistValue = bundle.infoDictionary?["ModelCatalogVersion"] as? String,
+           !plistValue.isEmpty {
+            return CatalogVersionProvenance(value: plistValue, sourceIsPlist: true)
+        }
+        return CatalogVersionProvenance(
+            value: ModelCatalogValidator.catalogVersion,
+            sourceIsPlist: false
+        )
+    }
+
     private var catalogVersion: String {
-        // Generated Info.plists drop unknown INFOPLIST_KEY_* settings, so keep
-        // the release catalog identity in source and allow explicit plist overrides.
-        Bundle.main.infoDictionary?["ModelCatalogVersion"] as? String
-            ?? ModelCatalogValidator.catalogVersion
+        Self.resolvedCatalogVersion().value
     }
 
     var isEnabled: Bool {

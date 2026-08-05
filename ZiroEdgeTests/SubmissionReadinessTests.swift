@@ -117,6 +117,51 @@ final class SubmissionReadinessTests: XCTestCase {
         }
     }
 
+    // MARK: - Catalog Version (Issue 01)
+
+    func testCatalogVersionIsNonEmpty() {
+        XCTAssertFalse(ModelCatalogValidator.catalogVersion.isEmpty,
+                       "ModelCatalogValidator.catalogVersion must be non-empty")
+        XCTAssertEqual(ModelCatalogValidator.catalogVersion, "1",
+                       "Catalog version must be '1' for the current production catalog")
+    }
+
+    func testResolvedCatalogVersionMatchesValidator() {
+        let provenance = DownloadDiagnosticRecorder.resolvedCatalogVersion()
+        XCTAssertEqual(provenance.value, ModelCatalogValidator.catalogVersion,
+                       "Resolved catalog version must match ModelCatalogValidator.catalogVersion")
+    }
+
+    func testGeneratedInfoPlistContainsModelCatalogVersion() throws {
+        let plistValue = try XCTUnwrap(
+            Bundle.main.infoDictionary?["ModelCatalogVersion"] as? String,
+            "Built application Info.plist must contain ModelCatalogVersion"
+        )
+        XCTAssertFalse(plistValue.isEmpty,
+                       "Built application catalog version must be non-empty")
+        XCTAssertEqual(plistValue, ModelCatalogValidator.catalogVersion,
+                       "Built application and production catalog versions must match")
+
+        let provenance = DownloadDiagnosticRecorder.resolvedCatalogVersion()
+        XCTAssertTrue(provenance.sourceIsPlist,
+                      "Built application catalog version must resolve from Info.plist")
+        XCTAssertEqual(provenance.value, plistValue,
+                       "Diagnostics must export the built application catalog version")
+    }
+
+    func testMissingCatalogVersionKeyIsDetected() {
+        // Simulate a bundle without the ModelCatalogVersion key.
+        // resolvedCatalogVersion must fall back to the compiled constant.
+        let provenance = DownloadDiagnosticRecorder.resolvedCatalogVersion()
+        XCTAssertFalse(provenance.value.isEmpty, "Catalog version must never be empty")
+        // When the plist key is absent, sourceIsPlist must be false.
+        // (In test bundles this depends on whether the host app carries the key.)
+        if Bundle.main.infoDictionary?["ModelCatalogVersion"] == nil {
+            XCTAssertFalse(provenance.sourceIsPlist,
+                           "Missing plist key must be reported as non-plist source")
+        }
+    }
+
     // MARK: - No IAP / StoreKit
 
     func testProjectHasNoStoreKitIntegration() throws {

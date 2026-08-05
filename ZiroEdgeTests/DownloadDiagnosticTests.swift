@@ -315,8 +315,11 @@ final class DownloadDiagnosticTests: XCTestCase {
                         failureCategory: .network,
                         failureSummary: "Redirect from https://cdn.example.com/file.gguf?token=secret")
 
-        let summary = recorder.exportSummary()
-        let summaryData = try! JSONEncoder().encode(summary)
+        guard let summary = recorder.exportSummary(),
+              let summaryData = try? JSONEncoder().encode(summary) else {
+            XCTFail("Could not encode export summary")
+            return
+        }
         let summaryString = String(data: summaryData, encoding: .utf8) ?? ""
 
         XCTAssertFalse(summaryString.contains("token=secret"),
@@ -336,13 +339,15 @@ final class DownloadDiagnosticTests: XCTestCase {
                         modelID: "gemma-4-e4b-q4", artifact: "base",
                         expectedBytes: 5_335_273_056, actualBytes: 5_335_273_056)
 
-        let summary = recorder.exportSummary()
-        XCTAssertNotNil(summary)
+        guard let summary = recorder.exportSummary(),
+              let data = try? JSONEncoder().encode(summary) else {
+            XCTFail("Could not encode export summary")
+            return
+        }
         // Summary must include actionable information
-        XCTAssertNotNil(summary?.appVersion)
-        XCTAssertFalse(summary?.artifactStates.isEmpty ?? true)
+        XCTAssertNotNil(summary.appVersion)
+        XCTAssertFalse(summary.artifactStates.isEmpty)
         // Summary must NOT contain any credential-like data
-        let data = try! JSONEncoder().encode(summary)
         let str = String(data: data, encoding: .utf8) ?? ""
         let forbidden = ["token", "authorization", "bearer", "signature",
                          "secret", "password", "credential"]
@@ -367,7 +372,62 @@ final class DownloadDiagnosticTests: XCTestCase {
                       "Summary file must exist on disk")
     }
 
-    // MARK: - Failure Category Mapping
+}
+
+// MARK: - Catalog Version Tests
+
+extension DownloadDiagnosticTests {
+
+    func testCatalogVersionIsNonEmpty() {
+        let provenance = DownloadDiagnosticRecorder.resolvedCatalogVersion()
+        XCTAssertFalse(provenance.value.isEmpty, "Catalog version must not be empty")
+        XCTAssertEqual(provenance.value, ModelCatalogValidator.catalogVersion,
+                       "Resolved catalog version must match ModelCatalogValidator.catalogVersion")
+    }
+
+    func testRecordedPayloadCarriesCatalogVersion() {
+        let correlationID = DownloadDiagnosticRecorder.transferCorrelationID(
+            modelID: "gemma-4-e4b-q4", artifact: "base"
+        )
+        let payload = recorder.record(
+            event: .downloadStart,
+            correlationID: correlationID,
+            modelID: "gemma-4-e4b-q4",
+            artifact: "base"
+        )
+        XCTAssertNotNil(payload?.catalogVersion, "Diagnostic payload must carry a catalog version")
+        XCTAssertFalse(payload?.catalogVersion?.isEmpty ?? true,
+                       "Diagnostic payload catalog version must be non-empty")
+    }
+
+    func testExportSummaryCarriesCatalogVersion() {
+        let cid = DownloadDiagnosticRecorder.transferCorrelationID(
+            modelID: "gemma-4-e4b-q4", artifact: "base"
+        )
+        recorder.record(event: .downloadStart, correlationID: cid,
+                        modelID: "gemma-4-e4b-q4", artifact: "base")
+        let summary = recorder.exportSummary()
+        XCTAssertNotNil(summary?.catalogVersion, "Export summary must carry a catalog version")
+        XCTAssertFalse(summary?.catalogVersion?.isEmpty ?? true,
+                       "Export summary catalog version must be non-empty")
+    }
+
+    func testResolvedCatalogVersionReportsProvenance() {
+        let provenance = DownloadDiagnosticRecorder.resolvedCatalogVersion()
+        if provenance.sourceIsPlist {
+            let plistValue = Bundle.main.infoDictionary?["ModelCatalogVersion"] as? String
+            XCTAssertEqual(provenance.value, plistValue,
+                           "Plist-sourced version must match the actual Info.plist value")
+        } else {
+            XCTAssertEqual(provenance.value, ModelCatalogValidator.catalogVersion,
+                           "Fallback version must match ModelCatalogValidator.catalogVersion")
+        }
+    }
+}
+
+// MARK: - Failure Category Mapping
+
+extension DownloadDiagnosticTests {
 
     func testFailureCategoryFromDownloadError() {
         XCTAssertEqual(DownloadFailureCategory.from(.networkError), .network)
