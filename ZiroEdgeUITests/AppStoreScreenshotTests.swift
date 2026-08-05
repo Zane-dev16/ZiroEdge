@@ -3,12 +3,15 @@ import XCTest
 /// App Store iPad Screenshot Tests
 ///
 /// Captures screenshots for App Store listing at two iPad sizes:
-/// - 2048x2732 (iPad Pro 12.9" landscape — required App Store size)
-/// - 1668x2388 (iPad Pro 11" landscape — required App Store size)
+/// - 2048x2732 (iPad Pro 12.9" portrait — required App Store size)
+/// - 1668x2388 (iPad Pro 11" portrait — required App Store size)
 ///
-/// At least three PNGs per size covering:
+/// Every test fails closed: navigation failures produce test failures,
+/// not fallback images.
+///
+/// Required screenshots (3 per size):
 /// 1. Sidebar + Chat (NavigationSplitView with conversation list and ChatView)
-/// 2. Models (Settings -> Manage Models, or the Models catalog)
+/// 2. Models (Settings -> Manage Models)
 /// 3. Settings (gear sheet with storage, memory, license info)
 ///
 /// Run on iPad simulators matching those resolutions. Screenshots are
@@ -16,7 +19,7 @@ import XCTest
 final class AppStoreScreenshotTests: UITestBase {
 
     override func setUpWithError() throws {
-        continueAfterFailure = true
+        continueAfterFailure = false
         app = XCUIApplication()
         app.launchArguments += ["--uitesting"]
         app.launch()
@@ -27,19 +30,37 @@ final class AppStoreScreenshotTests: UITestBase {
     // MARK: - Sidebar + Chat
 
     /// Capture the NavigationSplitView showing the conversation sidebar
-    /// alongside the chat detail area (or WelcomeView if no conversation).
+    /// alongside the chat detail area (WelcomeView or ChatView). On a fresh
+    /// install with no conversations, the split view itself demonstrates the
+    /// required layout even without an active conversation.
     func testSidebarAndChat() throws {
-        // The app launches showing NavigationSplitView on iPad with
-        // SidebarView on the left and WelcomeView (or ChatView) on the right.
-        // Try to select an existing conversation first.
-        let navigated = selectOrCreateConversation(timeout: 8)
-        if navigated {
-            // Wait for ChatView to render with input bar
-            sleep(2)
+        app.terminate()
+        app = XCUIApplication()
+        app.launchArguments += ["--uitesting", "--uitesting-hermetic-model"]
+        app.launch()
+        sleep(3)
+
+        // Wait for the sidebar to render — the "New Conversation" button
+        // or conversation cells indicate the sidebar is ready.
+        let sidebarReady = app.buttons["New Conversation"].firstMatch.waitForExistence(timeout: 10)
+            || app.collectionViews.cells.firstMatch.waitForExistence(timeout: 10)
+            || app.staticTexts["Conversations"].waitForExistence(timeout: 10)
+        guard sidebarReady else {
+            XCTFail("iPad sidebar did not render — cannot capture split-view screenshot")
+            return
         }
-        // Capture the full split-view layout: sidebar + detail
+
+        // A chat or welcome detail is required in addition to the sidebar.
+        let newConversation = app.buttons["New Conversation"].firstMatch
+        guard selectOrCreateConversation(timeout: 10),
+              app.textFields["chatInput"].firstMatch.waitForExistence(timeout: 5),
+              newConversation.waitForExistence(timeout: 5),
+              newConversation.isHittable else {
+            XCTFail("iPad sidebar and ChatView were not simultaneously visible — refusing to capture")
+            return
+        }
+        sleep(2)
         capture("sidebar_chat")
-        XCTAssertTrue(true, "Sidebar + Chat screenshot captured")
     }
 
     // MARK: - Models
@@ -48,32 +69,23 @@ final class AppStoreScreenshotTests: UITestBase {
     /// On iPad the Settings sheet and Models view overlay the split view
     /// or present modally depending on the layout.
     func testModelsScreen() throws {
-        // Navigate to Manage Models via the Settings gear
-        let opened = openModels(timeout: 15)
-        if opened {
-            // Wait for the models list to fully render
-            sleep(2)
-            capture("models")
-        } else {
-            // Fallback: capture whatever state we ended in
-            capture("models_fallback")
+        guard openModels(timeout: 15) else {
+            XCTFail("Failed to open Models page on iPad — navigation did not reach the Models screen")
+            return
         }
-        XCTAssertTrue(opened || true, "Models screenshot captured (opened=\(opened))")
+        sleep(2)
+        capture("models")
     }
 
     // MARK: - Settings
 
     /// Capture the Settings sheet showing storage, memory, and legal info.
     func testSettingsScreen() throws {
-        let opened = openSettings(timeout: 10)
-        if opened {
-            // Wait for the Settings sheet to animate in fully
-            sleep(2)
-            capture("settings")
-        } else {
-            // Fallback: capture whatever we see
-            capture("settings_fallback")
+        guard openSettings(timeout: 10) else {
+            XCTFail("Failed to open and verify the Settings screen on iPad")
+            return
         }
-        XCTAssertTrue(opened || true, "Settings screenshot captured (opened=\(opened))")
+        sleep(2)
+        capture("settings")
     }
 }

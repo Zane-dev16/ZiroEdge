@@ -3,122 +3,126 @@
 
 Usage: python3 extract-screenshots.py <xcresult_path> <output_dir>
 
-Parses the xcresult JSON, finds XCTAttachment image data, and writes PNGs
-to output_dir named as {test}_{step}_{name}.png.
+Uses xcresulttool to export attachments, then renames PNGs using the
+suggested human-readable names from the export manifest.
 """
 
 import json
 import os
 import subprocess
 import sys
-from pathlib import Path
-
-
-def xcresult_json(xcresult_path: str) -> dict:
-    """Get structured test results as JSON."""
-    r = subprocess.run(
-        ["xcrun", "xcresulttool", "get", "test-results", "summary",
-         "--path", xcresult_path, "--format", "json"],
-        capture_output=True, text=True
-    )
-    if r.returncode != 0:
-        # Try older xcresulttool API
-        r = subprocess.run(
-            ["xcrun", "xcresulttool", "get", "--path", xcresult_path, "--format", "json"],
-            capture_output=True, text=True
-        )
-    return json.loads(r.stdout) if r.stdout else {}
 
 
 def extract_attachments(xcresult_path: str, output_dir: str):
-    """Extract image attachments from xcresult."""
+    """Extract image attachments from xcresult, renaming to clean names."""
     os.makedirs(output_dir, exist_ok=True)
 
-    # Use the newer xcresulttool export attachments command (Xcode 16+)
-    try:
-        r = subprocess.run(
-            ["xcrun", "xcresulttool", "export", "attachments",
-             "--path", xcresult_path, "--output-path", output_dir],
-            capture_output=True, text=True
-        )
-        if r.returncode == 0 and "Exported" in r.stdout:
-            count = r.stdout.count("Exported")
-            # Rename files to cleaner names based on suggested names
-            for f in os.listdir(output_dir):
-                if f.endswith(".png"):
-                    # File name format: UUID.png
-                    # Suggested name from stdout contains the clean name
-                    pass
-            print(f"Extracted {count} screenshots to {output_dir}")
-            return
-    except Exception:
-        pass
-
-    # Fallback: try older JSON-based extraction
-    try:
-        data = xcresult_json(xcresult_path)
-    except (json.JSONDecodeError, FileNotFoundError):
-        print("Could not parse xcresult JSON", file=sys.stderr)
-        return
-
-    try:
-        r = subprocess.run(
-            ["xcrun", "xcresulttool", "get", "test-results", "summary",
-             "--path", xcresult_path, "--format", "json"],
-            capture_output=True, text=True
-        )
-        summary = json.loads(r.stdout)
-
-        count = 0
-        for test_node in _walk_tests(summary):
-            for attachment in test_node.get("attachments", []):
-                _export_attachment(xcresult_path, attachment, output_dir, count)
-                count += 1
-
-        print(f"Extracted {count} screenshots to {output_dir}")
-
-    except Exception as e:
-        print(f"Extraction fallback: {e}", file=sys.stderr)
-        _bulk_export(xcresult_path, output_dir)
-
-
-def _walk_tests(data: dict):
-    """Recursively walk test result tree yielding test nodes."""
-    if "node" in data:
-        yield data["node"]
-    for child in data.get("children", []):
-        yield from _walk_tests(child)
-    # Direct node with attachments
-    if "attachments" in data:
-        yield data
-
-
-def _export_attachment(xcresult: str, attachment: dict, output_dir: str, index: int):
-    """Export a single attachment to PNG."""
-    name = attachment.get("name", f"screenshot_{index}")
-    payload_ref = attachment.get("payloadRef", {})
-    if not payload_ref:
-        return
-
-    output_path = os.path.join(output_dir, f"{name}.png")
-    subprocess.run(
-        ["xcrun", "xcresulttool", "get", "object",
-         "--path", xcresult, "--id", payload_ref.get("id", ""),
-         "--output-path", output_path],
-        capture_output=True
+    # Use xcresulttool export attachments (Xcode 16+)
+    r = subprocess.run(
+        [
+            "xcrun",
+            "xcresulttool",
+            "export",
+            "attachments",
+            "--path",
+            xcresult_path,
+            "--output-path",
+            output_dir,
+        ],
+        capture_output=True,
+        text=True,
     )
+
+    if r.returncode != 0 and "Exported" not in (r.stdout + r.stderr):
+        # Fallback: bulk directory export
+        _bulk_export(xcresult_path, output_dir)
+        return
+
+    # Read the manifest that xcresulttool wrote alongside the attachments
+    manifest_path = os.path.join(output_dir, "manifest.json")
+    rename_map = {}
+    if os.path.isfile(manifest_path):
+        try:
+            with open(manifest_path, "r") as fh:
+                manifest = json.load(fh)
+            for entry in manifest:
+                if not isinstance(entry, dict):
+                    continue
+                test_id = entry.get("testIdentifier", "unknown")
+                class_name = test_id.split("/")[0] if "/" in test_id else "Screenshot"
+                for att in entry.get("attachments", []):
+                    exported = att.get("exportedFileName", "")
+                    suggested = att.get("suggestedHumanReadableName", "")
+                    if exported and suggested:
+                        rename_map[exported] = suggested
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    count = 0
+    for exported_name, clean_name in sorted(rename_map.items()):
+        exported_path = os.path.join(output_dir, exported_name)
+        clean_path = os.path.join(output_dir, clean_name)
+        if os.path.isfile(exported_path):
+            os.rename(exported_path, clean_path)
+            count += 1
+
+    # Remove the manifest (it referenced the UUID names, now stale)
+    if os.path.isfile(manifest_path):
+        os.remove(manifest_path)
+
+    if count > 0:
+        print(f"Extracted {count} screenshots to {output_dir}")
+        for f in sorted(os.listdir(output_dir)):
+            if f.endswith(".png"):
+                fpath = os.path.join(output_dir, f)
+                size = os.path.getsize(fpath)
+                print(f"  {f} ({size:,} bytes)")
+    else:
+        # Maybe the files already have clean names (bulk export fallback)
+        pngs = sorted(f for f in os.listdir(output_dir) if f.endswith(".png"))
+        if pngs:
+            print(f"Extracted {len(pngs)} screenshots to {output_dir}")
+            for f in pngs:
+                fpath = os.path.join(output_dir, f)
+                size = os.path.getsize(fpath)
+                print(f"  {f} ({size:,} bytes)")
+        else:
+            print("No screenshots extracted", file=sys.stderr)
 
 
 def _bulk_export(xcresult: str, output_dir: str):
-    """Last resort: export all test attachments."""
+    """Last resort: export all test attachments as directory tree."""
     try:
         r = subprocess.run(
-            ["xcrun", "xcresulttool", "export", "--type", "directory",
-             "--path", xcresult, "--output-path", output_dir],
-            capture_output=True, text=True
+            [
+                "xcrun",
+                "xcresulttool",
+                "export",
+                "--type",
+                "directory",
+                "--path",
+                xcresult,
+                "--output-path",
+                output_dir,
+            ],
+            capture_output=True,
+            text=True,
         )
         if r.returncode == 0:
-            print(f"Bulk exported to {output_dir}")
+            # Walk the exported tree for PNGs
+            pngs = []
+            for root, _dirs, files in os.walk(output_dir):
+                for f in files:
+                    if f.endswith(".png"):
+                        pngs.append(os.path.join(root, f))
+            if pngs:
+                # Move all PNGs to the top-level output dir with clean names
+                for i, png_path in enumerate(sorted(pngs)):
+                    clean = os.path.join(output_dir, f"screenshot_{i + 1:02d}.png")
+                    os.rename(png_path, clean)
+                print(f"Bulk exported {len(pngs)} screenshots to {output_dir}")
+            else:
+                print("Bulk export produced no PNGs", file=sys.stderr)
     except Exception as e:
         print(f"Bulk export failed: {e}", file=sys.stderr)
 

@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Validate that the App Store submission is complete and consistent.
+"""Validate local App Store submission-package consistency.
+
+This script does not perform live privacy reachability, release-gate, physical-
+device, or authorized human visual-review checks. Passing means only that the
+local package checks listed below succeeded; it is not a submission-ready
+verdict. Use ``Scripts/release-gate-check.sh`` for the fail-closed release verdict.
 
 Checks:
 1. Listing metadata is valid JSON with required fields
@@ -12,7 +17,8 @@ Checks:
 8. Every required screenshot set has at least three exact-size real UI PNGs
 
 Usage: python3 Scripts/validate-submission.py [--project-root .]
-Exit 0 when ready to submit; exit 1 with details when something is missing.
+Exit 0 when local package checks pass; exit 1 when a local package check fails.
+Neither exit code represents live release readiness.
 """
 
 from __future__ import annotations
@@ -23,7 +29,6 @@ import subprocess
 import sys
 from pathlib import Path
 from urllib.parse import urlparse
-
 
 REQUIRED_METADATA_FIELDS = {
     "name": str,
@@ -150,6 +155,24 @@ def validate_third_party_notices(notices_path: Path) -> list[str]:
     return errors
 
 
+def validate_privacy_policy(root: Path) -> list[str]:
+    """Run the privacy policy verifier in local-only mode."""
+    verifier = root / "Scripts" / "verify-privacy-policy.py"
+    if not verifier.is_file():
+        return [f"Privacy policy verifier not found: {verifier}"]
+
+    result = subprocess.run(
+        [sys.executable, str(verifier), "--local-only"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()
+        return [f"Privacy policy verification failed:\n{detail}"]
+    return []
+
+
 def validate_screenshot_assets(root: Path) -> list[str]:
     required_scripts = (
         root / "Scripts" / "extract-screenshots.py",
@@ -181,7 +204,14 @@ def validate_screenshot_assets(root: Path) -> list[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Validate App Store submission readiness"
+        description=(
+            "Validate local App Store package consistency only; this does not "
+            "produce a live release-readiness verdict"
+        ),
+        epilog=(
+            "Exit 0 means local package checks passed; exit 1 means a local "
+            "package check failed. Neither exit code means the release is ready."
+        ),
     )
     parser.add_argument(
         "--project-root",
@@ -202,18 +232,23 @@ def main() -> int:
     all_errors += validate_third_party_notices(
         root / "ZiroEdge" / "Resources" / "THIRD_PARTY_NOTICES.md"
     )
+    all_errors += validate_privacy_policy(root)
     all_errors += validate_screenshot_assets(root)
 
     if all_errors:
-        print("❌ App Store submission is NOT ready:")
+        print("❌ Local App Store package checks failed:")
         for err in all_errors:
             print(f"  • {err}")
         return 1
 
-    print("✅ App Store submission is ready.")
+    print("✅ Local App Store package checks passed.")
+    print(
+        "   This is not a submission-ready verdict; live release gates remain separate."
+    )
     print("   • Listing metadata: complete")
     print("   • Review notes: complete")
     print("   • PrivacyInfo.xcprivacy: zero tracking, zero data collection")
+    print("   • Privacy policy: local checks passed")
     print("   • THIRD_PARTY_NOTICES.md: bundled")
     print("   • Required screenshot sets: complete and exact-size")
     return 0

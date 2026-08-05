@@ -46,45 +46,34 @@ class UITestBase: XCTestCase {
         return true
     }
 
-    /// Open the Settings sheet via the gear toolbar button.
-    /// On iPhone with NavigationSplitView collapsed, the gear button is in the
-    /// navigation bar of whichever view is currently front-most.
+    /// Open the Settings sheet via the gear toolbar button. Returns true only
+    /// after the Settings navigation title and a screen-specific row appear.
     @discardableResult
     func openSettings(timeout: TimeInterval = 5) -> Bool {
-        // Try common accessibility labels for the gear button
-        for label in ["gear", "Settings", "settings", "Gear"] {
-            let btn = app.buttons[label]
-            if btn.waitForExistence(timeout: 2) {
-                btn.tap()
-                sleep(1)
-                return true
-            }
+        let settingsButtons = app.buttons.matching(identifier: "Settings")
+        guard settingsButtons.firstMatch.waitForExistence(timeout: timeout),
+              let settingsButton = settingsButtons.allElementsBoundByIndex
+                .filter(\.isHittable)
+                .max(by: { $0.frame.maxX < $1.frame.maxX }) else {
+            return false
         }
-        // Try navigation bar buttons
-        let navBtn = app.navigationBars.buttons.firstMatch
-        if navBtn.waitForExistence(timeout: 2) {
-            navBtn.tap()
-            sleep(1)
-            return true
-        }
-        // Fallback: broader predicate match
-        let gearButton = app.buttons.containing(
-            NSPredicate(format: "identifier CONTAINS 'gear' OR label CONTAINS[c] 'gear' OR label CONTAINS[c] 'setting'")
-        ).firstMatch
-        if gearButton.waitForExistence(timeout: timeout) {
-            gearButton.tap()
-            sleep(1)
-            return true
-        }
-        return false
+        settingsButton.tap()
+
+        let manageModelsButton = app.buttons["Manage Models"].firstMatch
+        let manageModelsText = app.staticTexts["Manage Models"].firstMatch
+        let activeModelSection = app.staticTexts["Active Model"].firstMatch
+        let manageModelsVisible = manageModelsButton.waitForExistence(timeout: 2)
+            || manageModelsText.waitForExistence(timeout: timeout)
+        return manageModelsVisible
+            && activeModelSection.waitForExistence(timeout: timeout)
     }
 
     /// Open the Models screen: Settings sheet -> "Manage Models" NavigationLink.
+    /// Returns true only after the Models navigation title and model list appear.
     @discardableResult
     func openModels(timeout: TimeInterval = 10) -> Bool {
         guard openSettings(timeout: timeout) else { return false }
-        // Wait for the Settings sheet to fully appear — look for "Manage Models"
-        // as either a button or a static text (NavigationLink renders as a cell)
+
         let manageModels = app.buttons["Manage Models"].firstMatch
         let manageModelsText = app.staticTexts["Manage Models"].firstMatch
         let manageModelsCell = app.cells["Manage Models"].firstMatch
@@ -97,37 +86,45 @@ class UITestBase: XCTestCase {
         } else {
             return false
         }
-        sleep(1) // Wait for push animation
-        return true
+
+        let modelsTitle = app.staticTexts["Models"].firstMatch
+        let modelCatalogContent = app.staticTexts["Llama 3.2 3B"].firstMatch
+        return modelsTitle.waitForExistence(timeout: timeout)
+            && modelCatalogContent.waitForExistence(timeout: timeout)
     }
 
-    /// Select an existing conversation or create a new one so ChatView (with
-    /// its textView input) is shown instead of WelcomeView.
+    /// Select an existing conversation or create a new one. Returns true only
+    /// when ChatView's input exists; tapping a control alone is not navigation
+    /// evidence (for example, a model redirect may appear instead).
     @discardableResult
     func selectOrCreateConversation(timeout: TimeInterval = 8) -> Bool {
-        // On iPhone, the sidebar IS the root NavigationStack.
-        // SwiftUI List(.sidebar) renders as CollectionView, not TableView.
-        // Try collectionViews first (iOS 16+ SwiftUI), then fall back to tables.
-        let cell = firstCellInSidebar(app: app, timeout: timeout)
-        if let cell, cell.waitForExistence(timeout: timeout) {
-            cell.tap()
-            return true
+        let chatInput = app.textFields["chatInput"].firstMatch
+        if chatInput.waitForExistence(timeout: 2) { return true }
+
+        let newConversation = app.buttons["New Conversation"].firstMatch
+        if newConversation.waitForExistence(timeout: timeout) {
+            newConversation.tap()
+            if chatInput.waitForExistence(timeout: timeout) { return true }
         }
 
-        // No conversations yet — try "New Conversation" button in SidebarView
-        for label in ["New Conversation", "new-conversation", "plus"] {
-            let btn = app.buttons[label]
-            if btn.waitForExistence(timeout: 2) {
-                btn.tap()
-                return true
+        for label in ["new-conversation", "plus"] {
+            let button = app.buttons[label].firstMatch
+            if button.waitForExistence(timeout: 2) {
+                button.tap()
+                if chatInput.waitForExistence(timeout: timeout) { return true }
             }
         }
 
-        // If we're on WelcomeView, try "Start a Conversation"
-        let startBtn = app.buttons["Start a Conversation"]
-        if startBtn.waitForExistence(timeout: 2) {
-            startBtn.tap()
-            return true
+        if let cell = firstCellInSidebar(app: app, timeout: timeout),
+           cell.waitForExistence(timeout: timeout) {
+            cell.tap()
+            if chatInput.waitForExistence(timeout: timeout) { return true }
+        }
+
+        let startButton = app.buttons["Start a Conversation"].firstMatch
+        if startButton.waitForExistence(timeout: 2) {
+            startButton.tap()
+            if chatInput.waitForExistence(timeout: timeout) { return true }
         }
 
         return false
@@ -138,14 +135,16 @@ class UITestBase: XCTestCase {
     /// first available model, waits for it to load.
     @discardableResult
     func selectModelFromPicker(timeout: TimeInterval = 30) -> Bool {
-        // The model picker is a Menu whose label shows "No Model" or the
-        // model name. In XCUITest, SwiftUI Menu renders as a button.
-        // Try tapping by common labels.
-        let picker = app.buttons["No Model"].firstMatch
-            ?? app.buttons.containing(NSPredicate(format: "label CONTAINS 'Gemma'")).firstMatch
-            ?? app.buttons.containing(NSPredicate(format: "label CONTAINS[c] 'model'")).firstMatch
-
-        guard picker.waitForExistence(timeout: 5) else { return false }
+        // `firstMatch` is never nil. Test each candidate's existence instead
+        // of using a dead nil-coalescing chain.
+        let candidates = [
+            app.buttons["No Model"].firstMatch,
+            app.buttons.containing(NSPredicate(format: "label CONTAINS 'Gemma'")).firstMatch,
+            app.buttons.containing(NSPredicate(format: "label CONTAINS[c] 'model'")).firstMatch,
+        ]
+        guard let picker = candidates.first(where: { $0.waitForExistence(timeout: 2) }) else {
+            return false
+        }
         picker.tap()
         sleep(1) // Wait for menu popup
 
@@ -195,11 +194,15 @@ class UITestBase: XCTestCase {
 
     /// Type and send a message in the chat input field.
     func sendChatMessage(_ text: String) {
-        // ChatView uses TextField with accessibilityIdentifier "chatInput"
-        let field = app.textFields["chatInput"].firstMatch
-            ?? app.textFields["Message ZiroEdge..."].firstMatch
-            ?? app.textFields.firstMatch
-        guard field.waitForExistence(timeout: 5) else { return }
+        // `firstMatch` is never nil, so choose the first element that exists.
+        let candidates = [
+            app.textFields["chatInput"].firstMatch,
+            app.textFields["Message ZiroEdge"].firstMatch,
+            app.textFields.firstMatch,
+        ]
+        guard let field = candidates.first(where: { $0.waitForExistence(timeout: 2) }) else {
+            return
+        }
 
         // Tap to focus
         field.tap()
@@ -210,12 +213,12 @@ class UITestBase: XCTestCase {
         app.typeText(text)
         Thread.sleep(forTimeInterval: 1) // Wait for binding
 
-        // Send via keyboard return
-        let returnBtn = app.keyboards.buttons["Return"].firstMatch
-            ?? app.keyboards.buttons["enter"].firstMatch
-            ?? app.keyboards.buttons["return"].firstMatch
-        if returnBtn.waitForExistence(timeout: 2) {
-            returnBtn.tap()
+        // Send via the localized keyboard return key.
+        let returnButtons = ["Return", "enter", "return"].map {
+            app.keyboards.buttons[$0].firstMatch
+        }
+        if let returnButton = returnButtons.first(where: { $0.waitForExistence(timeout: 1) }) {
+            returnButton.tap()
         }
     }
 
@@ -234,6 +237,39 @@ class UITestBase: XCTestCase {
     }
 
     // MARK: - Model Helpers
+
+    /// Wait for a production model to be loaded and ready in the picker.
+    /// The model picker label must show a model name (not "No Model") and
+    /// any loading ProgressView must have disappeared.
+    func waitForModelLoaded(timeout: TimeInterval = 30) -> Bool {
+        let start = Date()
+        while Date().timeIntervalSince(start) < timeout {
+            // Once "No Model" is gone, a model is loaded
+            let noModel = app.buttons["No Model"].firstMatch
+            if !noModel.exists {
+                // Double-check: the picker should show an actual model name
+                let pickerLabel = readModelPickerLabel()
+                if let label = pickerLabel, label != "No Model", !label.isEmpty {
+                    return true
+                }
+            }
+            sleep(2)
+        }
+        return false
+    }
+
+    /// Verify that a specific screen is visible by checking for a
+    /// distinguishing accessibility element. Fails the test if the
+    /// element does not appear within the timeout.
+    func requireScreenVisible(_ element: XCUIElement, named description: String,
+                              timeout: TimeInterval = 5,
+                              file: StaticString = #file, line: UInt = #line) {
+        XCTAssertTrue(
+            element.waitForExistence(timeout: timeout),
+            "Screen '\(description)' not visible — expected element did not appear",
+            file: file, line: line
+        )
+    }
 
     /// Returns true if at least one model appears installed in the models list.
     func hasInstalledModel() -> Bool {

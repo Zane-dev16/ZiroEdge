@@ -1,0 +1,217 @@
+{
+  "assets": [
+    {
+      "byteCount": 260793,
+      "deviceSet": "ipad-11",
+      "path": "ziroedge-docs/app-store-screenshots/ipad-11/models.png",
+      "pixelHeight": 2388,
+      "pixelWidth": 1668,
+      "sha256": "f7001b40d8d1d42e6e13e335a3227bf9550126cceb765f5deb4c8428e10bd0b3",
+      "sourceXCResult": "test-output/release-screenshots/xcresults/ipad-11.xcresult"
+    },
+    {
+      "byteCount": 203203,
+      "deviceSet": "ipad-11",
+      "path": "ziroedge-docs/app-store-screenshots/ipad-11/settings.png",
+      "pixelHeight": 2388,
+      "pixelWidth": 1668,
+      "sha256": "c30f335c82f7b7b6e562016d26c19212d7144e4282b2688765d25bfee1601323",
+      "sourceXCResult": "test-output/release-screenshots/xcresults/ipad-11.xcresult"
+    },
+    {
+      "byteCount": 234398,
+      "deviceSet": "ipad-11",
+      "path": "ziroedge-docs/app-store-screenshots/ipad-11/sidebar_chat.png",
+      "pixelHeight": 2388,
+      "pixelWidth": 1668,
+      "sha256": "1203c42ee9c58822f4e344774ff68b82df028714394f2e03ac2a9a37b4effecf",
+      "sourceXCResult": "test-output/release-screenshots/xcresults/ipad-11-sidebar-final.xcresult"
+    },
+    {
+      "byteCount": 333635,
+      "deviceSet": "ipad-13",
+      "path": "ziroedge-docs/app-store-screenshots/ipad-13/models.png",
+      "pixelHeight": 2732,
+      "pixelWidth": 2048,
+      "sha256": "245bee0bd7863b9c432d9c39a0d92bf0dbaa128c958481f1457c970c842bd14d",
+      "sourceXCResult": "test-output/release-screenshots/xcresults/ipad-13-check.xcresult"
+    },
+    {
+      "byteCount": 274229,
+      "deviceSet": "ipad-13",
+      "path": "ziroedge-docs/app-store-screenshots/ipad-13/settings.png",
+      "pixelHeight": 2732,
+      "pixelWidth": 2048,
+      "sha256": "54eb19becf12d36cd89742baf1e5f5db75d163e944856204a19aa73d81085a1e",
+      "sourceXCResult": "test-output/release-screenshots/xcresults/ipad-13-check.xcresult"
+    },
+    {
+      "byteCount": 258761,
+      "deviceSet": "ipad-13",
+      "path": "ziroedge-docs/app-store-screenshots/ipad-13/sidebar_chat.png",
+      "pixelHeight": 2732,
+      "pixelWidth": 2048,
+      "sha256": "7a6f8ed781a8fc22c159140f4e7d2948905699a2610bdfac197316b94e8cb4ce",
+      "sourceXCResult": "test-output/release-screenshots/xcresults/ipad-13-sidebar-final.xcresult"
+    },
+    {
+      "byteCount": 333483,
+      "deviceSet": "iphone-61",
+      "path": "ziroedge-docs/app-store-screenshots/iphone-61/AppStoreScreenshotCapture_01_chat_view_0.png",
+      "pixelHeight": 2556,
+      "pixelWidth": 1179,
+      "sha256": "4bb53ba0d0c588fe0f809ca83f93a0d6c662c6c831beeef7b8c1774c5dddc1b3",
+      "sourceXCResult": "test-output/release-screenshots/xcresults/iphone-61.xcresult"
+    },
+    {
+      "byteCount": 389449,
+      "deviceSet": "iphone-61",
+      "path": "ziroedge-docs/app-store-screenshots/iphone-61/AppStoreScreenshotCapture_02_models_page_0.png",
+      "pixelHeight": 2556,
+      "pixelWidth": 1179,
+      "sha256": "833a1b5cab1ec8c3fba6b214eaa95e34c917eb5497be789a68baa403579825c5",
+      "sourceXCResult": "test-output/release-screenshots/xcresults/iphone-61.xcresult"
+    },
+    {
+      "byteCount": 293336,
+      "deviceSet": "iphone-61",
+      "path": "ziroedge-docs/app-store-screenshots/iphone-61/AppStoreScreenshotCapture_03_settings_0.png",
+      "pixelHeight": 2556,
+      "pixelWidth": 1179,
+      "sha256": "b20810c37dfeb8fa83d7cb97ba8fab495e2aa65a9ca252292cf71d5e7302e9c8",
+      "sourceXCResult": "test-output/release-screenshots/xcresults/iphone-61.xcresult"
+    },
+    {
+      "byteCount": 349066,
+      "deviceSet": "iphone-67",
+      "path": "ziroedge-docs/app-store-screenshots/iphone-67/AppStoreScreenshotCapture_01_chat_view_0.png",
+      "pixelHeight": 2796,
+      "pixelWidth": 1290,
+      "sha256": "8efdfc50ac6c386f3512c6a909df97ee1e6bb0a3c0a8234be2170fa0897dcbe9",
+      "sourceXCResult": "test-output/release-screenshots/xcresults/iphone-67.xcresult"
+    },
+    {
+      "byteCount": 409244,
+      "deviceSet": "iphone-67",
+      "path": "ziroedge-docs/app-store-screenshots/iphone-67/AppStoreScreenshotCapture_02_models_page_0.png",
+      "pixelHeight": 2796,
+      "pixelWidth": 1290,
+      "sha256": "aaeb5c44f9152698392cb11f2911e5debffc205834af6337658a12f8665325f7",
+      "sourceXCResult": "test-output/release-screenshots/xcresults/iphone-67.xcresult"
+    },
+    {
+      "byteCount": 337972,
+      "deviceSet": "iphone-67",
+      "path": "ziroedge-docs/app-store-screenshots/iphone-67/AppStoreScreenshotCapture_03_settings_0.png",
+      "pixelHeight": 2796,
+      "pixelWidth": 1290,
+      "sha256": "5c67a83d6951aaa959df1462a11f5d55c5a133ac758f6e4e9432cd011d4628e9",
+      "sourceXCResult": "test-output/release-screenshots/xcresults/iphone-67.xcresult"
+    }
+  ],
+  "build": {
+    "codeSigningAllowed": false,
+    "configuration": "Debug iOS Simulator",
+    "gitRevision": "63341af406f1b20ff8e14fa8e8e6d2d206ff1cc4",
+    "sourceTreeDirty": true,
+    "xcodeBuild": "Build version 17F113",
+    "xcodeVersion": "Xcode 26.6"
+  },
+  "capture": {
+    "catalogAndSettingsLaunchArguments": [
+      "--uitesting"
+    ],
+    "chatLaunchArguments": [
+      "--uitesting",
+      "--uitesting-hermetic-model"
+    ],
+    "note": "The hermetic model hook supplies local model readiness only for chat-layout capture; models/settings use ordinary catalog state. iPad sidebar captures assert New Conversation is hittable while chatInput exists.",
+    "tests": [
+      "AppStoreScreenshotCapture",
+      "AppStoreScreenshotTests"
+    ]
+  },
+  "catalogVersion": "1",
+  "reviewReadiness": {
+    "status": "not_review_ready",
+    "humanVisualReview": "not_performed",
+    "technicalValidation": "pass",
+    "blockers": [
+      "Models screenshots visibly show Repair/runtime-unavailable states.",
+      "Chat screenshots use a hermetic model hook and show empty chats rather than review-ready real-app content.",
+      "No authorized human visual review is retained."
+    ],
+    "note": "This manifest is technical capture and provenance evidence only; it is not App Store review approval."
+  },
+  "generatedAt": "2026-08-02T06:01:27.380769+00:00",
+  "schemaVersion": 1,
+  "simulatorRuntime": {
+    "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
+    "name": "iOS 26.5"
+  },
+  "simulators": {
+    "ipad-11": {
+      "deviceType": "iPad Pro 11-inch (4th generation, 16GB)",
+      "name": "ZiroEdge Screenshot iPad Pro 11",
+      "udid": "49C00970-067D-40C1-8A73-5B0F7B9CE66B"
+    },
+    "ipad-13": {
+      "deviceType": "iPad Pro 12.9-inch (6th generation, 16GB)",
+      "name": "ZiroEdge Screenshot iPad Pro 12.9",
+      "udid": "26345FAD-3042-4769-AAAF-2AA7509AB244"
+    },
+    "iphone-61": {
+      "deviceType": "iPhone 16 Pro",
+      "name": "ZiroEdge Screenshot iPhone 16 Pro",
+      "udid": "6830DDB8-B4C6-4959-885F-36F2B1377CB4"
+    },
+    "iphone-67": {
+      "deviceType": "iPhone 16 Pro Max",
+      "name": "ZiroEdge Screenshot iPhone 16 Pro Max",
+      "udid": "1983CD9C-3C55-4899-8C54-DFEED260E9F0"
+    }
+  },
+  "validatedAt": "2026-08-02T06:20:42.377819+00:00",
+  "validationCommands": [
+    "python3 Scripts/verify-screenshots.py ziroedge-docs/app-store-screenshots",
+    "python3 Scripts/validate-submission.py --project-root ."
+  ],
+  "validationResults": [
+    {
+      "command": "python3 Scripts/verify-screenshots.py ziroedge-docs/app-store-screenshots",
+      "exitCode": 0,
+      "outcome": "pass"
+    },
+    {
+      "command": "python3 Scripts/validate-submission.py --project-root .",
+      "exitCode": 0,
+      "outcome": "pass"
+    }
+  ],
+  "xcresultReferences": [
+    {
+      "path": "test-output/release-screenshots/xcresults/ipad-11-sidebar-final.xcresult",
+      "preservedLocally": true
+    },
+    {
+      "path": "test-output/release-screenshots/xcresults/ipad-11.xcresult",
+      "preservedLocally": true
+    },
+    {
+      "path": "test-output/release-screenshots/xcresults/ipad-13-check.xcresult",
+      "preservedLocally": true
+    },
+    {
+      "path": "test-output/release-screenshots/xcresults/ipad-13-sidebar-final.xcresult",
+      "preservedLocally": true
+    },
+    {
+      "path": "test-output/release-screenshots/xcresults/iphone-61.xcresult",
+      "preservedLocally": true
+    },
+    {
+      "path": "test-output/release-screenshots/xcresults/iphone-67.xcresult",
+      "preservedLocally": true
+    }
+  ]
+}

@@ -349,7 +349,10 @@ struct MainView: View {
                 .toolbar { settingsToolbar }
             }
         }
-        .navigationSplitViewStyle(.prominentDetail)
+        // Keep the conversation list and active chat visible together on iPad.
+        // `.prominentDetail` collapses the sidebar in portrait, obscuring the
+        // app's primary split-view navigation.
+        .navigationSplitViewStyle(.balanced)
     }
 
     private func sidebar(navigateInCompactLayout: Bool) -> some View {

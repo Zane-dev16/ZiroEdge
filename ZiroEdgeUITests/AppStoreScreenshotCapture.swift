@@ -2,6 +2,11 @@ import XCTest
 
 /// Captures App Store screenshots at specific iPhone simulator resolutions.
 ///
+/// Every test fails closed: navigation failures, missing models, and
+/// missing responses all produce test failures rather than fallback images.
+///
+/// Required screenshots (3 per size): chat, models, settings.
+///
 /// Run on the appropriate simulator to generate screenshots at:
 /// - iPhone 16 Pro Max (6.7"): 1290 x 2796
 /// - iPhone 16 Pro (6.1"):     1179 x 2556
@@ -12,96 +17,75 @@ import XCTest
 ///         -scheme ZiroEdgeUITests \
 ///         -destination 'platform=iOS Simulator,name=iPhone 16 Pro Max' \
 ///         -only-testing:ZiroEdgeUITests/AppStoreScreenshotCapture
-///
-/// Output goes to test-output/screenshots/; the companion shell script
-/// renames and copies them into ziroedge-docs/app-store-screenshots/.
 final class AppStoreScreenshotCapture: UITestBase {
+
+    override func setUpWithError() throws {
+        continueAfterFailure = false
+        app = XCUIApplication()
+        app.launchArguments += ["--uitesting"]
+        app.launch()
+    }
 
     // MARK: - Chat Screenshots
 
+    /// Capture a chat view. If conversations exist, navigate into one;
+    /// otherwise create a new conversation. The test fails if neither
+    /// navigation nor creation succeeds.
     func testCaptureChatEmptyState() {
-        let navigated = selectOrCreateConversation()
-        sleep(2)
-        if navigated {
-            capture("chat_view")
-        } else {
-            // Fallback: screenshot whatever is visible
-            capture("chat_empty_state")
+        app.terminate()
+        app = XCUIApplication()
+        app.launchArguments += ["--uitesting", "--uitesting-hermetic-model"]
+        app.launch()
+
+        guard selectOrCreateConversation() else {
+            XCTFail("Failed to navigate to or create a conversation for chat screenshot")
+            return
         }
+        sleep(2)
+        capture("chat_view")
     }
 
+    /// Capture a chat with a real assistant response. Requires a loaded
+    /// production model. Fails if navigation, model loading, or response
+    /// receipt does not succeed.
     func testCaptureChatWithMessages() {
-        let navigated = selectOrCreateConversation()
-        guard navigated else {
-            // Try starting a new conversation
-            _ = tapButton("Start a Conversation")
-            sleep(2)
-            capture("chat_view")
+        guard selectOrCreateConversation() else {
+            XCTFail("Failed to navigate to or create a conversation for chat-with-messages screenshot")
             return
         }
 
-        // Send a message to show the chat with content
-        sendChatMessage(
-            "Hello! Please introduce yourself briefly."
-        )
-        let responded = waitForResponse(timeout: 60)
-        capture(responded ? "chat_with_response" : "chat_view")
+        guard waitForModelLoaded(timeout: 30) else {
+            XCTFail("No production model loaded — cannot capture chat with response")
+            return
+        }
+
+        sendChatMessage("Hello! Please introduce yourself briefly.")
+        guard waitForResponse(timeout: 60) else {
+            XCTFail("No assistant response received within 60 s — chat screenshot would be empty")
+            return
+        }
+        capture("chat_with_response")
     }
 
     // MARK: - Models Screenshots
 
     func testCaptureModelsPage() {
-        let opened = openModels()
-        sleep(2)
-        capture(opened ? "models_page" : "models_page")
-    }
-
-    func testCaptureModelDetail() {
-        let opened = openModels()
-        guard opened else {
-            capture("models_page")
+        guard openModels() else {
+            XCTFail("Failed to open Models page — navigation did not reach the Models screen")
             return
         }
-        sleep(1)
-
-        // Tap first model row to get detail view
-        let firstCell = app.tables.cells.firstMatch
-        if firstCell.waitForExistence(timeout: 5) {
-            firstCell.tap()
-            sleep(2)
-            capture("model_detail")
-        } else {
-            capture("models_page")
-        }
+        sleep(2)
+        capture("models_page")
     }
 
     // MARK: - Settings Screenshot
 
     func testCaptureSettings() {
-        let opened = openSettings()
-        sleep(2)
-        capture(opened ? "settings" : "settings")
-    }
-
-    // MARK: - Onboarding Screenshot
-
-    func testCaptureOnboarding() {
-        // Onboarding appears on fresh install when --uitesting resets state
-        let onboarding = app.otherElements["OnboardingView"]
-        if onboarding.waitForExistence(timeout: 3) {
-            capture("onboarding")
-        } else {
-            // Try relaunching with fresh state flag
-            app.terminate()
-            app.launchArguments += ["--uitesting-fresh"]
-            app.launch()
-            sleep(2)
-            let freshOnboarding = app.otherElements["OnboardingView"]
-            if freshOnboarding.waitForExistence(timeout: 3) {
-                capture("onboarding")
-            } else {
-                capture("app_launch")
-            }
+        guard openSettings() else {
+            XCTFail("Failed to open and verify the Settings screen")
+            return
         }
+        sleep(2)
+        capture("settings")
     }
 }
