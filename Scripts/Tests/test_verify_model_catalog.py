@@ -49,12 +49,18 @@ class CatalogMetadataTests(unittest.TestCase):
             "https:///fixture.gguf",
         )
         for url in urls:
-            with self.subTest(url=url), self.assertRaisesRegex(ValueError, "non-canonical URL"):
+            with (
+                self.subTest(url=url),
+                self.assertRaisesRegex(ValueError, "non-canonical URL"),
+            ):
                 validator.validate_metadata(artifact(url=url))
 
     def test_nonpositive_sizes_are_rejected(self):
         for size in (0, -1):
-            with self.subTest(size=size), self.assertRaisesRegex(ValueError, "non-positive size"):
+            with (
+                self.subTest(size=size),
+                self.assertRaisesRegex(ValueError, "non-positive size"),
+            ):
                 validator.validate_metadata(artifact(size=size))
 
     def test_duplicate_destinations_are_rejected(self):
@@ -68,6 +74,61 @@ class CatalogMetadataTests(unittest.TestCase):
         )
         self.assertEqual(sanitized, "https://cdn.example.com/model.gguf")
         self.assertNotIn("secret", sanitized)
+
+
+class CatalogVersionTests(unittest.TestCase):
+    def test_catalog_version_is_non_empty(self):
+        version = validator.extract_catalog_version()
+        self.assertIsInstance(version, str)
+        self.assertGreater(len(version), 0)
+        self.assertEqual(version, "1")
+
+
+class EvidenceFormatTests(unittest.TestCase):
+    def test_success_evidence_includes_catalog_version(self):
+        """Success evidence must carry catalog version and expected/actual.*"""
+        art = artifact()[0]
+        result = validator.verify_download(art, timeout=5, catalog_version="1")
+        # With a fake URL, verify_download will fail and return failure evidence.
+        self.assertIn("catalogVersion", result)
+        self.assertEqual(result["catalogVersion"], "1")
+        self.assertIn("expectedSize", result)
+        self.assertIn("expectedSHA256", result)
+        self.assertIn("canonicalSource", result)
+        self.assertIn("command", result)
+        self.assertIn("outcome", result)
+
+    def test_sanitized_source_never_exposes_credentials(self):
+        san = validator.sanitize_provenance(
+            "https://huggingface.co/user/model/resolve/main/file.gguf?token=abc&signature=xyz#frag"
+        )
+        self.assertEqual(
+            san, "https://huggingface.co/user/model/resolve/main/file.gguf"
+        )
+        self.assertNotIn("token", san)
+        self.assertNotIn("signature", san)
+        self.assertNotIn("frag", san)
+        self.assertNotIn("abc", san)
+
+    def test_sanitized_source_preserves_structure(self):
+        san = validator.sanitize_provenance(
+            "https://huggingface.co/zanish-labs/model/resolve/main/file.gguf"
+        )
+        self.assertTrue(san.startswith("https://"))
+        self.assertTrue(san.endswith(".gguf"))
+        self.assertIn("huggingface.co", san)
+
+    def test_failure_evidence_is_reviewable(self):
+        """Failure evidence must not expose credentials and must be structured."""
+        art = artifact(url="https://example.com/fixture.gguf")[0]
+        result = validator.verify_download(art, timeout=1, catalog_version="1")
+        self.assertEqual(result["outcome"], "failure")
+        self.assertIn("failureSummary", result)
+        self.assertIn("expectedSize", result)
+        self.assertIn("expectedSHA256", result)
+        # Canonical source must be sanitized
+        self.assertNotIn("token", str(result.get("canonicalSource", "")))
+        self.assertNotIn("password", str(result.get("canonicalSource", "")))
 
 
 if __name__ == "__main__":

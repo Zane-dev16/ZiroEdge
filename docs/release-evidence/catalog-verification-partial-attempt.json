@@ -1,0 +1,82 @@
+{
+  "artifacts": [
+    {
+      "actualSHA256": "cc83145ef243756223c63e966c77efd53ff4bdd5f926c67f1d8c7ec43b76f106",
+      "actualSize": 18874368,
+      "canonicalSource": "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+      "catalogVersion": "1",
+      "command": "python3 Scripts/verify-model-catalog.py --evidence ...",
+      "expectedSHA256": "6c1a2b41161032677be168d354123594c0e6e67d2b9227c84f296ad037c728ff",
+      "expectedSize": 2019377696,
+      "failedAt": "2026-08-02T06:02:33.062783+00:00",
+      "failureSummary": "The read operation timed out",
+      "kind": "base",
+      "model": "llama3.2-3b-q4",
+      "outcome": "failure",
+      "startedAt": "2026-08-02T04:30:02.993008+00:00"
+    },
+    {
+      "actualSHA256": "e906799d713d6821a05934990a96e3fa7a82ed5bf04d86fb19e27da8762f2f1c",
+      "actualSize": 1129316352,
+      "canonicalSource": "https://huggingface.co/zanish-labs/gemma-4-e2b-q4km-gguf/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf",
+      "catalogVersion": "1",
+      "command": "python3 Scripts/verify-model-catalog.py --evidence ...",
+      "expectedSHA256": "8580ede90c6a7fdd5bfee2c016b3a7601d471895b192a0fddaf655d577b12e3b",
+      "expectedSize": 3427861088,
+      "failedAt": "2026-08-02T06:32:03.764682+00:00",
+      "failureSummary": "The read operation timed out",
+      "kind": "base",
+      "model": "gemma-4-e2b-q4",
+      "outcome": "failure",
+      "startedAt": "2026-08-02T06:02:33.064703+00:00"
+    },
+    {
+      "actualSHA256": "8a82e0fd831bb7cb5c8898b86393eb14042986b950a60e1034bf21d061aac8a8",
+      "actualSize": 557367776,
+      "canonicalSource": "https://huggingface.co/zanish-labs/gemma-4-e2b-q4km-gguf/resolve/main/mmproj-gemma-4-E2B-it-Q8_0.gguf",
+      "catalogVersion": "1",
+      "command": "python3 Scripts/verify-model-catalog.py --evidence ...",
+      "expectedSHA256": "8a82e0fd831bb7cb5c8898b86393eb14042986b950a60e1034bf21d061aac8a8",
+      "expectedSize": 557367776,
+      "finalProvenance": "https://us.aws.cdn.hf.co/xet-bridge-us/6a4a45eb8a91d410b57fb750/e9e1866ccee27effcbbe855355ccc26a70ea6b15352b74be7907637a3a7eaefb",
+      "kind": "mmproj",
+      "model": "gemma-4-e2b-q4",
+      "outcome": "success",
+      "startedAt": "2026-08-02T06:32:03.772978+00:00",
+      "verifiedAt": "2026-08-02T06:36:16.234400+00:00"
+    },
+    {
+      "actualSHA256": "49b5e801bbfcb7fed3cdfa93865a695ca04f7ef9baa704a600493af06f456d2c",
+      "actualSize": 83886080,
+      "canonicalSource": "https://huggingface.co/zanish-labs/gemma-4-e4b-q4km-gguf/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf",
+      "catalogVersion": "1",
+      "command": "python3 Scripts/verify-model-catalog.py --evidence ...",
+      "expectedSHA256": "9d23b7b4cd3c6c6c9ffadd7a9b1e16448621005b80a803e85afa3ca2c48714e3",
+      "expectedSize": 5335273056,
+      "failedAt": "2026-08-02T06:51:56.147029+00:00",
+      "failureSummary": "The read operation timed out",
+      "kind": "base",
+      "model": "gemma-4-e4b-q4",
+      "outcome": "failure",
+      "startedAt": "2026-08-02T06:36:16.431634+00:00"
+    },
+    {
+      "actualSHA256": "51d4b7fd825e4569f746b200fccc5332bf914e8ef7cbe447272ce4fec6df3db6",
+      "actualSize": 559874528,
+      "canonicalSource": "https://huggingface.co/zanish-labs/gemma-4-e4b-q4km-gguf/resolve/main/mmproj-gemma-4-E4B-it-Q8_0.gguf",
+      "catalogVersion": "1",
+      "command": "python3 Scripts/verify-model-catalog.py --evidence ...",
+      "expectedSHA256": "51d4b7fd825e4569f746b200fccc5332bf914e8ef7cbe447272ce4fec6df3db6",
+      "expectedSize": 559874528,
+      "finalProvenance": "https://us.aws.cdn.hf.co/xet-bridge-us/6a4a45ec101c9af9ab7604a7/d83cbc82705b0c54ac937f031e80b84cefc28690ae88902bd3c8b3992e17fe9b",
+      "kind": "mmproj",
+      "model": "gemma-4-e4b-q4",
+      "outcome": "success",
+      "startedAt": "2026-08-02T06:51:56.156029+00:00",
+      "verifiedAt": "2026-08-02T06:52:30.178970+00:00"
+    }
+  ],
+  "catalogVersion": "1",
+  "command": "python3 Scripts/verify-model-catalog.py --evidence ...",
+  "generatedAt": "2026-08-02T06:52:30.236263+00:00"
+}
