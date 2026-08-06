@@ -226,17 +226,28 @@ final class ImportedModelUpdateCoordinator: ObservableObject {
     private let inspector: HFRepositoryInspector
     private let store: ImportedModelStore
     private let downloadManager: DownloadManager
+    private let updateStore: ImportedModelUpdateStore
     private let pairResolver = VisionPairResolver()
-    private var stagedRecords: [String: ImportedModelRecord] = [:]
+    private var stagedRecords: [String: ImportedModelRecord]
 
     init(
         inspector: HFRepositoryInspector = HFRepositoryInspector(),
         store: ImportedModelStore = .shared,
-        downloadManager: DownloadManager
+        downloadManager: DownloadManager,
+        updateStore: ImportedModelUpdateStore? = nil
     ) {
         self.inspector = inspector
         self.store = store
         self.downloadManager = downloadManager
+        let resolvedUpdateStore = updateStore ?? (store === ImportedModelStore.shared
+            ? .shared
+            : ImportedModelUpdateStore(directory: FileManager.default.temporaryDirectory
+                .appendingPathComponent("ZiroEdge-Updates-\(UUID().uuidString)")))
+        self.updateStore = resolvedUpdateStore
+        self.stagedRecords = Dictionary(
+            resolvedUpdateStore.allRecords.map { ($0.id, $0) },
+            uniquingKeysWith: { _, latest in latest }
+        )
     }
 
     func checkForUpdate(model: AIModel) async throws -> CheckResult {
@@ -280,6 +291,7 @@ final class ImportedModelUpdateCoordinator: ObservableObject {
                 throw DownloadError.diskSpaceInsufficient
             }
         }
+        try updateStore.upsert(record)
         stagedRecords[existing.id] = record
         downloadManager.startDownload(for: record.model)
         return record.model
@@ -319,6 +331,7 @@ final class ImportedModelUpdateCoordinator: ObservableObject {
             return .rejected("Not enough storage to stage both updated artifacts. The installed model is unchanged.")
         }
 
+        try updateStore.upsert(record)
         stagedRecords[existing.id] = record
         downloadManager.startDownload(for: record.model)
         return .staging(record.model)
@@ -334,7 +347,13 @@ final class ImportedModelUpdateCoordinator: ObservableObject {
         guard baseReady, projectorReady else { return nil }
 
         let oldModel = store.record(id: modelID)?.model
-        try store.update(id: modelID) { $0 = staged }
+        try updateStore.remove(id: modelID)
+        do {
+            try store.update(id: modelID) { $0 = staged }
+        } catch {
+            try? updateStore.upsert(staged)
+            throw error
+        }
         stagedRecords.removeValue(forKey: modelID)
 
         if let oldModel {
@@ -350,6 +369,7 @@ final class ImportedModelUpdateCoordinator: ObservableObject {
     /// partial artifacts. The installed revision is never touched.
     func discardStagedUpdate(modelID: String) {
         guard let staged = stagedRecords.removeValue(forKey: modelID) else { return }
+        try? updateStore.remove(id: modelID)
         downloadManager.cancelDownload(for: staged.model)
         downloadManager.discardPartialDownload(for: staged.model)
         ModelManagerService.deleteModel(staged.model)

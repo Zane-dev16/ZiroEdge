@@ -172,6 +172,66 @@ final class ImportedModelStore: @unchecked Sendable {
     }
 }
 
+/// Durable update candidates remain separate from installed records until every
+/// selected artifact verifies. This lets transfer recovery resume staged updates
+/// without mutating the installed model identity.
+final class ImportedModelUpdateStore: @unchecked Sendable {
+    static let shared = ImportedModelUpdateStore()
+
+    private let lock = NSLock()
+    private let fileURL: URL
+    private var records: [ImportedModelRecord]
+
+    init(directory: URL? = nil) {
+        let root = directory ?? FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        )[0].appendingPathComponent("ZiroEdge/Models/Imported", isDirectory: true)
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        fileURL = root.appendingPathComponent("pending-updates.json")
+        records = (try? Data(contentsOf: fileURL)).flatMap {
+            try? JSONDecoder().decode([ImportedModelRecord].self, from: $0)
+        } ?? []
+    }
+
+    var allRecords: [ImportedModelRecord] {
+        lock.withLock { records }
+    }
+
+    var models: [AIModel] { allRecords.map(\.model) }
+
+    func upsert(_ record: ImportedModelRecord) throws {
+        try mutate { records in
+            if let index = records.firstIndex(where: { $0.id == record.id }) {
+                records[index] = record
+            } else {
+                records.append(record)
+            }
+        }
+    }
+
+    func remove(id: String) throws {
+        try mutate { records in
+            records.removeAll { $0.id == id }
+        }
+    }
+
+    private func mutate(_ body: (inout [ImportedModelRecord]) -> Void) throws {
+        lock.lock()
+        let previous = records
+        body(&records)
+        do {
+            let data = try JSONEncoder().encode(records)
+            try data.write(to: fileURL, options: [.atomic, .completeFileProtection])
+            lock.unlock()
+        } catch {
+            records = previous
+            lock.unlock()
+            throw error
+        }
+    }
+}
+
 private extension NSLock {
     func withLock<T>(_ body: () -> T) -> T {
         lock(); defer { unlock() }

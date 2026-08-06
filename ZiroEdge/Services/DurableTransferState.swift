@@ -79,7 +79,7 @@ extension DownloadManager {
 
     /// Reconcile durable metadata with disk. Valid resumable state becomes
     /// Paused and never starts a transfer until the user explicitly resumes.
-    func restoreDurableTransfers(models: [AIModel] = ModelRegistry.libraryModels) {
+    func restoreDurableTransfers(models: [AIModel] = ModelRegistry.transferModels) {
         DownloadDiagnosticRecorder.shared.record(
             event: .reconciliationStart,
             correlationID: DownloadDiagnosticRecorder.freshCorrelationID(),
@@ -139,7 +139,7 @@ extension DownloadManager {
     /// Map a storage ID (e.g. "base-abc123" or "mmproj-model-id") back to a
     /// DownloadTask. Returns nil when no matching catalog row exists.
     static func resolveStorageID(_ storageID: String) -> DownloadTask? {
-        let candidates = ModelRegistry.libraryModels + ModelRegistry.calibrationModels
+        let candidates = ModelRegistry.transferModels + ModelRegistry.calibrationModels
         for model in candidates {
             let base = DownloadTask(model: model, artifact: .base)
             if base.storageID == storageID { return base }
@@ -159,7 +159,7 @@ extension DownloadManager {
             artifact: "all"
         )
         var seen = Set<String>()
-        for model in ModelRegistry.libraryModels {
+        for model in ModelRegistry.transferModels {
             let artifacts: [ArtifactType] = model.requiresMMProj ? [.base, .mmproj] : [.base]
             for artifact in artifacts {
                 let task = DownloadTask(model: model, artifact: artifact)

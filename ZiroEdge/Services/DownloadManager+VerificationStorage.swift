@@ -488,7 +488,7 @@ extension DownloadManager {
             knownPaths.insert(task.resumeDataURL.path)
             knownPaths.insert(task.metadataURL.path)
         }
-        for model in ModelRegistry.libraryModels {
+        for model in ModelRegistry.transferModels {
             let calibrationModels = ModelRegistry.calibrationModels
             for candidateModel in [model] + calibrationModels {
                 for artifact: ArtifactType in [.base, .mmproj] {

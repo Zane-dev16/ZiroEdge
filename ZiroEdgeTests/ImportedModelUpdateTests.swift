@@ -126,6 +126,34 @@ final class ImportedModelUpdateTests: XCTestCase {
         XCTAssertTrue(coordinator.hasStagedUpdate(modelID: existing.id))
     }
 
+    func testStagedUpdateSurvivesCoordinatorRecreation() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = ImportedModelStore(directory: root.appendingPathComponent("installed"))
+        let updateStore = ImportedModelUpdateStore(directory: root.appendingPathComponent("updates"))
+        let manager = DownloadManager(availableDiskSpaceProvider: { 100_000_000_000 })
+        let existing = makeImportedModel()
+        try store.upsert(makeRecord(model: existing, revision: String(repeating: "a", count: 40)))
+        let review = makeReview(revision: String(repeating: "b", count: 40))
+        let base = makeArtifact("model-Q4_K_M.gguf", digest: String(repeating: "2", count: 64))
+
+        let first = ImportedModelUpdateCoordinator(
+            store: store,
+            downloadManager: manager,
+            updateStore: updateStore
+        )
+        _ = try first.stageUpdate(existing: existing, review: review, base: base, projector: nil)
+
+        let restored = ImportedModelUpdateCoordinator(
+            store: store,
+            downloadManager: manager,
+            updateStore: updateStore
+        )
+        XCTAssertTrue(restored.hasStagedUpdate(modelID: existing.id))
+        XCTAssertEqual(restored.stagedModel(modelID: existing.id)?.baseSHA256, base.sha256)
+        restored.discardStagedUpdate(modelID: existing.id)
+    }
+
     // MARK: - Failure rollback
 
     func testDiscardStagedUpdateCancelsAndCleansUp() throws {

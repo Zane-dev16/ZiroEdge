@@ -387,6 +387,11 @@ enum ModelRegistry {
         allModels + importedModels
     }
 
+    /// Includes unpromoted update candidates solely for durable transfer recovery.
+    static var transferModels: [AIModel] {
+        libraryModels + ImportedModelUpdateStore.shared.models
+    }
+
     static var selectableModels: [AIModel] {
         libraryModels.filter {
             switch $0.runtimeEligibility {
