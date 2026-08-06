@@ -79,7 +79,7 @@ extension DownloadManager {
 
     /// Reconcile durable metadata with disk. Valid resumable state becomes
     /// Paused and never starts a transfer until the user explicitly resumes.
-    func restoreDurableTransfers(models: [AIModel] = ModelRegistry.allModels) {
+    func restoreDurableTransfers(models: [AIModel] = ModelRegistry.libraryModels) {
         DownloadDiagnosticRecorder.shared.record(
             event: .reconciliationStart,
             correlationID: DownloadDiagnosticRecorder.freshCorrelationID(),
@@ -139,20 +139,14 @@ extension DownloadManager {
     /// Map a storage ID (e.g. "base-abc123" or "mmproj-model-id") back to a
     /// DownloadTask. Returns nil when no matching catalog row exists.
     static func resolveStorageID(_ storageID: String) -> DownloadTask? {
-        if storageID.hasPrefix("base-") {
-            let artifactID = String(storageID.dropFirst(5))
-            guard let model = ModelRegistry.allModels.first(where: { $0.baseArtifactStorageID == artifactID }) else {
-                return nil
+        let candidates = ModelRegistry.libraryModels + ModelRegistry.calibrationModels
+        for model in candidates {
+            let base = DownloadTask(model: model, artifact: .base)
+            if base.storageID == storageID { return base }
+            if model.requiresMMProj {
+                let projector = DownloadTask(model: model, artifact: .mmproj)
+                if projector.storageID == storageID { return projector }
             }
-            return DownloadTask(model: model, artifact: .base)
-        }
-        if storageID.hasPrefix("mmproj-") {
-            let modelID = String(storageID.dropFirst(7))
-            guard let model = ModelRegistry.model(for: modelID),
-                  model.requiresMMProj else {
-                return nil
-            }
-            return DownloadTask(model: model, artifact: .mmproj)
         }
         return nil
     }
@@ -165,7 +159,7 @@ extension DownloadManager {
             artifact: "all"
         )
         var seen = Set<String>()
-        for model in ModelRegistry.allModels {
+        for model in ModelRegistry.libraryModels {
             let artifacts: [ArtifactType] = model.requiresMMProj ? [.base, .mmproj] : [.base]
             for artifact in artifacts {
                 let task = DownloadTask(model: model, artifact: artifact)

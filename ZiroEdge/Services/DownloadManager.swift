@@ -66,6 +66,9 @@ final class DownloadTask {
         case .base:
             return "base-\(model.baseArtifactStorageID)"
         case .mmproj:
+            if model.isImported, let digest = model.mmprojSHA256 {
+                return "mmproj-hf-\(digest.prefix(24))"
+            }
             return "mmproj-\(model.id)"
         }
     }
@@ -125,6 +128,7 @@ final class DownloadManager: NSObject, ObservableObject {
     let fileManager = FileManager.default
     var injectPromotionFailureForTesting = false
     var injectAvailableDiskSpaceForTesting: Int64?
+    private var availableDiskSpaceProviderForTesting: (@MainActor () -> Int64)?
     var lastProgressTime: [String: Date] = [:]
     var stuckTimer: Timer?
     static let chunkSize: Int64 = 100 * 1_024 * 1_024
@@ -134,7 +138,11 @@ final class DownloadManager: NSObject, ObservableObject {
     /// metadata, atomic promotion, and normal app writes cannot consume the
     /// device's final capacity during a multi-gigabyte installation.
     static let storageSafetyMarginBytes: Int64 = 512 * 1_024 * 1_024
-    override init() {
+    override convenience init() {
+        self.init(availableDiskSpaceProvider: nil)
+    }
+    init(availableDiskSpaceProvider: (@MainActor () -> Int64)?) {
+        self.availableDiskSpaceProviderForTesting = availableDiskSpaceProvider
         super.init()
         ModelMigrationService.ensureManagedDirectories()
         reconcileInterruptedPromotions()
@@ -159,49 +167,14 @@ final class DownloadManager: NSObject, ObservableObject {
         return authoritativeDiskStatus(for: model)
     }
     func updateStatusesFromDisk() {
-        for model in ModelRegistry.allModels {
+        for model in ModelRegistry.libraryModels {
             downloadStatuses[model.id] = authoritativeDiskStatus(for: model)
-        }
-    }
-    func authoritativeDiskStatus(for model: AIModel) -> ModelDownloadStatus {
-        switch ModelManagerService.availability(for: model) {
-        case .ready:
-            return ModelDownloadStatus(
-                modelID: model.id,
-                baseState: .downloaded,
-                mmprojState: model.requiresMMProj ? .downloaded : nil,
-                baseExpectedBytes: model.baseFileSizeBytes,
-                mmprojExpectedBytes: model.mmprojFileSizeBytes,
-                allowsTextOnly: model.allowsTextOnlyCapability
-            )
-        case .unavailable:
-            return ModelDownloadStatus(
-                modelID: model.id,
-                baseState: .notDownloaded,
-                mmprojState: model.requiresMMProj ? .notDownloaded : nil,
-                baseExpectedBytes: model.baseFileSizeBytes,
-                mmprojExpectedBytes: model.mmprojFileSizeBytes,
-                allowsTextOnly: model.allowsTextOnlyCapability
-            )
-        case .repairNeeded:
-            guard model.requiresMMProj else {
-                return ModelDownloadStatus(modelID: model.id, baseState: .notDownloaded, mmprojState: nil)
-            }
-            let hasBase = ModelManagerService.isBaseDownloaded(model)
-            let hasProjector = ModelManagerService.isMMProjDownloaded(model)
-            return ModelDownloadStatus(
-                modelID: model.id,
-                baseState: hasBase && !hasProjector ? .downloaded : .notDownloaded,
-                mmprojState: hasProjector ? .downloaded : .notDownloaded,
-                baseExpectedBytes: model.baseFileSizeBytes,
-                mmprojExpectedBytes: model.mmprojFileSizeBytes,
-                allowsTextOnly: model.allowsTextOnlyCapability
-            )
         }
     }
 }
 extension DownloadManager {
     var availableDiskSpace: Int64 {
+        if let provider = availableDiskSpaceProviderForTesting { return provider() }
         if let injected = injectAvailableDiskSpaceForTesting { return injected }
         guard let values = try? URL(fileURLWithPath: NSHomeDirectory())
             .resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
@@ -242,7 +215,7 @@ extension DownloadManager {
             required = sum
         }
         guard required > 0 else { return 0 }
-        let (withMargin, overflow) = required.addingReportingOverflow(Self.storageSafetyMarginBytes)
+        let (withMargin, overflow) = required.addingReportingOverflow(storageSafetyMargin(for: required))
         return overflow ? .max : withMargin
     }
     func formattedAvailableSpace() -> String {
@@ -443,7 +416,9 @@ extension DownloadManager {
     }
     func cancelDownload(for model: AIModel) {
         cancelArtifactDownload(model: model, artifact: .base, discardStaging: false)
-        cancelArtifactDownload(model: model, artifact: .mmproj, discardStaging: false)
+        if model.requiresMMProj {
+            cancelArtifactDownload(model: model, artifact: .mmproj, discardStaging: false)
+        }
         updateStatus(model: model)
     }
 

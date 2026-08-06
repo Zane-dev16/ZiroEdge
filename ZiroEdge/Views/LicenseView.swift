@@ -7,7 +7,7 @@ import SwiftUI
 struct LicenseView: View {
     private var uniqueModels: [AIModel] {
         var storageIDs = Set<String>()
-        return ModelRegistry.allModels.filter { storageIDs.insert($0.baseArtifactStorageID).inserted }
+        return ModelRegistry.libraryModels.filter { storageIDs.insert($0.baseArtifactStorageID).inserted }
     }
 
     var body: some View {

@@ -76,6 +76,7 @@ final class ModelLifecycleManager: ObservableObject {
     private let inferenceService: any InferenceServiceProtocol
     private let memoryBudgeter: MemoryBudgeter
     private let loadSafetyStore: LoadSafetyStore
+    private let importedModelStore: ImportedModelStore
     private let logger = Logger(subsystem: "com.zanish-labs.ziroedge", category: "lifecycle")
     private let availabilityProvider: @Sendable (AIModel) -> ModelAvailability
     private let recoveryDelay: Duration
@@ -93,6 +94,7 @@ final class ModelLifecycleManager: ObservableObject {
         inferenceService: any InferenceServiceProtocol,
         memoryBudgeter: MemoryBudgeter,
         loadSafetyStore: LoadSafetyStore,
+        importedModelStore: ImportedModelStore = .shared,
         availabilityProvider: @escaping @Sendable (AIModel) -> ModelAvailability = {
             ModelManagerService.availability(for: $0)
         },
@@ -101,6 +103,7 @@ final class ModelLifecycleManager: ObservableObject {
         self.inferenceService = inferenceService
         self.memoryBudgeter = memoryBudgeter
         self.loadSafetyStore = loadSafetyStore
+        self.importedModelStore = importedModelStore
         self.availabilityProvider = availabilityProvider
         self.recoveryDelay = recoveryDelay
 
@@ -173,7 +176,7 @@ final class ModelLifecycleManager: ObservableObject {
         }
         guard loadEpoch == safetyEpoch else { return await invalidateLoadAttempt() }
 
-        guard let profile = MemoryProfileRegistry.profile(for: model.id) else {
+        guard let profile = MemoryProfileRegistry.profile(for: model) else {
             return failLoad(kind: .runtimeProfileUnavailable, message: model.runtimeEligibilityExplanation)
         }
         if loadSafetyStore.isDisabled(profileID: profile.id) {
@@ -221,6 +224,7 @@ final class ModelLifecycleManager: ObservableObject {
             guard loadEpoch == safetyEpoch else { return await invalidateLoadAttempt() }
             activeModel = model
             currentState = .loaded
+            recordImportedLoadSuccess(for: model)
             MemoryDiagnosticRecorder.shared.capture(
                 .afterModelLoad,
                 elapsedMilliseconds: loadStarted.elapsedMilliseconds
@@ -237,11 +241,32 @@ final class ModelLifecycleManager: ObservableObject {
             logger.error("Model load failed: \(inferenceError?.sanitizedDiagnostic ?? "unknown-load-failure", privacy: .private)")
             let nativeKind = inferenceError?.nativeFailureKind
             let message = Self.userMessage(for: inferenceError)
+            recordImportedLoadFailure(for: model, nativeKind: nativeKind, message: message)
             return failLoad(
                 kind: inferenceError?.sanitizedDiagnostic.contains("load-safety") == true
                     ? .safetyPersistence : .nativeLoadFailure,
                 message: message,
                 nativeKind: nativeKind
+            )
+        }
+    }
+
+    private func recordImportedLoadSuccess(for model: AIModel) {
+        guard model.isImported else { return }
+        try? importedModelStore.update(id: model.id) { $0.loadStatus = .loaded }
+    }
+
+    private func recordImportedLoadFailure(
+        for model: AIModel,
+        nativeKind: NativeFailureKind?,
+        message: String
+    ) {
+        guard model.isImported else { return }
+        try? importedModelStore.update(id: model.id) {
+            $0.loadStatus = .loadFailed(
+                kind: nativeKind?.rawValue ?? "native-load-failure",
+                diagnostic: message,
+                at: Date()
             )
         }
     }
@@ -299,7 +324,7 @@ final class ModelLifecycleManager: ObservableObject {
         activeModel = nil
         currentState = .unloaded
         if let previousModel,
-           let profileID = MemoryProfileRegistry.profile(for: previousModel.id)?.id {
+           let profileID = MemoryProfileRegistry.profile(for: previousModel)?.id {
             do {
                 try loadSafetyStore.clearAfterCleanUnload(profileID: profileID)
             } catch {
@@ -324,7 +349,7 @@ final class ModelLifecycleManager: ObservableObject {
     }
 
     func resetLoadSafety(for model: AIModel) -> ModelSafetyResetResult {
-        guard let profile = MemoryProfileRegistry.profile(for: model.id) else {
+        guard let profile = MemoryProfileRegistry.profile(for: model) else {
             return .failed(message: "No runtime profile exists for this model.")
         }
         guard loadSafetyStore.isDisabled(profileID: profile.id) else { return .notDisabled }
@@ -337,7 +362,7 @@ final class ModelLifecycleManager: ObservableObject {
     }
 
     func isLoadSafetyDisabled(for model: AIModel) -> Bool {
-        guard let profile = MemoryProfileRegistry.profile(for: model.id) else { return false }
+        guard let profile = MemoryProfileRegistry.profile(for: model) else { return false }
         return loadSafetyStore.isDisabled(profileID: profile.id)
     }
 
@@ -417,7 +442,10 @@ enum ModelManagerService {
 
     /// File path for a model's mmproj.gguf (vision models).
     static func mmprojModelPath(for model: AIModel) -> URL {
-        modelsDirectory.appendingPathComponent("\(model.id)-mmproj.gguf")
+        if model.isImported, let digest = model.mmprojSHA256 {
+            return modelsDirectory.appendingPathComponent("hf-\(digest.prefix(24))-mmproj.gguf")
+        }
+        return modelsDirectory.appendingPathComponent("\(model.id)-mmproj.gguf")
     }
 
     /// Whether the base artifact passes the complete catalog contract.
@@ -529,9 +557,25 @@ enum ModelManagerService {
     }
 
     static func isBaseArtifactShared(_ model: AIModel) -> Bool {
-        ModelRegistry.allModels.contains {
+        ModelRegistry.libraryModels.contains {
             $0.id != model.id && $0.baseArtifactStorageID == model.baseArtifactStorageID
         }
+    }
+
+    static func isProjectorArtifactShared(_ model: AIModel) -> Bool {
+        guard let digest = model.mmprojSHA256 else { return false }
+        return ModelRegistry.libraryModels.contains {
+            $0.id != model.id && $0.mmprojSHA256 == digest
+        }
+    }
+
+    static func isVisionReady(_ model: AIModel) -> Bool {
+        guard isFullyDownloaded(model) else { return false }
+        return model.modelType != .vision || isMMProjDownloaded(model)
+    }
+
+    static func advertisesVisionCapability(_ model: AIModel) -> Bool {
+        model.modelType == .vision && isVisionReady(model)
     }
 
     /// Delete artifacts owned exclusively by one catalog entry. A shared base
@@ -541,7 +585,7 @@ enum ModelManagerService {
         if !isBaseArtifactShared(model) {
             try? fm.removeItem(at: baseModelPath(for: model))
         }
-        if model.requiresMMProj {
+        if model.requiresMMProj, !isProjectorArtifactShared(model) {
             try? fm.removeItem(at: mmprojModelPath(for: model))
         }
         logger.info("Deleted model-owned files: \(model.id, privacy: .public)")

@@ -134,7 +134,7 @@ actor InferenceService: InferenceServiceProtocol {
 
 #if DEBUG
         if HermeticUITestRuntime.isEnabled, model.id == ModelRegistry.llama32_3B.id {
-            guard let profile = MemoryProfileRegistry.profile(for: model.id) else {
+            guard let profile = MemoryProfileRegistry.profile(for: model) else {
                 throw InferenceError.nativeFailure(kind: .contextCreation, diagnostic: "fixture-profile-missing")
             }
             try loadSafetyStore.beginLoad(profileID: profile.id)
@@ -178,7 +178,7 @@ actor InferenceService: InferenceServiceProtocol {
         )
 
         // Persist immediately before native construction, including direct service callers.
-        guard let profile = MemoryProfileRegistry.profile(for: model.id) else {
+        guard let profile = MemoryProfileRegistry.profile(for: model) else {
             throw InferenceError.nativeFailure(
                 kind: .memoryPressure,
                 diagnostic: "runtime-profile-missing"

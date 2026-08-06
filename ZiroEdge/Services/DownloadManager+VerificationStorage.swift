@@ -437,7 +437,7 @@ extension DownloadManager {
         return .failure(error)
     }
     func updateStatus(model: AIModel) {
-        var affectedModels = ModelRegistry.allModels.filter {
+        var affectedModels = ModelRegistry.libraryModels.filter {
             $0.baseArtifactStorageID == model.baseArtifactStorageID
         }
         if !affectedModels.contains(where: { $0.id == model.id }) {
@@ -488,7 +488,7 @@ extension DownloadManager {
             knownPaths.insert(task.resumeDataURL.path)
             knownPaths.insert(task.metadataURL.path)
         }
-        for model in ModelRegistry.allModels {
+        for model in ModelRegistry.libraryModels {
             let calibrationModels = ModelRegistry.calibrationModels
             for candidateModel in [model] + calibrationModels {
                 for artifact: ArtifactType in [.base, .mmproj] {

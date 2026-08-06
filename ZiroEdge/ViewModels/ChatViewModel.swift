@@ -31,6 +31,7 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var activeConversationSystemPrompt: String?
     @Published private(set) var hasPersistenceRecovery = false
     @Published private(set) var recoveryExportURL: URL?
+    @Published private(set) var unavailableConversationModelID: String?
 
     // MARK: - Chat UX State
 
@@ -207,13 +208,19 @@ final class ChatViewModel: ObservableObject {
         truncationWarning = nil
         errorMessage = nil
 
-        if let model = ModelRegistry.allModels.first(where: { $0.id == conversation.modelID }) {
+        if let model = ModelRegistry.libraryModels.first(where: { $0.id == conversation.modelID }) {
+            unavailableConversationModelID = nil
             if let readyVariant = availableModels.first(where: { $0.id == model.id }) {
                 await selectModel(readyVariant)
             } else {
                 selectedModel = model
                 needsModelRedirect = true
             }
+        } else {
+            // Keep the transcript visible, but never silently replace a removed import.
+            unavailableConversationModelID = conversation.modelID
+            selectedModel = nil
+            needsModelRedirect = true
         }
         guard loadGeneration == myGeneration else { return }
         isLoadingConversation = false
@@ -230,6 +237,7 @@ final class ChatViewModel: ObservableObject {
         isStartupError = false
         truncationWarning = nil
         activeConversationSystemPrompt = nil
+        unavailableConversationModelID = nil
     }
 
     /// Single-flight startup covering model readiness, persistence creation,

@@ -23,6 +23,8 @@ final class ModelsViewModel: ObservableObject {
     @Published var pendingExperimentalModel: AIModel?
     @Published var showingSafetyResetResult = false
     @Published var safetyResetMessage = ""
+    @Published var showingImporter = false
+    @Published var updateMessage: String?
 
     // MARK: - Dependencies
 
@@ -33,9 +35,9 @@ final class ModelsViewModel: ObservableObject {
     // MARK: - Computed
 
     /// The catalog is never filtered by runtime validation. Eligibility gates loading.
-    var allModels: [AIModel] {
-        ModelRegistry.allModels
-    }
+    var allModels: [AIModel] { ModelRegistry.libraryModels }
+    var curatedModels: [AIModel] { ModelRegistry.allModels }
+    var importedModels: [AIModel] { ModelRegistry.importedModels }
 
     /// Whether any model is downloaded.
     var hasInstalledModels: Bool {
@@ -49,7 +51,7 @@ final class ModelsViewModel: ObservableObject {
 
     // MARK: - Init
 
-    private var cancellable: Any?
+    private var cancellables: Set<AnyCancellable> = []
 
     init(
         downloadManager: DownloadManager,
@@ -61,11 +63,17 @@ final class ModelsViewModel: ObservableObject {
         self.launchOfflineAvailabilityReport = offlineAvailabilityReport
 
         // Forward download manager changes to trigger UI updates
-        cancellable = downloadManager.objectWillChange
+        downloadManager.objectWillChange
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+        NotificationCenter.default.publisher(for: .importedModelsDidChange)
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
+                self?.downloadManager.updateStatusesFromDisk()
                 self?.objectWillChange.send()
             }
+            .store(in: &cancellables)
     }
 
     // MARK: - Actions
@@ -277,7 +285,43 @@ final class ModelsViewModel: ObservableObject {
             await lifecycleManager.unloadCurrentModel()
         }
         downloadManager.deleteModel(model)
+        if model.isImported {
+            _ = try? ImportedModelStore.shared.remove(id: model.id)
+            ExperimentalModelConsent.setGranted(false, for: model)
+        }
         showingDeleteConfirmation = false
         pendingDeleteModel = nil
+    }
+
+    func unavailableModelReason(for modelID: String) -> UnavailableModelReason? {
+        ModelRegistry.unavailableModelReason(for: modelID)
+    }
+
+    func resolveConversationModel(_ modelID: String) -> AIModel? {
+        guard ModelRegistry.selectableModels.contains(where: { $0.id == modelID }) else { return nil }
+        return ModelRegistry.model(for: modelID)
+    }
+
+    func updateImportedConfiguration(
+        for model: AIModel,
+        contextLength: Int,
+        sampling: SamplingConfig
+    ) {
+        guard model.isImported else { return }
+        try? ImportedModelStore.shared.update(id: model.id) { record in
+            record.config = .imported(
+                promptPath: record.config.promptPath,
+                contextLength: contextLength,
+                sampling: sampling,
+                addBos: record.config.addBos,
+                stopStrings: record.config.stopStrings
+            )
+            if case .loadFailed = record.loadStatus { record.loadStatus = .configurationChanged }
+        }
+    }
+
+    func retryImportedModel(_ model: AIModel) async {
+        guard model.isImported else { return }
+        _ = await lifecycleManager.loadModel(model)
     }
 }

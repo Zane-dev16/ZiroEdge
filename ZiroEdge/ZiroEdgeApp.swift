@@ -457,7 +457,7 @@ struct SettingsView: View {
 
     /// Models that are currently downloaded on disk.
     private var downloadedModels: [AIModel] {
-        ModelRegistry.allModels.filter { model in
+        ModelRegistry.libraryModels.filter { model in
             let status = downloadManager.status(for: model)
             return status.isReady
         }

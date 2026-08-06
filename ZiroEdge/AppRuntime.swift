@@ -194,7 +194,7 @@ final class AppRuntime: ObservableObject {
             downloadStatusProvider: downloadManager
         )
         chatViewModel.conversationListViewModel = conversationListViewModel
-        let offlineReport = OfflineAvailabilityGuard.sweep()
+        let offlineReport = OfflineAvailabilityGuard.sweep(extraModels: ModelRegistry.importedModels)
         let modelsVM = ModelsViewModel(
             downloadManager: downloadManager,
             lifecycleManager: lifecycleManager,

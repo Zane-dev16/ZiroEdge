@@ -27,6 +27,7 @@ struct ModelDetailView: View {
             }
             metadataSection
             runtimeSection
+            if model.isImported { importedConfigurationSection }
             downloadSection
             if viewModel.isDownloaded(model) {
                 actionsSection
@@ -61,6 +62,9 @@ struct ModelDetailView: View {
             LabeledContent("Quantization", value: model.quantization)
             LabeledContent("Type", value: model.modelType == .text ? "Text" : "Vision")
             LabeledContent("License", value: model.license.name)
+            if let source = model.huggingFaceProvenance {
+                ImportedProvenanceRows(source: source)
+            }
             if viewModel.isDownloaded(model) {
                 LabeledContent("Storage Used", value: viewModel.diskUsage(for: model))
             }
@@ -97,6 +101,11 @@ struct ModelDetailView: View {
                 }
             }
         }
+    }
+
+    private var importedConfigurationSection: some View {
+        ImportedModelSettingsView(model: model, viewModel: viewModel)
+            .id(model.id)
     }
 
     // MARK: - Download
@@ -377,6 +386,19 @@ struct ModelDetailView: View {
             } label: {
                 Label("Delete Model", systemImage: "trash")
             }
+        }
+    }
+}
+
+private struct ImportedProvenanceRows: View {
+    let source: HuggingFaceProvenance
+
+    var body: some View {
+        LabeledContent("Repository", value: source.repositoryID)
+        LabeledContent("Pinned Revision", value: String(source.revision.prefix(12)))
+        LabeledContent("Artifact", value: source.baseFilename)
+        if let projector = source.projectorFilename {
+            LabeledContent("Projector", value: projector)
         }
     }
 }
