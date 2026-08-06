@@ -621,7 +621,7 @@ extension DownloadManager {
         guard fileManager.fileExists(atPath: task.metadataURL.path),
               let data = try? Data(contentsOf: task.metadataURL),
               let snapshot = try? JSONDecoder().decode(DurableTransferSnapshot.self, from: data),
-              snapshot.version == DurableTransferSnapshot.currentVersion,
+              (1...DurableTransferSnapshot.currentVersion).contains(snapshot.version),
               snapshot.modelID == task.model.id,
               snapshot.artifact == (task.artifact == .base ? "base" : "mmproj"),
               snapshot.expectedBytes == task.expectedBytes,

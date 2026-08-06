@@ -262,6 +262,52 @@ final class ImportedModelUpdateTests: XCTestCase {
         XCTAssertEqual(unloadCount, 1)
     }
 
+    func testPromotionPreservesArtifactReusedByNewRevision() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = ImportedModelStore(directory: root.appendingPathComponent("installed"))
+        let updateStore = ImportedModelUpdateStore(directory: root.appendingPathComponent("updates"))
+        let data = TestModelFixtures.gguf(fill: 0x51, count: 16)
+        let artifact = makeArtifact(
+            "model-Q4_K_M.gguf",
+            digest: TestModelFixtures.sha256(data),
+            size: Int64(data.count)
+        )
+        let oldReview = makeReview(revision: String(repeating: "a", count: 40), artifacts: [artifact])
+        let oldRecord = ImportedModelFactory.makeRecord(
+            review: oldReview,
+            base: artifact,
+            stableID: "reused-update-artifact"
+        )
+        try store.upsert(oldRecord)
+        ModelManagerService.ensureModelsDirectory()
+        let artifactURL = ModelManagerService.baseModelPath(for: oldRecord.model)
+        try data.write(to: artifactURL, options: .atomic)
+
+        let manager = DownloadManager(availableDiskSpaceProvider: { .max })
+        let coordinator = ImportedModelUpdateCoordinator(
+            store: store,
+            downloadManager: manager,
+            updateStore: updateStore
+        )
+        let newReview = makeReview(revision: String(repeating: "b", count: 40), artifacts: [artifact])
+        _ = try coordinator.stageUpdate(
+            existing: oldRecord.model,
+            review: newReview,
+            base: artifact,
+            projector: nil
+        )
+
+        let promoted = try await coordinator.promoteIfVerified(modelID: oldRecord.id)
+
+        guard let promoted else { return XCTFail("Expected verified update promotion") }
+        XCTAssertEqual(promoted.huggingFaceProvenance?.revision, newReview.revision)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: artifactURL.path))
+        XCTAssertEqual(ModelManagerService.baseModelPath(for: promoted), artifactURL)
+        XCTAssertTrue(ModelManagerService.isBaseDownloaded(promoted))
+        ModelManagerService.deleteModel(promoted)
+    }
+
     // MARK: - Failure rollback
 
     func testDiscardStagedUpdateCancelsAndCleansUp() throws {

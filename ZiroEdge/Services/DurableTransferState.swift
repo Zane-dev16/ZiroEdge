@@ -17,6 +17,44 @@ struct DurableTransferSnapshot: Codable {
     let failed: Bool
 
     static let currentVersion = 2
+
+    init(
+        version: Int,
+        modelID: String,
+        artifact: String,
+        expectedBytes: Int64,
+        progress: Double,
+        resumeAvailable: Bool,
+        activeBackgroundTask: Bool,
+        failed: Bool
+    ) {
+        self.version = version
+        self.modelID = modelID
+        self.artifact = artifact
+        self.expectedBytes = expectedBytes
+        self.progress = progress
+        self.resumeAvailable = resumeAvailable
+        self.activeBackgroundTask = activeBackgroundTask
+        self.failed = failed
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        version = try container.decode(Int.self, forKey: .version)
+        modelID = try container.decode(String.self, forKey: .modelID)
+        artifact = try container.decode(String.self, forKey: .artifact)
+        expectedBytes = try container.decode(Int64.self, forKey: .expectedBytes)
+        progress = try container.decode(Double.self, forKey: .progress)
+        resumeAvailable = try container.decode(Bool.self, forKey: .resumeAvailable)
+        // Version 1 snapshots predate background-task reconciliation. Treat
+        // the absent field as false so existing paused transfers survive an
+        // app update instead of losing valid staging or resume data.
+        activeBackgroundTask = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .activeBackgroundTask
+        ) ?? false
+        failed = try container.decode(Bool.self, forKey: .failed)
+    }
 }
 
 @MainActor

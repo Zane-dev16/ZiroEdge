@@ -127,12 +127,18 @@ struct ModelsView: View {
             VStack(alignment: .leading, spacing: ZiroTheme.Spacing.xSmall) {
                 HStack(spacing: ZiroTheme.Spacing.small) {
                     Text(model.displayName).font(.headline)
-                    if model.modelType == .vision {
+                    if status.isVisionReady {
                         Text("VISION")
                             .font(.caption2.weight(.bold))
                             .padding(.horizontal, 6).padding(.vertical, 2)
                             .foregroundStyle(.purple)
                             .background(Color.purple.opacity(0.1), in: Capsule())
+                    } else if model.modelType == .vision {
+                        Text("PAIR INCOMPLETE")
+                            .font(.caption2.weight(.bold))
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .foregroundStyle(.orange)
+                            .background(Color.orange.opacity(0.1), in: Capsule())
                     }
                 }
                 Text(model.description)

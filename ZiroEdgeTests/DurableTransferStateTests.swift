@@ -399,6 +399,35 @@ extension DurableTransferStateTests {
         XCTAssertFalse(FileManager.default.fileExists(atPath: task.metadataURL.path))
     }
 
+    func testVersionOneSnapshotWithResumeDataSurvivesUpgrade() throws {
+        let bytes = gguf()
+        let model = fixtureModel(bytes: bytes)
+        let task = DownloadTask(model: model, artifact: .base)
+        defer { cleanup(task: task, model: model) }
+        ModelMigrationService.ensureManagedDirectories()
+        try Data("legacy-resume".utf8).write(to: task.resumeDataURL, options: .atomic)
+
+        let snapshot: [String: Any] = [
+            "version": 1,
+            "modelID": model.id,
+            "artifact": "base",
+            "expectedBytes": task.expectedBytes,
+            "progress": 0.37,
+            "resumeAvailable": true,
+            "failed": false
+        ]
+        let metadata = try JSONSerialization.data(withJSONObject: snapshot)
+        try metadata.write(to: task.metadataURL, options: .atomic)
+
+        let restored = DownloadManager()
+        restored.restoreDurableTransfers(models: [model])
+
+        XCTAssertEqual(restored.status(for: model).baseState, .paused(progress: 0.37))
+        XCTAssertTrue(restored.hasActiveDownload(model: model, artifact: .base))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: task.metadataURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: task.resumeDataURL.path))
+    }
+
     // MARK: - Background lifecycle restoration
 
     func testRestorePutsTaskInPausedStateNotDownloading() throws {

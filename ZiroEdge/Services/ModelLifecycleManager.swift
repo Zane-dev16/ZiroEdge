@@ -591,6 +591,31 @@ enum ModelManagerService {
         logger.info("Deleted model-owned files: \(model.id, privacy: .public)")
     }
 
+    /// Remove only artifacts made obsolete by a successful record replacement.
+    /// A new revision may intentionally reuse an unchanged digest-addressed base
+    /// or projector; those paths must survive even though the stable model ID is
+    /// the same before and after the registry swap.
+    static func deleteReplacedArtifacts(previous: AIModel, retaining replacement: AIModel) {
+        let fm = FileManager.default
+        let previousBasePath = baseModelPath(for: previous)
+        if previousBasePath != baseModelPath(for: replacement),
+           !isBaseArtifactShared(previous) {
+            try? fm.removeItem(at: previousBasePath)
+        }
+
+        if previous.requiresMMProj {
+            let previousProjectorPath = mmprojModelPath(for: previous)
+            let replacementProjectorPath = replacement.requiresMMProj
+                ? mmprojModelPath(for: replacement)
+                : nil
+            if previousProjectorPath != replacementProjectorPath,
+               !isProjectorArtifactShared(previous) {
+                try? fm.removeItem(at: previousProjectorPath)
+            }
+        }
+        logger.info("Deleted replaced model files: \(previous.id, privacy: .public)")
+    }
+
     /// Create the models directory if it doesn't exist.
     static func ensureModelsDirectory() {
         let fm = FileManager.default

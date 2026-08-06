@@ -405,7 +405,10 @@ final class ImportedModelUpdateCoordinator: ObservableObject {
         stagedRecords.removeValue(forKey: modelID)
 
         if let oldModel {
-            ModelManagerService.deleteModel(oldModel)
+            ModelManagerService.deleteReplacedArtifacts(
+                previous: oldModel,
+                retaining: promoted.model
+            )
         }
         downloadManager.downloadStatuses.removeValue(forKey: staged.id)
         downloadManager.updateStatusesFromDisk()

@@ -13,7 +13,7 @@ struct ModelDetailView: View {
         List {
             Section {
                 VStack(alignment: .leading, spacing: ZiroTheme.Spacing.medium) {
-                    Image(systemName: model.modelType == .vision ? "eye.circle.fill" : "text.bubble.fill")
+                    Image(systemName: modelIconName)
                         .font(.largeTitle)
                         .foregroundStyle(Color.accentColor)
                         .symbolRenderingMode(.hierarchical)
@@ -60,7 +60,7 @@ struct ModelDetailView: View {
             LabeledContent("Name", value: model.displayName)
             LabeledContent("Size", value: model.formattedSize)
             LabeledContent("Quantization", value: model.quantization)
-            LabeledContent("Type", value: model.modelType == .text ? "Text" : "Vision")
+            LabeledContent("Type", value: modelTypeLabel)
             LabeledContent("License", value: model.license.name)
             if let source = model.huggingFaceProvenance {
                 ImportedProvenanceRows(source: source)
@@ -69,6 +69,20 @@ struct ModelDetailView: View {
                 LabeledContent("Storage Used", value: viewModel.diskUsage(for: model))
             }
         }
+    }
+
+    private var modelIconName: String {
+        guard model.modelType == .vision else { return "text.bubble.fill" }
+        return viewModel.status(for: model).isVisionReady
+            ? "eye.circle.fill"
+            : "eye.slash.circle.fill"
+    }
+
+    private var modelTypeLabel: String {
+        guard model.modelType == .vision else { return "Text" }
+        return viewModel.status(for: model).isVisionReady
+            ? "Vision"
+            : "Vision pair incomplete"
     }
 
     private var runtimeSection: some View {
