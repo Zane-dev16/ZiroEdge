@@ -28,7 +28,7 @@ enum ImportedModelLoadStatus: Codable, Hashable, Sendable {
 }
 
 struct ImportedModelRecord: Codable, Hashable, Sendable, Identifiable {
-    let id: String
+    var id: String
     var displayName: String
     var description: String
     var modelType: ModelType
@@ -44,6 +44,10 @@ struct ImportedModelRecord: Codable, Hashable, Sendable, Identifiable {
     var provenance: HuggingFaceProvenance
     var importedAt: Date
     var loadStatus: ImportedModelLoadStatus
+    /// Present only while this record is an update transfer candidate. The
+    /// staged record keeps a distinct ID so its transfer/status cannot mask
+    /// the installed runtime with the stable target ID.
+    var updateTargetModelID: String? = nil
 
     var model: AIModel {
         AIModel(
@@ -189,9 +193,17 @@ final class ImportedModelUpdateStore: @unchecked Sendable {
         )[0].appendingPathComponent("ZiroEdge/Models/Imported", isDirectory: true)
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         fileURL = root.appendingPathComponent("pending-updates.json")
-        records = (try? Data(contentsOf: fileURL)).flatMap {
+        let decoded = (try? Data(contentsOf: fileURL)).flatMap {
             try? JSONDecoder().decode([ImportedModelRecord].self, from: $0)
         } ?? []
+        records = decoded.map { legacy in
+            guard legacy.updateTargetModelID == nil else { return legacy }
+            var migrated = legacy
+            migrated.updateTargetModelID = legacy.id
+            let projectorSuffix = legacy.provenance.projectorSHA256.map { String($0.prefix(4)) } ?? "text"
+            migrated.id = "hf-update-\(legacy.provenance.baseSHA256.prefix(20))-\(projectorSuffix)"
+            return migrated
+        }
     }
 
     var allRecords: [ImportedModelRecord] {
@@ -202,7 +214,8 @@ final class ImportedModelUpdateStore: @unchecked Sendable {
 
     func upsert(_ record: ImportedModelRecord) throws {
         try mutate { records in
-            if let index = records.firstIndex(where: { $0.id == record.id }) {
+            let targetID = record.updateTargetModelID ?? record.id
+            if let index = records.firstIndex(where: { ($0.updateTargetModelID ?? $0.id) == targetID }) {
                 records[index] = record
             } else {
                 records.append(record)
@@ -210,9 +223,9 @@ final class ImportedModelUpdateStore: @unchecked Sendable {
         }
     }
 
-    func remove(id: String) throws {
+    func remove(targetModelID: String) throws {
         try mutate { records in
-            records.removeAll { $0.id == id }
+            records.removeAll { ($0.updateTargetModelID ?? $0.id) == targetModelID }
         }
     }
 
@@ -268,17 +281,18 @@ struct HFRepositoryReview: Hashable, Sendable {
     var baseArtifacts: [HFArtifact] { artifacts.filter { $0.role == .base } }
     var projectorArtifacts: [HFArtifact] { artifacts.filter { $0.role == .projector } }
 
-    /// Vision pairing is intentionally strict: exactly one projector and one
-    /// compatible base at the same repository and immutable revision.
+    /// Vision pairing is intentionally strict: the unique projector must have
+    /// deterministic family/naming or artifact-metadata evidence in addition
+    /// to architecture and quantization compatibility.
     func suggestedVisionPair(base: HFArtifact) throws -> (HFArtifact, HFArtifact) {
         guard base.role == .base else { throw HFInspectionError.noCompatibleArtifact }
-        guard projectorArtifacts.count == 1, let projector = projectorArtifacts.first else {
-            throw projectorArtifacts.isEmpty ? HFInspectionError.projectorMissing : HFInspectionError.projectorAmbiguous
+        guard !projectorArtifacts.isEmpty else { throw HFInspectionError.projectorMissing }
+        guard let pair = VisionPairResolver().bestPair(for: base, in: self) else {
+            let compatibleCount = VisionPairResolver().resolvePairs(from: self)
+                .filter { $0.base == base && $0.confidence == .high }.count
+            throw compatibleCount > 1 ? HFInspectionError.projectorAmbiguous : HFInspectionError.incompatibleVisionPair
         }
-        guard VisionPairResolver.isArchitectureCompatible(base: base, projector: projector) else {
-            throw HFInspectionError.incompatibleVisionPair
-        }
-        return (base, projector)
+        return (pair.base, pair.projector)
     }
 }
 
@@ -291,6 +305,7 @@ enum HFInspectionError: LocalizedError, Equatable {
     case unsupportedArchitecture(String)
     case missingDigest(String)
     case malformedMetadata(String)
+    case unsupportedShardedArtifact(String)
     case projectorMissing
     case projectorAmbiguous
     case incompatibleVisionPair
@@ -305,6 +320,7 @@ enum HFInspectionError: LocalizedError, Equatable {
         case .unsupportedArchitecture(let value): "The GGUF architecture ‘\(value)’ is not supported by this ZiroEdge runtime."
         case .missingDigest(let file): "\(file) has no trustworthy SHA-256 digest and cannot be imported."
         case .malformedMetadata(let file): "\(file) has malformed size or integrity metadata."
+        case .unsupportedShardedArtifact(let file): "\(file) is part of a split GGUF. Split or sharded GGUF models are not supported."
         case .projectorMissing: "No compatible vision projector was found at this revision."
         case .projectorAmbiguous: "More than one projector could match, so ZiroEdge will not guess."
         case .incompatibleVisionPair: "The base model and projector do not have deterministic compatibility evidence."
@@ -378,8 +394,11 @@ struct HFRepositoryInspector: Sendable {
         let reviewedArchitecture = topGGUF?["architecture"] as? String
         var artifacts: [HFArtifact] = []
         for sibling in siblings {
-            guard let filename = (sibling["rfilename"] ?? sibling["path"]) as? String,
-                  filename.lowercased().hasSuffix(".gguf") else { continue }
+            guard let filename = (sibling["rfilename"] ?? sibling["path"]) as? String else { continue }
+            guard !Self.isSplitGGUF(filename) else {
+                throw HFInspectionError.unsupportedShardedArtifact(filename)
+            }
+            guard filename.lowercased().hasSuffix(".gguf") else { continue }
             guard let size = Self.int64(sibling["size"]), size > 0 else {
                 throw HFInspectionError.malformedMetadata(filename)
             }
@@ -391,12 +410,20 @@ struct HFRepositoryInspector: Sendable {
                 throw HFInspectionError.malformedMetadata(filename)
             }
             let isProjector = filename.lowercased().contains("mmproj")
-            guard let architecture = isProjector ? "clip" : reviewedArchitecture else {
+            let artifactGGUF = sibling["gguf"] as? [String: Any]
+            let architecture = artifactGGUF.map { $0["architecture"] as? String }
+                ?? (isProjector ? "clip" : reviewedArchitecture)
+            guard let architecture else {
                 throw HFInspectionError.malformedMetadata(filename)
             }
             guard Self.supportedArchitectures.contains(architecture) else {
                 throw HFInspectionError.unsupportedArchitecture(architecture)
             }
+            // Repository-level GGUF metadata describes the model as a whole,
+            // not every sibling. Only base variants may inherit it; projector
+            // pairing evidence must come from projector-specific metadata or
+            // deterministic filenames.
+            let metadata = artifactGGUF ?? (isProjector ? [:] : (topGGUF ?? [:]))
             artifacts.append(HFArtifact(
                 filename: filename,
                 size: size,
@@ -406,9 +433,9 @@ struct HFRepositoryInspector: Sendable {
                 role: isProjector ? .projector : .base,
                 metadata: HFGGUFMetadata(
                     architecture: architecture,
-                    contextLength: Self.int(topGGUF?["context_length"]),
-                    chatTemplate: topGGUF?["chat_template"] as? String,
-                    modelName: topGGUF?["name"] as? String
+                    contextLength: Self.int(metadata["context_length"]),
+                    chatTemplate: metadata["chat_template"] as? String,
+                    modelName: metadata["name"] as? String
                 )
             ))
         }
@@ -428,6 +455,17 @@ struct HFRepositoryInspector: Sendable {
         return (data, http)
     }
 
+
+    private static func isSplitGGUF(_ filename: String) -> Bool {
+        let name = filename.lowercased()
+        let patterns = [
+            #"-\d{5}-of-\d{5}\.gguf$"#,
+            #"\.gguf\.\d+$"#,
+            #"(?:^|[-_.])part[-_.]?\d+(?:[-_.]of[-_.]?\d+)?\.gguf$"#,
+            #"(?:^|[-_.])shard[-_.]?\d+(?:[-_.]of[-_.]?\d+)?\.gguf$"#
+        ]
+        return patterns.contains { name.range(of: $0, options: .regularExpression) != nil }
+    }
 
     private static func quantization(_ filename: String) -> String {
         let upper = filename.uppercased()
@@ -477,7 +515,8 @@ struct ImportedModelFactory {
         review: HFRepositoryReview,
         base: HFArtifact,
         projector: HFArtifact? = nil,
-        stableID: String? = nil
+        stableID: String? = nil,
+        updateTargetModelID: String? = nil
     ) -> ImportedModelRecord {
         let id = stableID ?? stableIdentity(review: review, base: base, projector: projector)
         let revision = review.revision
@@ -513,7 +552,8 @@ struct ImportedModelFactory {
             license: LicenseInfo(name: review.licenseName, url: review.licenseURL, copyright: "Imported from Hugging Face"),
             provenance: provenance,
             importedAt: Date(),
-            loadStatus: .neverLoaded
+            loadStatus: .neverLoaded,
+            updateTargetModelID: updateTargetModelID
         )
     }
 

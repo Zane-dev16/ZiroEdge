@@ -95,6 +95,9 @@ struct ImportView: View {
             if viewModel.selectedBase != nil { preflightSection }
 
             Section("Confirmation") {
+                Link(destination: review.licenseURL) {
+                    Label("View license terms", systemImage: "doc.text")
+                }
                 Toggle("I reviewed and accept the license", isOn: $viewModel.licenseConfirmed)
                 if viewModel.ramAssessment.classification == .risky {
                     Toggle("Download despite RAM risk", isOn: $viewModel.ramRiskAccepted)

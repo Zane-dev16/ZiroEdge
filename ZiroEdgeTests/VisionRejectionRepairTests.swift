@@ -48,9 +48,9 @@ final class VisionRejectionRepairTests: XCTestCase {
             "cardData": ["license": "mit"],
             "gguf": ["architecture": "gemma"],
             "siblings": [
-                ["rfilename": "model-Q4_K_M.gguf", "size": 100, "lfs": ["sha256": String(repeating: "1", count: 64)]],
-                ["rfilename": "mmproj-A-f16.gguf", "size": 50, "lfs": ["sha256": String(repeating: "2", count: 64)]],
-                ["rfilename": "mmproj-B-f16.gguf", "size": 55, "lfs": ["sha256": String(repeating: "3", count: 64)]],
+                ["rfilename": "gemma-Q4_K_M.gguf", "size": 100, "lfs": ["sha256": String(repeating: "1", count: 64)]],
+                ["rfilename": "mmproj-gemma-Q8_0.gguf", "size": 50, "lfs": ["sha256": String(repeating: "2", count: 64)]],
+                ["rfilename": "mmproj-gemma-projector-Q8_0.gguf", "size": 55, "lfs": ["sha256": String(repeating: "3", count: 64)]],
             ],
         ])
         let httpResponse = HTTPURLResponse(url: URL(string: "https://huggingface.co/api/models/test/amb")!, statusCode: 200, httpVersion: nil, headerFields: nil)!
@@ -79,10 +79,11 @@ final class VisionRejectionRepairTests: XCTestCase {
         let inspector = HFRepositoryInspector { _ in (data, httpResponse) }
         let review = try await inspector.inspect("test/inc")
 
-        // The mmproj is found with architecture "clip" (since filename contains "mmproj"),
-        // which is compatible with gemma. This should work.
-        let pair = try review.suggestedVisionPair(base: review.baseArtifacts.first!)
-        XCTAssertEqual(pair.1.filename, "mmproj-f16.gguf")
+        // Generic CLIP architecture and a common quantization are not enough
+        // to prove this projector belongs to the selected base model.
+        XCTAssertThrowsError(try review.suggestedVisionPair(base: review.baseArtifacts.first!)) { error in
+            XCTAssertEqual(error as? HFInspectionError, .incompatibleVisionPair)
+        }
     }
 
     // MARK: - Repair: Download Only Missing Artifacts

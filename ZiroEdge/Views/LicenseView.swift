@@ -3,11 +3,28 @@
 
 import SwiftUI
 
-/// Displays bundled third-party notices and one entry per unique shipped model artifact.
+/// Displays bundled third-party notices and one entry per unique model
+/// provenance/license relationship. Artifact digests are transfer identities,
+/// not legal identities, so quantized variants from one source are deduplicated.
 struct LicenseView: View {
-    private var uniqueModels: [AIModel] {
-        var storageIDs = Set<String>()
-        return ModelRegistry.libraryModels.filter { storageIDs.insert($0.baseArtifactStorageID).inserted }
+    private var uniqueModels: [AIModel] { Self.uniqueModels(from: ModelRegistry.libraryModels) }
+
+    static func uniqueModels(from models: [AIModel]) -> [AIModel] {
+        var legalKeys = Set<String>()
+        return models.filter { model in
+            let sourceKey: String
+            if let provenance = model.huggingFaceProvenance {
+                sourceKey = "hf:\(provenance.repositoryID.lowercased())"
+            } else {
+                sourceKey = "curated"
+            }
+            let key = [
+                sourceKey,
+                model.license.name.lowercased(),
+                model.license.url.absoluteString.lowercased()
+            ].joined(separator: "|")
+            return legalKeys.insert(key).inserted
+        }
     }
 
     var body: some View {

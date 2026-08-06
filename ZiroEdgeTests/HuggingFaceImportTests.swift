@@ -92,8 +92,8 @@ final class HuggingFaceImportTests: XCTestCase {
     }
 
     func testVisionPairingRequiresExactlyOneCompatibleProjector() throws {
-        let base = makeArtifact("base-Q4_K_M.gguf", role: .base, architecture: "gemma")
-        let projector = makeArtifact("mmproj-Q8_0.gguf", role: .projector, architecture: "clip")
+        let base = makeArtifact("gemma-Q4_K_M.gguf", role: .base, architecture: "gemma")
+        let projector = makeArtifact("mmproj-gemma-Q8_0.gguf", role: .projector, architecture: "clip")
         var review = makeReview(artifacts: [base, projector])
         XCTAssertEqual(try review.suggestedVisionPair(base: base).1, projector)
 
@@ -101,15 +101,53 @@ final class HuggingFaceImportTests: XCTestCase {
         XCTAssertThrowsError(try review.suggestedVisionPair(base: base)) {
             XCTAssertEqual($0 as? HFInspectionError, .projectorMissing)
         }
-        review = makeReview(artifacts: [base, projector, makeArtifact("mmproj-f16.gguf", role: .projector, architecture: "clip")])
+        review = makeReview(artifacts: [base, projector, makeArtifact("mmproj-gemma-projector-Q8_0.gguf", role: .projector, architecture: "clip")])
         XCTAssertThrowsError(try review.suggestedVisionPair(base: base)) {
             XCTAssertEqual($0 as? HFInspectionError, .projectorAmbiguous)
         }
     }
 
+    func testInspectionRejectsSplitGGUFAtPublicInspectionSeam() async throws {
+        for filename in ["model-00001-of-00002.gguf", "model.gguf.1", "model-part-1-of-2.gguf"] {
+            let data = try payload(siblings: [artifact(filename)])
+            let inspector = HFRepositoryInspector { _ in (data, self.response()) }
+            do {
+                _ = try await inspector.inspect("acme/model")
+                XCTFail("Expected split GGUF rejection for \(filename)")
+            } catch {
+                XCTAssertEqual(error as? HFInspectionError, .unsupportedShardedArtifact(filename))
+            }
+        }
+    }
+
+    func testIncompletePerArtifactMetadataDoesNotFallBackToRepositoryMetadata() async throws {
+        var sibling = artifact("model-Q4_K_M.gguf")
+        sibling["gguf"] = ["context_length": 4096]
+        let data = try payload(architecture: "llama", siblings: [sibling])
+        let inspector = HFRepositoryInspector { _ in (data, self.response()) }
+
+        do {
+            _ = try await inspector.inspect("acme/model")
+            XCTFail("Expected incomplete artifact metadata rejection")
+        } catch {
+            XCTAssertEqual(error as? HFInspectionError, .malformedMetadata("model-Q4_K_M.gguf"))
+        }
+    }
+
+    func testRepositoryMetadataIsNotAssumedToDescribeProjectorArtifact() async throws {
+        let data = try payload(architecture: "gemma", siblings: [
+            artifact("gemma-Q4_K_M.gguf"),
+            artifact("mmproj-gemma-Q8_0.gguf")
+        ])
+        let review = try await HFRepositoryInspector { _ in (data, self.response()) }.inspect("acme/model")
+        XCTAssertEqual(review.baseArtifacts.first?.metadata.contextLength, 8192)
+        XCTAssertNil(review.projectorArtifacts.first?.metadata.contextLength)
+        XCTAssertNil(review.projectorArtifacts.first?.metadata.chatTemplate)
+    }
+
     func testVisionPairingUsesTheSharedArchitecturePolicy() throws {
         let base = makeArtifact("gemma3-Q4_K_M.gguf", role: .base, architecture: "gemma3")
-        let projector = makeArtifact("mmproj-Q8_0.gguf", role: .projector, architecture: "gemma2")
+        let projector = makeArtifact("mmproj-gemma3-Q8_0.gguf", role: .projector, architecture: "gemma2")
         let review = makeReview(artifacts: [base, projector])
 
         XCTAssertEqual(try review.suggestedVisionPair(base: base).1, projector)
@@ -136,6 +174,26 @@ final class HuggingFaceImportTests: XCTestCase {
         XCTAssertTrue(first.baseURL.absoluteString.contains("/resolve/\(review.revision)/"))
         XCTAssertTrue(first.model.isImported)
         XCTAssertEqual(first.model.runtimeEligibility, .experimental)
+    }
+
+    func testLegalEntriesDeduplicateByRepositoryProvenanceAndLicense() {
+        let q4 = makeArtifact("model-Q4_K_M.gguf", digest: String(repeating: "1", count: 64))
+        let q8 = makeArtifact("model-Q8_0.gguf", digest: String(repeating: "2", count: 64))
+        let sameSource = makeReview(artifacts: [q4, q8])
+        let otherSource = HFRepositoryReview(
+            repositoryID: "other/model",
+            revision: sameSource.revision,
+            licenseName: sameSource.licenseName,
+            licenseURL: sameSource.licenseURL,
+            artifacts: [q4]
+        )
+        let models = [
+            ImportedModelFactory.makeRecord(review: sameSource, base: q4).model,
+            ImportedModelFactory.makeRecord(review: sameSource, base: q8).model,
+            ImportedModelFactory.makeRecord(review: otherSource, base: q4).model
+        ]
+
+        XCTAssertEqual(LicenseView.uniqueModels(from: models).count, 2)
     }
 
     func testRegistryDeduplicatesAndPersistsVariantsAcrossRelaunch() throws {

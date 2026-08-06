@@ -227,6 +227,8 @@ final class ImportedModelUpdateCoordinator: ObservableObject {
     private let store: ImportedModelStore
     private let downloadManager: DownloadManager
     private let updateStore: ImportedModelUpdateStore
+    private let lifecycleManager: ModelLifecycleManager?
+    private let physicalRAM: @Sendable () -> UInt64
     private let pairResolver = VisionPairResolver()
     private var stagedRecords: [String: ImportedModelRecord]
 
@@ -234,7 +236,9 @@ final class ImportedModelUpdateCoordinator: ObservableObject {
         inspector: HFRepositoryInspector = HFRepositoryInspector(),
         store: ImportedModelStore = .shared,
         downloadManager: DownloadManager,
-        updateStore: ImportedModelUpdateStore? = nil
+        updateStore: ImportedModelUpdateStore? = nil,
+        lifecycleManager: ModelLifecycleManager? = nil,
+        physicalRAM: @escaping @Sendable () -> UInt64 = { ProcessInfo.processInfo.physicalMemory }
     ) {
         self.inspector = inspector
         self.store = store
@@ -244,8 +248,10 @@ final class ImportedModelUpdateCoordinator: ObservableObject {
             : ImportedModelUpdateStore(directory: FileManager.default.temporaryDirectory
                 .appendingPathComponent("ZiroEdge-Updates-\(UUID().uuidString)")))
         self.updateStore = resolvedUpdateStore
+        self.lifecycleManager = lifecycleManager
+        self.physicalRAM = physicalRAM
         self.stagedRecords = Dictionary(
-            resolvedUpdateStore.allRecords.map { ($0.id, $0) },
+            resolvedUpdateStore.allRecords.map { ($0.updateTargetModelID ?? $0.id, $0) },
             uniquingKeysWith: { _, latest in latest }
         )
     }
@@ -254,6 +260,38 @@ final class ImportedModelUpdateCoordinator: ObservableObject {
         guard let source = model.huggingFaceProvenance else { return .upToDate }
         let review = try await inspector.inspect(source.repositoryID)
         return review.revision == source.revision ? .upToDate : .review(review)
+    }
+
+    func storagePreflight(base: HFArtifact, projector: HFArtifact?) -> ImportStoragePreflight {
+        let reusableBase = ModelRegistry.libraryModels.contains {
+            $0.baseSHA256 == base.sha256 && ModelManagerService.isBaseDownloaded($0)
+        }
+        let reusableProjector = projector.map { artifact in
+            ModelRegistry.libraryModels.contains {
+                $0.mmprojSHA256 == artifact.sha256 && ModelManagerService.isMMProjDownloaded($0)
+            }
+        } ?? false
+        let required = (reusableBase ? 0 : base.size)
+            + (reusableProjector ? 0 : (projector?.size ?? 0))
+        return ImportStoragePreflight(
+            requiredBytes: required,
+            safetyMarginBytes: downloadManager.storageSafetyMargin(for: required),
+            availableBytes: downloadManager.availableDiskSpace
+        )
+    }
+
+    func ramAssessment(base: HFArtifact, projector: HFArtifact?) -> ImportRAMAssessment {
+        let bytes = base.size + (projector?.size ?? 0)
+        let estimated = ImportRAMAssessment.estimatedBytes(
+            artifactBytes: bytes,
+            contextLength: base.metadata.contextLength ?? 2048
+        )
+        let physical = physicalRAM()
+        return ImportRAMAssessment(
+            estimatedBytes: estimated,
+            physicalBytes: physical,
+            classification: estimated < physical ? .likelyFits : .risky
+        )
     }
 
     /// Stage a replacement under digest-addressed artifact paths. The installed
@@ -274,7 +312,7 @@ final class ImportedModelUpdateCoordinator: ObservableObject {
             review: review,
             base: base,
             projector: projector,
-            stableID: existing.id
+            updateTargetModelID: existing.id
         )
         // Reuse already-installed artifacts that match by SHA-256 so we never
         // download what is already verified.
@@ -287,7 +325,7 @@ final class ImportedModelUpdateCoordinator: ObservableObject {
             }
         } ?? false
         if !reusableBase || (projector != nil && !reusableProjector) {
-            guard downloadManager.hasSufficientStorage(for: record.model) else {
+            guard storagePreflight(base: base, projector: projector).canProceed else {
                 throw DownloadError.diskSpaceInsufficient
             }
         }
@@ -325,9 +363,9 @@ final class ImportedModelUpdateCoordinator: ObservableObject {
             review: review,
             base: candidate.base,
             projector: candidate.projector,
-            stableID: existing.id
+            updateTargetModelID: existing.id
         )
-        guard downloadManager.hasSufficientStorage(for: record.model) else {
+        guard storagePreflight(base: candidate.base, projector: candidate.projector).canProceed else {
             return .rejected("Not enough storage to stage both updated artifacts. The installed model is unchanged.")
         }
 
@@ -340,16 +378,26 @@ final class ImportedModelUpdateCoordinator: ObservableObject {
     /// Promote the staged update atomically only after every selected artifact
     /// is verified. Old unshared artifacts are cleaned up after the record swap.
     @discardableResult
-    func promoteIfVerified(modelID: String) throws -> AIModel? {
+    func promoteIfVerified(modelID: String) async throws -> AIModel? {
         guard let staged = stagedRecords[modelID] else { return nil }
         let baseReady = ModelManagerService.isBaseDownloaded(staged.model)
         let projectorReady = !staged.model.requiresMMProj || ModelManagerService.isMMProjDownloaded(staged.model)
         guard baseReady, projectorReady else { return nil }
 
         let oldModel = store.record(id: modelID)?.model
-        try updateStore.remove(id: modelID)
+        if lifecycleManager?.activeModel?.id == modelID {
+            // The engine may mmap the old digest-addressed artifacts. Complete
+            // unload and clear active provenance before swapping the registry
+            // and deleting the old files.
+            _ = await lifecycleManager?.unloadCurrentModel()
+        }
+
+        var promoted = staged
+        promoted.id = modelID
+        promoted.updateTargetModelID = nil
+        try updateStore.remove(targetModelID: modelID)
         do {
-            try store.update(id: modelID) { $0 = staged }
+            try store.update(id: modelID) { $0 = promoted }
         } catch {
             try? updateStore.upsert(staged)
             throw error
@@ -359,17 +407,18 @@ final class ImportedModelUpdateCoordinator: ObservableObject {
         if let oldModel {
             ModelManagerService.deleteModel(oldModel)
         }
+        downloadManager.downloadStatuses.removeValue(forKey: staged.id)
         downloadManager.updateStatusesFromDisk()
         // Reset experimental consent after update — the new revision needs fresh consent.
-        ExperimentalModelConsent.setGranted(false, for: staged.model)
-        return staged.model
+        ExperimentalModelConsent.setGranted(false, for: promoted.model)
+        return promoted.model
     }
 
     /// Discard a staged update, cancelling any in-flight downloads and removing
     /// partial artifacts. The installed revision is never touched.
     func discardStagedUpdate(modelID: String) {
         guard let staged = stagedRecords.removeValue(forKey: modelID) else { return }
-        try? updateStore.remove(id: modelID)
+        try? updateStore.remove(targetModelID: modelID)
         downloadManager.cancelDownload(for: staged.model)
         downloadManager.discardPartialDownload(for: staged.model)
         ModelManagerService.deleteModel(staged.model)

@@ -95,11 +95,11 @@ final class VisionImportTests: XCTestCase {
     }
 
     func testResolverRanksByConfidenceThenSize() async throws {
-        // Base model with multiple projectors at different quantization tiers.
+        // Deterministic family naming plus different quantization tiers.
         let data = try payload(siblings: [
-            artifact("model-Q4_K_M.gguf", digest: String(repeating: "1", count: 64), size: 100),
-            artifact("mmproj-Q8_0.gguf", digest: String(repeating: "2", count: 64), size: 50),   // Q4_K_M+Q8_0 = high
-            artifact("mmproj-F16.gguf", digest: String(repeating: "3", count: 64), size: 200),   // Q4_K_M+F16 = medium
+            artifact("gemma-Q4_K_M.gguf", digest: String(repeating: "1", count: 64), size: 100),
+            artifact("mmproj-gemma-Q8_0.gguf", digest: String(repeating: "2", count: 64), size: 50),
+            artifact("mmproj-gemma-F16.gguf", digest: String(repeating: "3", count: 64), size: 200),
         ])
         let inspector = HFRepositoryInspector { _ in (data, self.response()) }
         let review = try await inspector.inspect("acme/multi-projector")
@@ -113,6 +113,27 @@ final class VisionImportTests: XCTestCase {
         XCTAssertEqual(pairs[0].projector.quantization, "Q8_0")
         // Second should be the medium-confidence F16 pair.
         XCTAssertEqual(pairs[1].confidence, .medium)
+    }
+
+    func testDifferentNamedModelFamiliesAreRejectedDespiteSharedArchitecture() {
+        let base = makeArtifact("gemma-2-Q4_K_M.gguf", role: .base, architecture: "gemma2")
+        let projector = makeArtifact("mmproj-gemma-3-Q8_0.gguf", role: .projector, architecture: "clip")
+        let review = makeReview(artifacts: [base, projector])
+
+        XCTAssertNil(VisionPairResolver().bestPair(for: base, in: review))
+    }
+
+    func testGenericClipAndCommonQuantizationIsNotHighConfidenceOrImportable() {
+        let base = makeArtifact("base-Q4_K_M.gguf", role: .base, architecture: "gemma")
+        let projector = makeArtifact("mmproj-Q8_0.gguf", role: .projector, architecture: "clip")
+        let review = makeReview(artifacts: [base, projector])
+        let resolver = VisionPairResolver()
+
+        XCTAssertEqual(resolver.resolvePairs(from: review).first?.confidence, .low)
+        XCTAssertNil(resolver.bestPair(for: base, in: review))
+        XCTAssertThrowsError(try review.suggestedVisionPair(base: base)) {
+            XCTAssertEqual($0 as? HFInspectionError, .incompatibleVisionPair)
+        }
     }
 
     // MARK: - Vision Pair Candidate Properties

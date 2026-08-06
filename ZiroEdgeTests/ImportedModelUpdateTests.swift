@@ -109,7 +109,7 @@ final class ImportedModelUpdateTests: XCTestCase {
         XCTAssertNil(coordinator.stagedModel(modelID: existing.id))
     }
 
-    func testStageUpdateDoesNotPromoteUntilVerified() throws {
+    func testStageUpdateDoesNotPromoteUntilVerified() async throws {
         let manager = DownloadManager(availableDiskSpaceProvider: { 100_000_000_000 })
         let coordinator = ImportedModelUpdateCoordinator(downloadManager: manager)
 
@@ -118,11 +118,13 @@ final class ImportedModelUpdateTests: XCTestCase {
         let base = makeArtifact("model-Q4_K_M.gguf", digest: String(repeating: "2", count: 64))
 
         let stagedModel = try coordinator.stageUpdate(existing: existing, review: review, base: base, projector: nil)
-        XCTAssertEqual(stagedModel.id, existing.id)
+        XCTAssertNotEqual(stagedModel.id, existing.id)
+        XCTAssertEqual(stagedModel.huggingFaceProvenance?.revision, review.revision)
         XCTAssertTrue(coordinator.hasStagedUpdate(modelID: existing.id))
 
         // Before download completes, promotion should return nil.
-        XCTAssertNil(try coordinator.promoteIfVerified(modelID: existing.id))
+        let incompletePromotion = try await coordinator.promoteIfVerified(modelID: existing.id)
+        XCTAssertNil(incompletePromotion)
         XCTAssertTrue(coordinator.hasStagedUpdate(modelID: existing.id))
     }
 
@@ -152,6 +154,112 @@ final class ImportedModelUpdateTests: XCTestCase {
         XCTAssertTrue(restored.hasStagedUpdate(modelID: existing.id))
         XCTAssertEqual(restored.stagedModel(modelID: existing.id)?.baseSHA256, base.sha256)
         restored.discardStagedUpdate(modelID: existing.id)
+    }
+
+    func testStagedTransferIdentityDoesNotMaskInstalledReadiness() throws {
+        let manager = DownloadManager(availableDiskSpaceProvider: { 100_000_000_000 })
+        let coordinator = ImportedModelUpdateCoordinator(downloadManager: manager)
+        let installedData = TestModelFixtures.gguf(count: 16)
+        let existing = makeImportedModel()
+        let installed = AIModel(
+            id: existing.id, displayName: existing.displayName, description: existing.description,
+            modelType: existing.modelType, baseURL: existing.baseURL, mmprojURL: existing.mmprojURL,
+            baseFileSizeBytes: Int64(installedData.count), mmprojFileSizeBytes: nil,
+            baseSHA256: TestModelFixtures.sha256(installedData), mmprojSHA256: nil,
+            quantization: existing.quantization, config: existing.config, license: existing.license,
+            source: existing.source
+        )
+        try installedData.write(to: ModelManagerService.baseModelPath(for: installed), options: .atomic)
+        defer { ModelManagerService.deleteModel(installed) }
+
+        let review = makeReview(revision: String(repeating: "b", count: 40))
+        let base = makeArtifact("model-Q4_K_M.gguf", digest: String(repeating: "2", count: 64))
+        let staged = try coordinator.stageUpdate(existing: installed, review: review, base: base, projector: nil)
+        defer { coordinator.discardStagedUpdate(modelID: installed.id) }
+
+        XCTAssertNotEqual(staged.id, installed.id)
+        XCTAssertTrue(manager.status(for: installed).isReady)
+        XCTAssertFalse(manager.status(for: staged).isReady)
+    }
+
+    func testUpdatePreflightExposesTemporaryStorageMarginAndRAMRisk() {
+        let manager = DownloadManager(availableDiskSpaceProvider: { 1_000_000_000 })
+        let coordinator = ImportedModelUpdateCoordinator(
+            downloadManager: manager,
+            physicalRAM: { 128_000_000 }
+        )
+        let base = makeArtifact("model-Q4_K_M.gguf", size: 600_000_000)
+        let storage = coordinator.storagePreflight(base: base, projector: nil)
+        let ram = coordinator.ramAssessment(base: base, projector: nil)
+
+        XCTAssertEqual(storage.requiredBytes, 600_000_000)
+        XCTAssertGreaterThanOrEqual(storage.safetyMarginBytes, DownloadManager.storageSafetyMarginBytes)
+        XCTAssertEqual(storage.availableBytes, 1_000_000_000)
+        XCTAssertFalse(storage.canProceed)
+        XCTAssertEqual(ram.classification, .risky)
+        XCTAssertNotNil(ram.warning)
+    }
+
+    func testPromotionUnloadsActiveOldProvenanceBeforeSwap() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = ImportedModelStore(directory: root.appendingPathComponent("installed"))
+        let updateStore = ImportedModelUpdateStore(directory: root.appendingPathComponent("updates"))
+        let oldData = TestModelFixtures.gguf(fill: 0x31, count: 16)
+        let oldArtifact = makeArtifact("model-Q4_K_M.gguf", digest: TestModelFixtures.sha256(oldData))
+        let oldReview = makeReview(revision: String(repeating: "a", count: 40), artifacts: [oldArtifact])
+        let oldRecord = ImportedModelFactory.makeRecord(
+            review: oldReview,
+            base: oldArtifact,
+            stableID: "active-update-model"
+        )
+        try store.upsert(oldRecord)
+        try oldData.write(to: ModelManagerService.baseModelPath(for: oldRecord.model), options: .atomic)
+        defer { ModelManagerService.deleteModel(oldRecord.model) }
+
+        let inference = UpdateInferenceStub()
+        let safetyStore = try LoadSafetyStore(directory: root.appendingPathComponent("safety"))
+        let lifecycle = ModelLifecycleManager(
+            inferenceService: inference,
+            memoryBudgeter: MemoryBudgeter(metrics: FixedMemoryMetricsProvider(
+                processAvailable: 8_000_000_000,
+                total: 16_000_000_000
+            )),
+            loadSafetyStore: safetyStore,
+            importedModelStore: store,
+            availabilityProvider: { _ in .ready },
+            recoveryDelay: .zero
+        )
+        ExperimentalModelConsent.setGranted(true, for: oldRecord.model)
+        defer { ExperimentalModelConsent.setGranted(false, for: oldRecord.model) }
+        let loadResult = await lifecycle.loadModel(oldRecord.model)
+        XCTAssertEqual(loadResult, .loaded)
+
+        let manager = DownloadManager(availableDiskSpaceProvider: { .max })
+        let coordinator = ImportedModelUpdateCoordinator(
+            store: store,
+            downloadManager: manager,
+            updateStore: updateStore,
+            lifecycleManager: lifecycle
+        )
+        let newData = TestModelFixtures.gguf(fill: 0x42, count: 16)
+        let newArtifact = makeArtifact("model-Q4_K_M.gguf", digest: TestModelFixtures.sha256(newData))
+        let newReview = makeReview(revision: String(repeating: "b", count: 40), artifacts: [newArtifact])
+        let staged = try coordinator.stageUpdate(
+            existing: oldRecord.model,
+            review: newReview,
+            base: newArtifact,
+            projector: nil
+        )
+        manager.cancelDownload(for: staged)
+        try newData.write(to: ModelManagerService.baseModelPath(for: staged), options: .atomic)
+
+        let promoted = try await coordinator.promoteIfVerified(modelID: oldRecord.id)
+        XCTAssertEqual(promoted?.id, oldRecord.id)
+        XCTAssertEqual(promoted?.huggingFaceProvenance?.revision, newReview.revision)
+        XCTAssertNil(lifecycle.activeModel)
+        let unloadCount = await inference.unloadCount
+        XCTAssertEqual(unloadCount, 1)
     }
 
     // MARK: - Failure rollback
@@ -257,4 +365,40 @@ final class ImportedModelUpdateTests: XCTestCase {
             artifacts: artifacts ?? [makeArtifact("model-Q4_K_M.gguf", digest: String(repeating: "1", count: 64))]
         )
     }
+}
+
+private actor UpdateInferenceStub: InferenceServiceProtocol {
+    private var loaded = false
+    private(set) var unloadCount = 0
+
+    var isModelLoaded: Bool { loaded }
+    var loadedModelID: String? { loaded ? "active-update-model" : nil }
+
+    func loadModel(_ model: AIModel, baseURL: URL, mmprojURL: URL?) async throws {
+        loaded = true
+    }
+
+    func unloadModel() async {
+        unloadCount += 1
+        loaded = false
+    }
+
+    func streamChat(
+        messages: [ChatMessagePayload],
+        systemPrompt: String?,
+        sampling: SamplingConfig
+    ) async throws -> AsyncThrowingStream<String, Error> {
+        throw InferenceError.modelNotLoaded
+    }
+
+    func streamVisionChat(
+        messages: [ChatMessagePayload],
+        images: [Data],
+        systemPrompt: String?,
+        sampling: SamplingConfig
+    ) async throws -> AsyncThrowingStream<String, Error> {
+        throw InferenceError.modelNotLoaded
+    }
+
+    func cancelCurrentStream() async {}
 }

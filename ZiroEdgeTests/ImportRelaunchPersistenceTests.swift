@@ -86,6 +86,41 @@ final class ImportRelaunchPersistenceTests: XCTestCase {
     }
 
     @MainActor
+    func testActiveBackgroundTaskWithoutStagingSurvivesUntilTaskReconciliation() throws {
+        let model = makeModel(size: 1_000_000, digest: String(repeating: "c", count: 64))
+        let persistedTask = DownloadTask(model: model, artifact: .base)
+        persistedTask.progress = 0.25
+        persistedTask.state = .downloading(progress: 0.25)
+        persistedTask.task = URLSession.shared.downloadTask(with: model.baseURL)
+        defer {
+            persistedTask.task?.cancel()
+            try? FileManager.default.removeItem(at: persistedTask.metadataURL)
+            try? FileManager.default.removeItem(at: persistedTask.resumeDataURL)
+            try? FileManager.default.removeItem(at: persistedTask.stagingURL)
+        }
+
+        let first = DownloadManager(availableDiskSpaceProvider: { .max })
+        first.persistDurableState(for: persistedTask)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: persistedTask.metadataURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: persistedTask.stagingURL.path))
+
+        let relaunched = DownloadManager(availableDiskSpaceProvider: { .max })
+        relaunched.restoreDurableTransfers(models: [model])
+        let restored = relaunched.activeTasks[persistedTask.storageID]
+        XCTAssertTrue(restored?.awaitingBackgroundTaskReconciliation == true)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: persistedTask.metadataURL.path))
+
+        let systemTask = URLSession.shared.downloadTask(with: model.baseURL)
+        systemTask.taskDescription = persistedTask.storageID
+        defer { systemTask.cancel() }
+        relaunched.reconcileBackgroundTasks([systemTask])
+
+        XCTAssertTrue(relaunched.activeTasks[persistedTask.storageID]?.task === systemTask)
+        XCTAssertFalse(relaunched.activeTasks[persistedTask.storageID]?.awaitingBackgroundTaskReconciliation ?? true)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: persistedTask.metadataURL.path))
+    }
+
+    @MainActor
     func testNoStagingFileReportsNotDownloaded() throws {
         let model = makeModel(size: 1_000_000)
         let manager = DownloadManager(availableDiskSpaceProvider: { .max })

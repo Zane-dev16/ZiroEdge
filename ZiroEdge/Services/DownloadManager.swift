@@ -24,6 +24,7 @@ final class DownloadTask {
     var chunkResponseValidated = false
     var chunkFailureReason: String?
     var canonicalRetryAttempted = false
+    var awaitingBackgroundTaskReconciliation = false
     var verificationTask: Task<Void, Never>?
     init(model: AIModel, artifact: ArtifactType) { self.model = model; self.artifact = artifact }
     var destinationURL: URL {
@@ -513,8 +514,16 @@ extension DownloadManager {
         guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
         getSession().getAllTasks { [weak self] systemTasks in
             Task { @MainActor [weak self] in
-                guard let self else { return }
-                for systemTask in systemTasks {
+                self?.reconcileBackgroundTasks(systemTasks)
+            }
+        }
+    }
+    /// Reconnect restored metadata to the system-owned background tasks. Kept
+    /// separate from URLSession enumeration so the active-task/no-staging
+    /// relaunch seam can be exercised without network I/O.
+    func reconcileBackgroundTasks(_ systemTasks: [URLSessionTask]) {
+        var reconciledKeys = Set<String>()
+        for systemTask in systemTasks {
                     guard let key = systemTask.taskDescription, !key.isEmpty,
                           let downloadTask = systemTask as? URLSessionDownloadTask else {
                         // No stable identity to anchor — discard.
@@ -523,17 +532,19 @@ extension DownloadManager {
                     }
 
                     // Already connected — duplicate.
-                    if let existing = self.activeTasks[key], existing.task != nil {
+                    if let existing = activeTasks[key], existing.task != nil {
                         systemTask.cancel()
                         continue
                     }
 
                     // Reconnect to a restored durable entry.
-                    if let existing = self.activeTasks[key] {
+                    if let existing = activeTasks[key] {
                         existing.task = downloadTask
                         existing.isPaused = false
+                        existing.awaitingBackgroundTaskReconciliation = false
                         existing.state = .downloading(progress: existing.progress)
-                        self.updateStatus(model: existing.model)
+                        reconciledKeys.insert(key)
+                        updateStatus(model: existing.model)
                         continue
                     }
 
@@ -544,17 +555,19 @@ extension DownloadManager {
                         continue
                     }
 
-                    let hasMetadata = self.fileManager.fileExists(atPath: resolved.metadataURL.path)
-                    let hasStaging = self.fileManager.fileExists(atPath: resolved.stagingURL.path)
+                    let hasMetadata = fileManager.fileExists(atPath: resolved.metadataURL.path)
+                    let hasStaging = fileManager.fileExists(atPath: resolved.stagingURL.path)
 
                     if hasMetadata {
                         // Re-run the per-task restore path; it will populate activeTasks.
-                        self.restoreSingleDurableTransfer(resolved)
-                        if let restored = self.activeTasks[key] {
+                        restoreSingleDurableTransfer(resolved)
+                        if let restored = activeTasks[key] {
                             restored.task = downloadTask
                             restored.isPaused = false
+                            restored.awaitingBackgroundTaskReconciliation = false
                             restored.state = .downloading(progress: restored.progress)
-                            self.updateStatus(model: restored.model)
+                            reconciledKeys.insert(key)
+                            updateStatus(model: restored.model)
                             continue
                         }
                     }
@@ -562,7 +575,7 @@ extension DownloadManager {
                     if hasStaging {
                         // We have partial bytes but no metadata. Reconstruct
                         // progress from staging size and reconnect.
-                        let staged = (try? self.fileManager.attributesOfItem(
+                        let staged = (try? fileManager.attributesOfItem(
                             atPath: resolved.stagingURL.path
                         )[.size] as? NSNumber)?.int64Value ?? 0
                         if staged > 0 {
@@ -571,20 +584,33 @@ extension DownloadManager {
                                 1.0
                             )
                             resolved.state = .resuming(progress: resolved.progress)
-                            _ = self.registerActiveTaskIfAbsent(resolved)
+                            _ = registerActiveTaskIfAbsent(resolved)
                             resolved.task = downloadTask
                             resolved.isPaused = false
                             resolved.state = .downloading(progress: resolved.progress)
-                            self.persistDurableState(for: resolved)
-                            self.updateStatus(model: resolved.model)
+                            reconciledKeys.insert(key)
+                            persistDurableState(for: resolved)
+                            updateStatus(model: resolved.model)
                             continue
                         }
                     }
 
                     // Nothing to anchor to — discard the system task.
                     systemTask.cancel()
-                }
-            }
+        }
+
+        // Metadata that claimed a live background task is only provisional.
+        // Once URLSession enumeration completes, an unmatched entry has no
+        // resumable bytes and must fail closed rather than remain a fake pause.
+        let unmatched = activeTasks.filter {
+            $0.value.awaitingBackgroundTaskReconciliation && !reconciledKeys.contains($0.key)
+        }
+        for (key, task) in unmatched {
+            task.awaitingBackgroundTaskReconciliation = false
+            task.state = .failed(error: .networkError)
+            removeDurableState(for: task, discardStaging: false)
+            activeTasks.removeValue(forKey: key)
+            updateStatus(model: task.model)
         }
     }
 
@@ -607,20 +633,24 @@ extension DownloadManager {
 
         let hasResume = fileManager.fileExists(atPath: task.resumeDataURL.path)
         let hasStaging = fileManager.fileExists(atPath: task.stagingURL.path)
-        guard snapshot.resumeAvailable, hasResume || hasStaging else {
+        let hasResumableBytes = snapshot.resumeAvailable && (hasResume || hasStaging)
+        guard hasResumableBytes || snapshot.activeBackgroundTask else {
             removeDurableState(for: task, discardStaging: false)
             return
         }
 
         task.progress = snapshot.progress
-        task.isPaused = !snapshot.failed
+        task.awaitingBackgroundTaskReconciliation = snapshot.activeBackgroundTask && !hasResumableBytes
+        task.isPaused = !snapshot.failed && !task.awaitingBackgroundTaskReconciliation
         task.isChunked = hasStaging && task.expectedBytes > 2_147_483_648
         if task.isChunked {
             task.totalChunks = (task.expectedBytes + 100 * 1_024 * 1_024 - 1) / (100 * 1_024 * 1_024)
         }
         task.state = snapshot.failed
             ? .failed(error: .networkError)
-            : .paused(progress: snapshot.progress)
+            : task.awaitingBackgroundTaskReconciliation
+                ? .resuming(progress: snapshot.progress)
+                : .paused(progress: snapshot.progress)
         activeTasks[task.storageID] = task
         updateStatus(model: task.model)
     }
@@ -678,6 +708,7 @@ extension DownloadManager {
         task.state = .downloading(progress: 0.0)
         self.updateStatus(model: task.model)
         task.task?.taskDescription = key
+        persistDurableState(for: task)
         task.task?.resume()
     }
     func resolveCDNURL(
@@ -943,7 +974,6 @@ extension DownloadManager: URLSessionDownloadDelegate, URLSessionDataDelegate {
                 }
                 downloadTask.state = .failed(error: .networkError)
                 persistDurableState(for: downloadTask, failed: true)
-            } else {
             }
             updateStatus(model: downloadTask.model)
             activeTasks.removeValue(forKey: key)

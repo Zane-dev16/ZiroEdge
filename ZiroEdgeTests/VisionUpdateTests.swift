@@ -47,7 +47,7 @@ final class VisionUpdateTests: XCTestCase {
             quantization: filename.uppercased().contains("Q8") ? "Q8_0" : "Q4_K_M",
             architecture: architecture,
             role: role,
-            metadata: HFGGUFMetadata(architecture: architecture, contextLength: 4096, chatTemplate: "fixture", modelName: "Fixture")
+            metadata: HFGGUFMetadata(architecture: architecture, contextLength: 4096, chatTemplate: "fixture", modelName: "Gemma Vision")
         )
     }
 
@@ -253,7 +253,7 @@ final class VisionUpdateTests: XCTestCase {
     // MARK: - Promotion Only After Both Artifacts Verified
 
     @MainActor
-    func testPairedUpdatePromotionRequiresBothArtifactsVerified() throws {
+    func testPairedUpdatePromotionRequiresBothArtifactsVerified() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let store = ImportedModelStore(directory: directory)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -304,7 +304,8 @@ final class VisionUpdateTests: XCTestCase {
         try newBaseData.write(to: ModelManagerService.baseModelPath(for: stagedModel), options: .atomic)
         defer { ModelManagerService.deleteModel(stagedModel) }
 
-        XCTAssertNil(try coordinator.promoteIfVerified(modelID: existingRecord.id))
+        let incompletePromotion = try await coordinator.promoteIfVerified(modelID: existingRecord.id)
+        XCTAssertNil(incompletePromotion)
         XCTAssertTrue(coordinator.hasStagedUpdate(modelID: existingRecord.id))
         XCTAssertEqual(store.record(id: existingRecord.id)?.provenance.revision, existingRecord.provenance.revision)
     }
@@ -312,7 +313,7 @@ final class VisionUpdateTests: XCTestCase {
     // MARK: - Coherent Promotion Switches Identity
 
     @MainActor
-    func testPromotionSwitchesIdentityAndRemovesUnreferencedArtifacts() throws {
+    func testPromotionSwitchesIdentityAndRemovesUnreferencedArtifacts() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let store = ImportedModelStore(directory: directory)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -354,7 +355,7 @@ final class VisionUpdateTests: XCTestCase {
         try newProjectorData.write(to: ModelManagerService.mmprojModelPath(for: stagedModel), options: .atomic)
         defer { ModelManagerService.deleteModel(stagedModel) }
 
-        let promoted = try coordinator.promoteIfVerified(modelID: "switch-identity-test")
+        let promoted = try await coordinator.promoteIfVerified(modelID: "switch-identity-test")
         XCTAssertEqual(promoted?.huggingFaceProvenance?.revision, newRevision)
         XCTAssertEqual(store.record(id: "switch-identity-test")?.provenance.revision, newRevision)
         XCTAssertFalse(FileManager.default.fileExists(atPath: oldBasePath.path))

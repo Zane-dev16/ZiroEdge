@@ -28,12 +28,14 @@ struct ImportedModelSettingsView: View {
     @State private var selectedUpdateBase: HFArtifact?
     @State private var updateLicenseConfirmed = false
     @State private var updatePairConfirmed = false
+    @State private var updateRAMRiskAccepted = false
 
     init(model: AIModel, viewModel: ModelsViewModel) {
         self.model = model
         self.viewModel = viewModel
         _updateCoordinator = StateObject(wrappedValue: ImportedModelUpdateCoordinator(
-            downloadManager: viewModel.downloadManager
+            downloadManager: viewModel.downloadManager,
+            lifecycleManager: viewModel.lifecycleManager
         ))
         let config = model.config
         _contextLength = State(initialValue: config.contextLength)
@@ -149,6 +151,7 @@ struct ImportedModelSettingsView: View {
             selectedUpdateBase = nil
             updateLicenseConfirmed = false
             updatePairConfirmed = false
+            updateRAMRiskAccepted = false
             Task {
                 do {
                     switch try await updateCoordinator.checkForUpdate(model: model) {
@@ -191,6 +194,32 @@ struct ImportedModelSettingsView: View {
                         .foregroundStyle(.red)
                 }
             }
+            if let selectedUpdateBase {
+                let projector = updateProjector(for: selectedUpdateBase, review: availableUpdate)
+                let storage = updateCoordinator.storagePreflight(base: selectedUpdateBase, projector: projector)
+                let ram = updateCoordinator.ramAssessment(base: selectedUpdateBase, projector: projector)
+                Group {
+                    LabeledContent("Temporary storage required", value: formattedFileBytes(storage.requiredBytes))
+                    LabeledContent("Storage safety margin", value: formattedFileBytes(storage.safetyMarginBytes))
+                    LabeledContent("Available storage", value: formattedFileBytes(storage.availableBytes))
+                    if !storage.canProceed {
+                        Label("Not enough temporary storage to keep the installed revision while staging.", systemImage: "internaldrive.fill.badge.xmark")
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                    LabeledContent("Estimated update RAM", value: formattedMemoryBytes(ram.estimatedBytes))
+                    LabeledContent("Device RAM", value: formattedMemoryBytes(ram.physicalBytes))
+                    if ram.classification == .risky {
+                        Label(ram.warning ?? "This update may not fit in device RAM.", systemImage: "memorychip")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                        Toggle("Stage despite RAM risk", isOn: $updateRAMRiskAccepted)
+                    }
+                }
+            }
+            Link(destination: availableUpdate.licenseURL) {
+                Label("View updated license terms", systemImage: "doc.text")
+            }
             Toggle("I reviewed and accept the updated license", isOn: $updateLicenseConfirmed)
             Button("Download and Stage Update") {
                 do {
@@ -201,23 +230,23 @@ struct ImportedModelSettingsView: View {
                 }
             }
             .disabled(
-                selectedUpdateBase == nil
-                    || !updateLicenseConfirmed
-                    || (model.modelType == .vision && !updatePairConfirmed)
+                !canStageUpdate(review: availableUpdate)
             )
         }
 
         if updateCoordinator.hasStagedUpdate(modelID: model.id) {
             Button("Finish Verified Update") {
-                do {
-                    if try updateCoordinator.promoteIfVerified(modelID: model.id) != nil {
-                        availableUpdate = nil
-                        updateCheckMessage = "Update installed. Return to Models to open the new revision."
-                    } else {
-                        updateCheckMessage = "The staged artifacts are still downloading or have not passed verification."
+                Task {
+                    do {
+                        if try await updateCoordinator.promoteIfVerified(modelID: model.id) != nil {
+                            availableUpdate = nil
+                            updateCheckMessage = "Update installed. Return to Models to open the new revision."
+                        } else {
+                            updateCheckMessage = "The staged artifacts are still downloading or have not passed verification."
+                        }
+                    } catch {
+                        updateCheckMessage = error.localizedDescription
                     }
-                } catch {
-                    updateCheckMessage = error.localizedDescription
                 }
             }
 
@@ -235,8 +264,30 @@ struct ImportedModelSettingsView: View {
         }
     }
 
+    private func updateProjector(for base: HFArtifact, review: HFRepositoryReview) -> HFArtifact? {
+        guard model.modelType == .vision else { return nil }
+        return VisionPairResolver().bestPair(for: base, in: review)?.projector
+    }
+
+    private func canStageUpdate(review: HFRepositoryReview) -> Bool {
+        guard updateLicenseConfirmed, let base = selectedUpdateBase else { return false }
+        let projector = updateProjector(for: base, review: review)
+        guard model.modelType != .vision || (updatePairConfirmed && projector != nil) else { return false }
+        let storage = updateCoordinator.storagePreflight(base: base, projector: projector)
+        let ram = updateCoordinator.ramAssessment(base: base, projector: projector)
+        return storage.canProceed && (ram.classification == .likelyFits || updateRAMRiskAccepted)
+    }
+
+    private func formattedFileBytes(_ bytes: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+    }
+
+    private func formattedMemoryBytes(_ bytes: UInt64) -> String {
+        ByteCountFormatter.string(fromByteCount: Int64(clamping: bytes), countStyle: .memory)
+    }
+
     private func stageUpdate(_ review: HFRepositoryReview) throws {
-        guard updateLicenseConfirmed, let base = selectedUpdateBase else {
+        guard canStageUpdate(review: review), let base = selectedUpdateBase else {
             throw HFInspectionError.noCompatibleArtifact
         }
 

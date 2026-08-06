@@ -10,9 +10,13 @@ struct DurableTransferSnapshot: Codable {
     let expectedBytes: Int64
     let progress: Double
     let resumeAvailable: Bool
+    /// A non-chunked background URLSession task was active when persisted.
+    /// This keeps metadata alive through relaunch even though URLSession owns
+    /// the temporary file and no staging/resume bytes exist yet.
+    let activeBackgroundTask: Bool
     let failed: Bool
 
-    static let currentVersion = 1
+    static let currentVersion = 2
 }
 
 @MainActor
@@ -45,6 +49,7 @@ extension DownloadManager {
             expectedBytes: task.expectedBytes,
             progress: min(max(task.progress, 0), 1),
             resumeAvailable: hasResumeData || hasStaging,
+            activeBackgroundTask: !task.isChunked && task.task != nil && !task.isCancelled,
             failed: failed
         )
         guard let data = try? JSONEncoder().encode(snapshot) else { return }

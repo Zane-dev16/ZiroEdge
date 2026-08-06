@@ -141,47 +141,58 @@ struct VisionPairResolver: Sendable {
         return baseArch.hasPrefix("gemma") && projectorArch.hasPrefix("gemma")
     }
 
-    /// Score confidence for a base + projector pair.
+    /// Score confidence for a base + projector pair. Quantization is never
+    /// compatibility evidence by itself: an unrelated generic CLIP projector
+    /// can use the same common tier. A high-confidence pair must first establish
+    /// a deterministic model identity through filenames or per-artifact metadata.
     private func scoreConfidence(base: HFArtifact, projector: HFArtifact) -> VisionPairConfidence {
-        // 1. Check known quantization pairings.
+        guard hasDeterministicPairingEvidence(base: base, projector: projector) else {
+            return .low
+        }
+
         if let match = Self.quantizationPairs.first(where: {
             base.quantization == $0.base && projector.quantization == $0.projector
         }) {
             return match.confidence
         }
-
-        // 2. Check naming conventions for embedded hints.
-        let baseName = base.filename.lowercased()
-        let projName = projector.filename.lowercased()
-
-        // Extract model family from filenames.
-        let baseFamily = baseModelFamily(baseName)
-        let projFamily = baseModelFamily(projName)
-
-        // Same model family with mmproj in name → medium confidence.
-        if baseFamily == projFamily && projName.contains("mmproj") {
-            return .medium
-        }
-
-        // Same quantization tier → medium confidence.
-        let baseQuant = base.quantization
-        let projQuant = projector.quantization
-        if baseQuant == projQuant {
-            return .medium
-        }
-
-        // Projector filename contains the base quantization hint.
-        if projName.contains(baseQuant.lowercased()) {
-            return .medium
-        }
-
-        // Architecture match only → low confidence.
-        return .low
+        return .medium
     }
 
-    /// Extract a model family hint from an artifact filename.
-    private func baseModelFamily(_ filename: String) -> String? {
-        let families = ["gemma", "qwen", "llama", "phi", "mistral", "smolvlm"]
-        return families.first { filename.contains($0) }
+    private func hasDeterministicPairingEvidence(base: HFArtifact, projector: HFArtifact) -> Bool {
+        let baseIdentity = filenameIdentity(base.filename)
+        let projectorIdentity = filenameIdentity(projector.filename)
+        if let baseIdentity, baseIdentity == projectorIdentity { return true }
+
+        let baseMetadata = metadataIdentity(base.metadata.modelName)
+        let projectorMetadata = metadataIdentity(projector.metadata.modelName)
+        return baseMetadata != nil && baseMetadata == projectorMetadata
+    }
+
+    private func filenameIdentity(_ filename: String) -> String? {
+        let quantizations = [
+            "q2-k", "q3-k-s", "q3-k-m", "q3-k-l", "q4-0", "q4-k-s",
+            "q4-k-m", "q5-0", "q5-k-s", "q5-k-m", "q6-k", "q8-0", "f16", "bf16"
+        ]
+        var value = filename.lowercased()
+            .replacingOccurrences(of: ".gguf", with: "")
+            .replacingOccurrences(of: "mmproj", with: "")
+        for quantization in quantizations {
+            value = value.replacingOccurrences(of: quantization, with: "")
+            value = value.replacingOccurrences(of: quantization.replacingOccurrences(of: "-", with: "_"), with: "")
+        }
+        let tokens = value.split { !$0.isLetter && !$0.isNumber }.map(String.init)
+        let generic = Set(["model", "base", "projector", "vision", "gguf"])
+        let meaningful = tokens.filter { !generic.contains($0) }
+        guard !meaningful.isEmpty else { return nil }
+        return meaningful.joined(separator: "-")
+    }
+
+    private func metadataIdentity(_ name: String?) -> String? {
+        guard let name else { return nil }
+        let tokens = name.lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init)
+        let generic = Set(["model", "base", "projector", "vision", "fixture", "test", "unknown"])
+        let meaningful = tokens.filter { !generic.contains($0) }
+        guard !meaningful.isEmpty else { return nil }
+        return meaningful.joined(separator: "-")
     }
 }
