@@ -255,6 +255,70 @@ final class ImportRejectionTests: XCTestCase {
         }
     }
 
+    // MARK: - License Terms
+
+    func testMissingLicenseTermsRejectsImportInspection() async throws {
+        let data = try JSONSerialization.data(withJSONObject: [
+            "sha": String(repeating: "a", count: 40),
+            "gguf": ["architecture": "llama"],
+            "siblings": [[
+                "rfilename": "model-Q4_K_M.gguf",
+                "size": 100,
+                "lfs": ["sha256": String(repeating: "b", count: 64)],
+            ]],
+        ])
+        let inspector = HFRepositoryInspector { _ in
+            let response = HTTPURLResponse(
+                url: URL(string: "https://huggingface.co/api/models/unlicensed/repo")!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (data, response)
+        }
+
+        do {
+            _ = try await inspector.inspect("unlicensed/repo")
+            XCTFail("Expected licenseTermsUnavailable")
+        } catch {
+            XCTAssertEqual(error as? HFInspectionError, .licenseTermsUnavailable)
+        }
+    }
+
+    func testRepositoryLicenseFileProvidesReviewableTermsWithoutCardMetadata() async throws {
+        let digest = String(repeating: "b", count: 64)
+        let revision = String(repeating: "a", count: 40)
+        let data = try JSONSerialization.data(withJSONObject: [
+            "sha": revision,
+            "gguf": ["architecture": "llama"],
+            "siblings": [
+                [
+                    "rfilename": "model-Q4_K_M.gguf",
+                    "size": 100,
+                    "lfs": ["sha256": digest],
+                ],
+                ["rfilename": "LICENSE.md"],
+            ],
+        ])
+        let inspector = HFRepositoryInspector { _ in
+            let response = HTTPURLResponse(
+                url: URL(string: "https://huggingface.co/api/models/licensed/repo")!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (data, response)
+        }
+
+        let review = try await inspector.inspect("licensed/repo")
+
+        XCTAssertEqual(review.licenseName, "Repository license")
+        XCTAssertEqual(
+            review.licenseURL.absoluteString,
+            "https://huggingface.co/licensed/repo/resolve/\(revision)/LICENSE.md"
+        )
+    }
+
     // MARK: - No Transfer State Created
 
     @MainActor
@@ -280,6 +344,7 @@ final class ImportRejectionTests: XCTestCase {
             .unsupportedArchitecture("falcon"),
             .missingDigest("model.gguf"),
             .malformedMetadata("model.gguf"),
+            .licenseTermsUnavailable,
             .projectorMissing,
             .projectorAmbiguous,
             .incompatibleVisionPair,

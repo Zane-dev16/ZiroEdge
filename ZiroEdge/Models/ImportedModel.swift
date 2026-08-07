@@ -80,19 +80,45 @@ enum UnavailableModelReason: Equatable, Sendable {
     case neverExisted
 }
 
+enum ImportedModelStoreError: LocalizedError, Equatable {
+    case registryUnavailable
+    case recordNotFound(String)
+    case provenanceChanged(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .registryUnavailable:
+            "Imported model data is temporarily unavailable. Unlock the device and try again."
+        case .recordNotFound(let id):
+            "The imported model record ‘\(id)’ no longer exists."
+        case .provenanceChanged(let id):
+            "The imported model ‘\(id)’ changed while the operation was in progress."
+        }
+    }
+}
+
 /// Atomic JSON registry. It stores immutable repository/revision/artifact provenance,
 /// so relaunch never resolves an installed model against a moving branch.
+/// Read/decode failures are fail-closed: they never masquerade as an empty registry.
 final class ImportedModelStore: @unchecked Sendable {
     static let shared = ImportedModelStore()
 
+    typealias Reader = (URL) throws -> Data
+    typealias Writer = (Data, URL) throws -> Void
+
     private let lock = NSLock()
     private let fileURL: URL
-    private let writer: (Data, URL) throws -> Void
+    private let backupURL: URL
+    private let reader: Reader
+    private let writer: Writer
     private var records: [ImportedModelRecord]
+    private var available: Bool
+    private var primaryIsValid: Bool
 
     init(
         directory: URL? = nil,
-        writer: @escaping (Data, URL) throws -> Void = {
+        reader: @escaping Reader = { try Data(contentsOf: $0) },
+        writer: @escaping Writer = {
             try $0.write(to: $1, options: [.atomic, .completeFileProtection])
         }
     ) {
@@ -100,23 +126,42 @@ final class ImportedModelStore: @unchecked Sendable {
             .appendingPathComponent("ZiroEdge/Models/Imported", isDirectory: true)
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         fileURL = root.appendingPathComponent("registry.json")
+        backupURL = root.appendingPathComponent("registry.backup.json")
+        self.reader = reader
         self.writer = writer
-        records = (try? Data(contentsOf: fileURL)).flatMap { try? JSONDecoder().decode([ImportedModelRecord].self, from: $0) } ?? []
+        let loaded = Self.load(fileURL: fileURL, backupURL: backupURL, reader: reader)
+        records = loaded.records
+        available = loaded.available
+        primaryIsValid = loaded.primaryIsValid
+    }
+
+    var isAvailable: Bool {
+        lock.withLock {
+            recoverIfPossibleLocked()
+            return available
+        }
     }
 
     var allRecords: [ImportedModelRecord] {
-        lock.withLock { records }
+        lock.withLock {
+            recoverIfPossibleLocked()
+            return records
+        }
     }
 
     var models: [AIModel] { allRecords.map(\.model) }
 
     func record(id: String) -> ImportedModelRecord? {
-        lock.withLock { records.first { $0.id == id } }
+        lock.withLock {
+            recoverIfPossibleLocked()
+            return records.first { $0.id == id }
+        }
     }
 
     func record(repositoryID: String, revision: String, baseFilename: String, projectorFilename: String?) -> ImportedModelRecord? {
         lock.withLock {
-            records.first {
+            recoverIfPossibleLocked()
+            return records.first {
                 $0.provenance.repositoryID == repositoryID
                     && $0.provenance.revision == revision
                     && $0.provenance.baseFilename == baseFilename
@@ -141,11 +186,28 @@ final class ImportedModelStore: @unchecked Sendable {
     }
 
     func update(id: String, _ body: (inout ImportedModelRecord) -> Void) throws {
-        _ = try mutate { records in
-            guard let index = records.firstIndex(where: { $0.id == id }) else { return false }
+        try mutate { records in
+            guard let index = records.firstIndex(where: { $0.id == id }) else {
+                throw ImportedModelStoreError.recordNotFound(id)
+            }
             body(&records[index])
-            return true
-        } as Bool
+        }
+    }
+
+    func replace(
+        id: String,
+        expectedProvenance: HuggingFaceProvenance,
+        with replacement: ImportedModelRecord
+    ) throws {
+        try mutate { records in
+            guard let index = records.firstIndex(where: { $0.id == id }) else {
+                throw ImportedModelStoreError.recordNotFound(id)
+            }
+            guard records[index].provenance == expectedProvenance else {
+                throw ImportedModelStoreError.provenanceChanged(id)
+            }
+            records[index] = replacement
+        }
     }
 
     @discardableResult
@@ -156,61 +218,134 @@ final class ImportedModelStore: @unchecked Sendable {
         }
     }
 
-    private func mutate<T>(_ body: (inout [ImportedModelRecord]) -> T) throws -> T {
+    private func mutate<T>(_ body: (inout [ImportedModelRecord]) throws -> T) throws -> T {
         lock.lock()
-        let result = body(&records)
-        let snapshot = records
+        recoverIfPossibleLocked()
+        guard available else {
+            lock.unlock()
+            throw ImportedModelStoreError.registryUnavailable
+        }
+        let previous = records
         do {
-            let data = try JSONEncoder().encode(snapshot)
+            let result = try body(&records)
+            let data = try JSONEncoder().encode(records)
+            if primaryIsValid {
+                try preserveCurrentPrimaryAsBackupLocked()
+            }
             try writer(data, fileURL)
+            primaryIsValid = true
             lock.unlock()
             DispatchQueue.main.async {
                 NotificationCenter.default.post(name: .importedModelsDidChange, object: nil)
             }
             return result
         } catch {
-            records = (try? Data(contentsOf: fileURL)).flatMap { try? JSONDecoder().decode([ImportedModelRecord].self, from: $0) } ?? []
+            records = previous
             lock.unlock()
             throw error
         }
     }
+
+    private func recoverIfPossibleLocked() {
+        guard !available else { return }
+        let loaded = Self.load(fileURL: fileURL, backupURL: backupURL, reader: reader)
+        guard loaded.available else { return }
+        records = loaded.records
+        available = true
+        primaryIsValid = loaded.primaryIsValid
+    }
+
+    private func preserveCurrentPrimaryAsBackupLocked() throws {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return }
+        let current = try reader(fileURL)
+        _ = try JSONDecoder().decode([ImportedModelRecord].self, from: current)
+        try current.write(to: backupURL, options: [.atomic, .completeFileProtection])
+    }
+
+    private static func load(
+        fileURL: URL,
+        backupURL: URL,
+        reader: Reader
+    ) -> (records: [ImportedModelRecord], available: Bool, primaryIsValid: Bool) {
+        let primaryExists = FileManager.default.fileExists(atPath: fileURL.path)
+        let backupExists = FileManager.default.fileExists(atPath: backupURL.path)
+        if primaryExists,
+           let data = try? reader(fileURL),
+           let decoded = try? JSONDecoder().decode([ImportedModelRecord].self, from: data) {
+            return (decoded, true, true)
+        }
+        if backupExists,
+           let data = try? reader(backupURL),
+           let decoded = try? JSONDecoder().decode([ImportedModelRecord].self, from: data) {
+            // A later successful mutation repairs the primary without first
+            // replacing this known-good backup with missing or corrupt bytes.
+            return (decoded, true, false)
+        }
+        if !primaryExists, !backupExists {
+            return ([], true, true)
+        }
+        return ([], false, false)
+    }
 }
 
 /// Durable update candidates remain separate from installed records until every
-/// selected artifact verifies. This lets transfer recovery resume staged updates
-/// without mutating the installed model identity.
+/// selected artifact verifies. This store is also the promotion journal.
 final class ImportedModelUpdateStore: @unchecked Sendable {
     static let shared = ImportedModelUpdateStore()
 
     private let lock = NSLock()
     private let fileURL: URL
+    private let backupURL: URL
+    private let reader: ImportedModelStore.Reader
+    private let writer: ImportedModelStore.Writer
     private var records: [ImportedModelRecord]
+    private var available: Bool
+    private var primaryIsValid: Bool
 
-    init(directory: URL? = nil) {
+    init(
+        directory: URL? = nil,
+        reader: @escaping ImportedModelStore.Reader = { try Data(contentsOf: $0) },
+        writer: @escaping ImportedModelStore.Writer = {
+            try $0.write(to: $1, options: [.atomic, .completeFileProtection])
+        }
+    ) {
         let root = directory ?? FileManager.default.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask
         )[0].appendingPathComponent("ZiroEdge/Models/Imported", isDirectory: true)
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         fileURL = root.appendingPathComponent("pending-updates.json")
-        let decoded = (try? Data(contentsOf: fileURL)).flatMap {
-            try? JSONDecoder().decode([ImportedModelRecord].self, from: $0)
-        } ?? []
-        records = decoded.map { legacy in
-            guard legacy.updateTargetModelID == nil else { return legacy }
-            var migrated = legacy
-            migrated.updateTargetModelID = legacy.id
-            let projectorSuffix = legacy.provenance.projectorSHA256.map { String($0.prefix(4)) } ?? "text"
-            migrated.id = "hf-update-\(legacy.provenance.baseSHA256.prefix(20))-\(projectorSuffix)"
-            return migrated
+        backupURL = root.appendingPathComponent("pending-updates.backup.json")
+        self.reader = reader
+        self.writer = writer
+        let loaded = Self.load(fileURL: fileURL, backupURL: backupURL, reader: reader)
+        records = loaded.records.map(Self.migrateLegacyRecord)
+        available = loaded.available
+        primaryIsValid = loaded.primaryIsValid
+    }
+
+    var isAvailable: Bool {
+        lock.withLock {
+            recoverIfPossibleLocked()
+            return available
         }
     }
 
     var allRecords: [ImportedModelRecord] {
-        lock.withLock { records }
+        lock.withLock {
+            recoverIfPossibleLocked()
+            return records
+        }
     }
 
     var models: [AIModel] { allRecords.map(\.model) }
+
+    func record(targetModelID: String) -> ImportedModelRecord? {
+        lock.withLock {
+            recoverIfPossibleLocked()
+            return records.first { ($0.updateTargetModelID ?? $0.id) == targetModelID }
+        }
+    }
 
     func upsert(_ record: ImportedModelRecord) throws {
         try mutate { records in
@@ -229,19 +364,76 @@ final class ImportedModelUpdateStore: @unchecked Sendable {
         }
     }
 
-    private func mutate(_ body: (inout [ImportedModelRecord]) -> Void) throws {
+    private func mutate(_ body: (inout [ImportedModelRecord]) throws -> Void) throws {
         lock.lock()
+        recoverIfPossibleLocked()
+        guard available else {
+            lock.unlock()
+            throw ImportedModelStoreError.registryUnavailable
+        }
         let previous = records
-        body(&records)
         do {
+            try body(&records)
             let data = try JSONEncoder().encode(records)
-            try data.write(to: fileURL, options: [.atomic, .completeFileProtection])
+            if primaryIsValid {
+                try preserveCurrentPrimaryAsBackupLocked()
+            }
+            try writer(data, fileURL)
+            primaryIsValid = true
             lock.unlock()
         } catch {
             records = previous
             lock.unlock()
             throw error
         }
+    }
+
+    private func recoverIfPossibleLocked() {
+        guard !available else { return }
+        let loaded = Self.load(fileURL: fileURL, backupURL: backupURL, reader: reader)
+        guard loaded.available else { return }
+        records = loaded.records.map(Self.migrateLegacyRecord)
+        available = true
+        primaryIsValid = loaded.primaryIsValid
+    }
+
+    private func preserveCurrentPrimaryAsBackupLocked() throws {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return }
+        let current = try reader(fileURL)
+        _ = try JSONDecoder().decode([ImportedModelRecord].self, from: current)
+        try current.write(to: backupURL, options: [.atomic, .completeFileProtection])
+    }
+
+    private static func load(
+        fileURL: URL,
+        backupURL: URL,
+        reader: ImportedModelStore.Reader
+    ) -> (records: [ImportedModelRecord], available: Bool, primaryIsValid: Bool) {
+        let primaryExists = FileManager.default.fileExists(atPath: fileURL.path)
+        let backupExists = FileManager.default.fileExists(atPath: backupURL.path)
+        if primaryExists,
+           let data = try? reader(fileURL),
+           let decoded = try? JSONDecoder().decode([ImportedModelRecord].self, from: data) {
+            return (decoded, true, true)
+        }
+        if backupExists,
+           let data = try? reader(backupURL),
+           let decoded = try? JSONDecoder().decode([ImportedModelRecord].self, from: data) {
+            return (decoded, true, false)
+        }
+        if !primaryExists, !backupExists {
+            return ([], true, true)
+        }
+        return ([], false, false)
+    }
+
+    private static func migrateLegacyRecord(_ legacy: ImportedModelRecord) -> ImportedModelRecord {
+        guard legacy.updateTargetModelID == nil else { return legacy }
+        var migrated = legacy
+        migrated.updateTargetModelID = legacy.id
+        let projectorSuffix = legacy.provenance.projectorSHA256.map { String($0.prefix(4)) } ?? "text"
+        migrated.id = "hf-update-\(legacy.provenance.baseSHA256.prefix(20))-\(projectorSuffix)"
+        return migrated
     }
 }
 
@@ -305,6 +497,7 @@ enum HFInspectionError: LocalizedError, Equatable {
     case unsupportedArchitecture(String)
     case missingDigest(String)
     case malformedMetadata(String)
+    case licenseTermsUnavailable
     case unsupportedShardedArtifact(String)
     case projectorMissing
     case projectorAmbiguous
@@ -320,6 +513,7 @@ enum HFInspectionError: LocalizedError, Equatable {
         case .unsupportedArchitecture(let value): "The GGUF architecture ‘\(value)’ is not supported by this ZiroEdge runtime."
         case .missingDigest(let file): "\(file) has no trustworthy SHA-256 digest and cannot be imported."
         case .malformedMetadata(let file): "\(file) has malformed size or integrity metadata."
+        case .licenseTermsUnavailable: "This repository does not provide identifiable, reviewable license terms and cannot be imported."
         case .unsupportedShardedArtifact(let file): "\(file) is part of a split GGUF. Split or sharded GGUF models are not supported."
         case .projectorMissing: "No compatible vision projector was found at this revision."
         case .projectorAmbiguous: "More than one projector could match, so ZiroEdge will not guess."
@@ -388,8 +582,7 @@ struct HFRepositoryInspector: Sendable {
             throw HFInspectionError.malformedMetadata("repository revision")
         }
         let card = object["cardData"] as? [String: Any]
-        let licenseName = (card?["license"] as? String) ?? "Unknown"
-        let licenseURL = URL(string: "https://huggingface.co/\(repositoryID)/blob/\(revision)/LICENSE")!
+        let declaredLicense = card?["license"] as? String
         let topGGUF = object["gguf"] as? [String: Any]
         let reviewedArchitecture = topGGUF?["architecture"] as? String
         var artifacts: [HFArtifact] = []
@@ -440,11 +633,19 @@ struct HFRepositoryInspector: Sendable {
             ))
         }
         guard artifacts.contains(where: { $0.role == .base }) else { throw HFInspectionError.noCompatibleArtifact }
+        guard let license = Self.reviewableLicense(
+            declaredName: declaredLicense,
+            siblings: siblings,
+            repositoryID: repositoryID,
+            revision: revision
+        ) else {
+            throw HFInspectionError.licenseTermsUnavailable
+        }
         return HFRepositoryReview(
             repositoryID: repositoryID,
             revision: revision,
-            licenseName: licenseName,
-            licenseURL: licenseURL,
+            licenseName: license.name,
+            licenseURL: license.url,
             artifacts: artifacts.sorted { $0.filename.localizedStandardCompare($1.filename) == .orderedAscending }
         )
     }
@@ -455,6 +656,62 @@ struct HFRepositoryInspector: Sendable {
         return (data, http)
     }
 
+
+    private static func reviewableLicense(
+        declaredName: String?,
+        siblings: [[String: Any]],
+        repositoryID: String,
+        revision: String
+    ) -> (name: String, url: URL)? {
+        let normalizedName = declaredName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let licenseNames: Set<String> = [
+            "license", "license.md", "license.txt",
+            "copying", "copying.md", "copying.txt"
+        ]
+        if let path = siblings.compactMap({ ($0["rfilename"] ?? $0["path"]) as? String }).first(where: {
+            licenseNames.contains(URL(fileURLWithPath: $0).lastPathComponent.lowercased())
+        }) {
+            let displayName = normalizedName.flatMap { name in
+                name.isEmpty || ["unknown", "other"].contains(name.lowercased()) ? nil : name
+            } ?? "Repository license"
+            return (
+                displayName,
+                ImportedModelFactory.resolveURL(
+                    repo: repositoryID,
+                    revision: revision,
+                    filename: path
+                )
+            )
+        }
+
+        guard let normalizedName,
+              !normalizedName.isEmpty,
+              !["unknown", "other"].contains(normalizedName.lowercased()) else {
+            return nil
+        }
+        let spdxIDs: [String: String] = [
+            "apache-2.0": "Apache-2.0",
+            "mit": "MIT",
+            "bsd-2-clause": "BSD-2-Clause",
+            "bsd-3-clause": "BSD-3-Clause",
+            "isc": "ISC",
+            "mpl-2.0": "MPL-2.0",
+            "gpl-2.0": "GPL-2.0-only",
+            "gpl-3.0": "GPL-3.0-only",
+            "lgpl-2.1": "LGPL-2.1-only",
+            "lgpl-3.0": "LGPL-3.0-only",
+            "agpl-3.0": "AGPL-3.0-only",
+            "cc-by-4.0": "CC-BY-4.0",
+            "cc-by-sa-4.0": "CC-BY-SA-4.0",
+            "cc0-1.0": "CC0-1.0",
+            "unlicense": "Unlicense"
+        ]
+        guard let spdxID = spdxIDs[normalizedName.lowercased()],
+              let url = URL(string: "https://spdx.org/licenses/\(spdxID).html") else {
+            return nil
+        }
+        return (normalizedName, url)
+    }
 
     private static func isSplitGGUF(_ filename: String) -> Bool {
         let name = filename.lowercased()

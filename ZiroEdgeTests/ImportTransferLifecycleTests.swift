@@ -2,8 +2,8 @@ import XCTest
 @testable import ZiroEdge
 
 /// Validates the full download transfer lifecycle for imported models:
-/// pause and cancel preserve resumable state, explicit discard removes
-/// partial state, and progress is accurately reported.
+/// pause preserves resumable state, cancellation removes disposable partial
+/// state, and progress is accurately reported.
 final class ImportTransferLifecycleTests: XCTestCase {
 
     // MARK: - Pause Preserves Durable State
@@ -49,10 +49,10 @@ final class ImportTransferLifecycleTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: task.resumeDataURL.path))
     }
 
-    // MARK: - Cancel Preserves; Discard Removes Partial State
+    // MARK: - Cancel Removes Partial State
 
     @MainActor
-    func testCancelPreservesStagingFileUntilExplicitDiscard() throws {
+    func testCancelRemovesStagingFile() throws {
         let model = makeImportedModel(size: 1_000_000)
         let task = DownloadTask(model: model, artifact: .base)
         try Data(repeating: 0xCC, count: 100).write(to: task.stagingURL)
@@ -60,28 +60,20 @@ final class ImportTransferLifecycleTests: XCTestCase {
         // Manually trigger cancel cleanup.
         let manager = DownloadManager(availableDiskSpaceProvider: { .max })
         manager.cancelDownload(for: model)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: task.stagingURL.path),
-                      "Cancel should preserve resumable staging")
-
-        manager.discardPartialDownload(for: model)
         XCTAssertFalse(FileManager.default.fileExists(atPath: task.stagingURL.path),
-                       "Explicit discard should remove staging")
+                       "User-visible cancel must remove disposable staging")
     }
 
     @MainActor
-    func testCancelPreservesResumeDataUntilExplicitDiscard() throws {
+    func testCancelRemovesResumeData() throws {
         let model = makeImportedModel(size: 1_000_000)
         let task = DownloadTask(model: model, artifact: .base)
         try Data(repeating: 0xDD, count: 100).write(to: task.resumeDataURL)
 
         let manager = DownloadManager(availableDiskSpaceProvider: { .max })
         manager.cancelDownload(for: model)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: task.resumeDataURL.path),
-                      "Cancel should preserve resume data")
-
-        manager.discardPartialDownload(for: model)
         XCTAssertFalse(FileManager.default.fileExists(atPath: task.resumeDataURL.path),
-                       "Explicit discard should remove resume data")
+                       "User-visible cancel must remove disposable resume data")
     }
 
     // MARK: - Progress Tracking
@@ -122,12 +114,97 @@ final class ImportTransferLifecycleTests: XCTestCase {
         case .success:
             XCTFail("Undersized file must not be promoted")
         case .failure(let error):
-            guard case .structureInvalid(let reason) = error else {
-                XCTFail("Expected bounded GGUF structure rejection, got \(error)")
+            guard case .sizeMismatch(expected: 1_000, actual: 100) = error else {
+                XCTFail("Expected size mismatch before structural parsing, got \(error)")
                 return
             }
-            XCTAssertFalse(reason.isEmpty)
         }
+    }
+
+    @MainActor
+    func testVerifierRejectsMagicAndVersionOnlyFixture() throws {
+        var malformed = Data([0x47, 0x47, 0x55, 0x46, 0x03, 0, 0, 0])
+        malformed.append(Data(repeating: 0xA5, count: 92))
+        let model = makeImportedModel(
+            size: Int64(malformed.count),
+            digest: TestModelFixtures.sha256(malformed)
+        )
+        let task = DownloadTask(model: model, artifact: .base)
+        try malformed.write(to: task.stagingURL)
+        defer { try? FileManager.default.removeItem(at: task.stagingURL) }
+
+        let result = DownloadManager(availableDiskSpaceProvider: { .max })
+            .verifyAndPromote(task: task)
+        guard case .failure(.structureInvalid) = result else {
+            return XCTFail("A matching size and digest cannot substitute for GGUF table validation")
+        }
+    }
+
+    @MainActor
+    func testSharedArtifactDiscardPreservesAnotherActiveTransfer() throws {
+        let digest = String(repeating: "a", count: 64)
+        let first = makeImportedModel(id: "hf-shared-first", size: 1_000_000, digest: digest)
+        let second = makeImportedModel(id: "hf-shared-second", size: 1_000_000, digest: digest)
+        let firstTask = DownloadTask(model: first, artifact: .base)
+        let secondTask = DownloadTask(model: second, artifact: .base)
+        XCTAssertEqual(firstTask.storageID, secondTask.storageID)
+        try Data(repeating: 0xAA, count: 128).write(to: firstTask.stagingURL)
+        defer { try? FileManager.default.removeItem(at: firstTask.stagingURL) }
+
+        let manager = DownloadManager(availableDiskSpaceProvider: { .max })
+        manager.activeTasks[firstTask.storageID] = firstTask
+        manager.discardPartialDownload(for: second)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: firstTask.stagingURL.path))
+        XCTAssertTrue(manager.activeTasks[firstTask.storageID] === firstTask)
+    }
+
+    @MainActor
+    func testArtifactScopedSnapshotRestoresThroughAnyMatchingModel() throws {
+        let digest = String(repeating: "b", count: 64)
+        let first = makeImportedModel(id: "hf-shared-owner", size: 1_000_000, digest: digest)
+        let second = makeImportedModel(id: "hf-shared-relaunch", size: 1_000_000, digest: digest)
+        let persistedTask = DownloadTask(model: first, artifact: .base)
+        try Data(repeating: 0xBB, count: 100).write(to: persistedTask.stagingURL)
+        persistedTask.progress = 0.25
+        let writer = DownloadManager(availableDiskSpaceProvider: { .max })
+        writer.persistDurableState(for: persistedTask)
+        defer {
+            try? FileManager.default.removeItem(at: persistedTask.stagingURL)
+            try? FileManager.default.removeItem(at: persistedTask.metadataURL)
+        }
+
+        let restored = DownloadManager(availableDiskSpaceProvider: { .max })
+        restored.restoreDurableTransfers(models: [second])
+
+        XCTAssertEqual(restored.activeTasks[persistedTask.storageID]?.model.id, second.id)
+    }
+
+    @MainActor
+    func testCancelledTaskCannotStartTransferAfterResolutionCallback() {
+        let model = makeImportedModel(size: 1_000_000)
+        let task = DownloadTask(model: model, artifact: .base)
+        let manager = DownloadManager(availableDiskSpaceProvider: { .max })
+        manager.activeTasks[task.storageID] = task
+        manager.cancelDownload(for: model)
+
+        manager.transfer(task: task, key: task.storageID, downloadURL: task.sourceURL)
+
+        XCTAssertNil(task.task)
+        XCTAssertNil(task.chunkTask)
+        XCTAssertNil(manager.activeTasks[task.storageID])
+    }
+
+    @MainActor
+    func testLargeImportedArtifactUsesBackgroundDownloadPath() {
+        let model = makeImportedModel(size: DownloadManager.chunkedDownloadThreshold + 1)
+        let task = DownloadTask(model: model, artifact: .base)
+        XCTAssertFalse(managerForTransferDecision().shouldUseChunkedTransfer(for: task))
+    }
+
+    @MainActor
+    private func managerForTransferDecision() -> DownloadManager {
+        DownloadManager(availableDiskSpaceProvider: { .max })
     }
 
     @MainActor
@@ -245,7 +322,11 @@ final class ImportTransferLifecycleTests: XCTestCase {
 
     // MARK: - Helpers
 
-    private func makeImportedModel(size: Int64 = 16, digest: String = String(repeating: "a", count: 64)) -> AIModel {
+    private func makeImportedModel(
+        id: String? = nil,
+        size: Int64 = 16,
+        digest: String = String(repeating: "a", count: 64)
+    ) -> AIModel {
         let artifact = HFArtifact(
             filename: "model-Q4_K_M.gguf",
             size: size,
@@ -262,6 +343,6 @@ final class ImportTransferLifecycleTests: XCTestCase {
             licenseURL: URL(string: "https://example.com/license")!,
             artifacts: [artifact]
         )
-        return ImportedModelFactory.makeRecord(review: review, base: artifact).model
+        return ImportedModelFactory.makeRecord(review: review, base: artifact, stableID: id).model
     }
 }

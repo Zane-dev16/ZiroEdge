@@ -66,6 +66,11 @@ final class ChatViewModel: ObservableObject {
     /// Whether a model switch is in progress.
     @Published var isSwitchingModel: Bool = false
 
+    /// First-use consent for an installed Hugging Face import is requested from
+    /// the picker instead of hiding the model until consent is granted elsewhere.
+    @Published var showingExperimentalConsent = false
+    @Published private(set) var pendingExperimentalModel: AIModel?
+
     // MARK: - Dependencies
 
     private let persistence: PersistenceController
@@ -73,6 +78,7 @@ final class ChatViewModel: ObservableObject {
     private let sessionActor: ChatSessionActor
     private let lifecycleManager: ModelLifecycleManager
     private let downloadStatusProvider: any ModelDownloadStatusProvider
+    private let modelProvider: () -> [AIModel]
     private let titleGenerator: TitleGenerator
     private let logger = Logger(subsystem: "com.zanish-labs.ziroedge", category: "chat-vm")
 
@@ -97,13 +103,15 @@ final class ChatViewModel: ObservableObject {
         sessionActor: ChatSessionActor,
         lifecycleManager: ModelLifecycleManager,
         downloadStatusProvider: any ModelDownloadStatusProvider,
-        titleGenerator: TitleGenerator? = nil
+        titleGenerator: TitleGenerator? = nil,
+        modelProvider: @escaping () -> [AIModel] = { ModelRegistry.libraryModels }
     ) {
         self.persistence = persistence
         self.inferenceService = inferenceService
         self.sessionActor = sessionActor
         self.lifecycleManager = lifecycleManager
         self.downloadStatusProvider = downloadStatusProvider
+        self.modelProvider = modelProvider
         self.titleGenerator = titleGenerator ?? TitleGenerator(inferenceService: inferenceService)
     }
 
@@ -113,7 +121,20 @@ final class ChatViewModel: ObservableObject {
 
     /// All models that are fully downloaded and available for use.
     var availableModels: [AIModel] {
-        ModelRegistry.selectableModels.compactMap { model in
+        modelProvider().compactMap { model in
+            switch model.runtimeEligibility {
+            case .validated:
+                break
+            case .experimental:
+                // Imported models must be discoverable in the picker before
+                // first-use consent. Existing curated experimental behavior is
+                // unchanged: those profiles remain hidden until enabled.
+                guard model.isImported || ExperimentalModelConsent.isGranted(for: model) else {
+                    return nil
+                }
+            case .unavailable:
+                return nil
+            }
             let status = downloadStatusProvider.status(for: model)
             guard status.isReady else { return nil }
             if model.allowsTextOnlyCapability && !status.isVisionReady {
@@ -148,7 +169,16 @@ final class ChatViewModel: ObservableObject {
     }
 
     /// Select a model and persist the choice. Loads it if not already loaded.
-    func selectModel(_ model: AIModel) async {
+    /// Returns false when selection is waiting for explicit first-use consent.
+    @discardableResult
+    func selectModel(_ model: AIModel) async -> Bool {
+        guard model.runtimeEligibility != .experimental
+                || ExperimentalModelConsent.isGranted(for: model) else {
+            pendingExperimentalModel = model
+            showingExperimentalConsent = true
+            return false
+        }
+
         let previousSelection = selectedModel
         selectedModel = model
 
@@ -162,10 +192,25 @@ final class ChatViewModel: ObservableObject {
             selectedModel = model
             UserDefaults.standard.set(model.id, forKey: DefaultsKeys.lastUsedModelID)
             UISelectionFeedbackGenerator().selectionChanged()
-        } else {
-            // Lifecycle manager may have restored the previous model after a failed switch.
-            selectedModel = lifecycleManager.activeModel ?? previousSelection
+            return true
         }
+
+        // Lifecycle manager may have restored the previous model after a failed switch.
+        selectedModel = lifecycleManager.activeModel ?? previousSelection
+        return false
+    }
+
+    func confirmExperimentalConsent() async {
+        guard let model = pendingExperimentalModel else { return }
+        ExperimentalModelConsent.setGranted(true, for: model)
+        pendingExperimentalModel = nil
+        showingExperimentalConsent = false
+        await selectModel(model)
+    }
+
+    func cancelExperimentalConsent() {
+        pendingExperimentalModel = nil
+        showingExperimentalConsent = false
     }
 
     func loadConversation(_ conversationID: UUID) async {
@@ -253,7 +298,13 @@ final class ChatViewModel: ObservableObject {
             if activeConversationID == nil { isLoadingConversation = false }
         }
 
-        await selectModel(model)
+        guard await selectModel(model) else {
+            if showingExperimentalConsent { return nil }
+            errorMessage = "\(model.displayName) could not be loaded. Repair it or choose another model, then retry."
+            showError = true
+            isStartupError = true
+            return nil
+        }
         guard lifecycleManager.activeModel?.id == model.id else {
             errorMessage = "\(model.displayName) could not be loaded. Repair it or choose another model, then retry."
             showError = true
@@ -328,7 +379,8 @@ extension ChatViewModel {
             errorMessage = "No active conversation."; showError = true; return nil
         }
         if lifecycleManager.activeModel?.id != selectedModel.id {
-            await selectModel(selectedModel)
+            let selected = await selectModel(selectedModel)
+            if !selected, showingExperimentalConsent { return nil }
         }
         guard lifecycleManager.activeModel?.id == selectedModel.id else {
             errorMessage = "\(selectedModel.displayName) could not be loaded. Choose another downloaded model."

@@ -120,29 +120,24 @@ final class ImportedModelRelaunchTests: XCTestCase {
 
     // MARK: - Store integrity
 
-    func testCorruptRegistryFileIsRecoveredOnNextWrite() throws {
+    func testCorruptRegistryFileBlocksMutationWithoutBackup() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let registryURL = directory.appendingPathComponent("registry.json")
+        let corrupt = Data("not json".utf8)
+        try corrupt.write(to: registryURL)
 
-        let registryDir = directory.appendingPathComponent("ZiroEdge/Models/Imported")
-        try FileManager.default.createDirectory(at: registryDir, withIntermediateDirectories: true)
-        try Data("not json".utf8).write(to: registryDir.appendingPathComponent("registry.json"))
-
-        // Creating a new store with a corrupt file should initialize empty.
         let store = ImportedModelStore(directory: directory)
-        XCTAssertEqual(store.allRecords.count, 0)
+        XCTAssertFalse(store.isAvailable)
 
-        // Adding a record should succeed and overwrite the corrupt file.
         let q4 = makeArtifact("model-Q4_K_M.gguf", digest: String(repeating: "1", count: 64))
         let review = makeReview(artifacts: [q4])
         let record = ImportedModelFactory.makeRecord(review: review, base: q4)
-        try store.upsert(record)
-        XCTAssertEqual(store.allRecords.count, 1)
-
-        // Re-open should see the correct record.
-        let store2 = ImportedModelStore(directory: directory)
-        XCTAssertEqual(store2.allRecords.count, 1)
-        XCTAssertEqual(store2.allRecords.first?.id, record.id)
+        XCTAssertThrowsError(try store.upsert(record)) { error in
+            XCTAssertEqual(error as? ImportedModelStoreError, .registryUnavailable)
+        }
+        XCTAssertEqual(try Data(contentsOf: registryURL), corrupt)
     }
 
     func testStoreUpdatePreservesOtherRecords() throws {

@@ -13,7 +13,7 @@ final class TransportValidationTests: XCTestCase {
 
     /// A clean 200 response with a valid GGUF body at the correct size must pass.
     func testCleanFullResponsePasses() {
-        let body = validGGUF(count: 64)
+        let body = validGGUF(count: 68)
         let bodyURL = writeTemp(body, name: "clean-full.gguf")
         defer { removeTemp(bodyURL) }
 
@@ -30,7 +30,7 @@ final class TransportValidationTests: XCTestCase {
 
     /// 200 response with a Content-Type of application/octet-stream must pass.
     func testOctetStreamContentTypePasses() {
-        let body = validGGUF(count: 32)
+        let body = validGGUF(count: 68)
         let bodyURL = writeTemp(body, name: "octet.gguf")
         defer { removeTemp(bodyURL) }
 
@@ -48,7 +48,7 @@ final class TransportValidationTests: XCTestCase {
 
     /// 200 response missing Content-Type header still passes when body is valid GGUF.
     func testMissingContentTypeHeaderPassesWhenBodyIsGGUF() {
-        let body = validGGUF(count: 16)
+        let body = validGGUF(count: 68)
         let bodyURL = writeTemp(body, name: "no-ct.gguf")
         defer { removeTemp(bodyURL) }
 
@@ -834,9 +834,12 @@ extension TransportValidationTests {
 
     /// Create a valid GGUF file body of the given total byte count.
     private func validGGUF(count: Int) -> Data {
-        var data = Data([0x47, 0x47, 0x55, 0x46, 0x03, 0x00, 0x00, 0x00])
-        data.append(contentsOf: repeatElement(0xA5, count: max(0, count - data.count)))
-        return data
+        guard count >= 68 else {
+            var truncated = Data([0x47, 0x47, 0x55, 0x46, 0x03, 0x00, 0x00, 0x00])
+            truncated.append(contentsOf: repeatElement(0xA5, count: max(0, count - truncated.count)))
+            return truncated
+        }
+        return TestModelFixtures.gguf(count: count)
     }
 
     /// Quick 200 response with application/octet-stream.

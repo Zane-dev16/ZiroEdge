@@ -89,8 +89,15 @@ enum ModelArtifactVerifier {
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
             return .contentRejected(reason: "the staged artifact does not exist")
         }
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
+              let actualBytes = attributes[.size] as? Int64 else {
+            return .contentRejected(reason: "the staged artifact size could not be read")
+        }
+        guard actualBytes == expectedBytes else {
+            return .sizeMismatch(expected: expectedBytes, actual: actualBytes)
+        }
         guard ModelManagerService.verifyGGUFHeader(fileURL: fileURL) else {
-            return .structureInvalid(reason: "missing GGUF magic or unsupported version")
+            return .structureInvalid(reason: "the GGUF metadata or tensor tables are invalid")
         }
         guard let inputStream = InputStream(url: fileURL) else {
             return .contentRejected(reason: "the staged artifact could not be opened")

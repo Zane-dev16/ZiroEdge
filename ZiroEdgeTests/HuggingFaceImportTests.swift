@@ -271,7 +271,7 @@ final class HuggingFaceImportTests: XCTestCase {
         case .success:
             XCTFail("Malformed GGUF must not be promoted")
         case .failure(let error):
-            XCTAssertEqual(error, .structureInvalid(reason: "missing GGUF magic or unsupported version"))
+            XCTAssertEqual(error, .structureInvalid(reason: "the GGUF metadata or tensor tables are invalid"))
         }
     }
 

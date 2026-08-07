@@ -387,6 +387,12 @@ enum ModelRegistry {
         allModels + importedModels
     }
 
+    /// Whether protected imported lifecycle registries can currently be read.
+    /// False must never be interpreted as an empty library.
+    static var importedRegistriesAvailable: Bool {
+        ImportedModelStore.shared.isAvailable && ImportedModelUpdateStore.shared.isAvailable
+    }
+
     /// Includes unpromoted update candidates solely for durable transfer recovery.
     static var transferModels: [AIModel] {
         libraryModels + ImportedModelUpdateStore.shared.models

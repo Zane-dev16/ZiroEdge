@@ -92,7 +92,7 @@ final class DurableTransferStateTests: XCTestCase {
 
     // MARK: - Cancel vs Pause distinction
 
-    func testCancelPreservesTransferStateWhileDiscardRemovesIt() throws {
+    func testCancelRemovesTransferState() throws {
         let bytes = gguf()
         let model = fixtureModel(bytes: bytes)
         let task = DownloadTask(model: model, artifact: .base)
@@ -114,13 +114,13 @@ final class DurableTransferStateTests: XCTestCase {
         manager.restoreDurableTransfers(models: [model])
         XCTAssertEqual(manager.status(for: model).baseState, .paused(progress: 0.33))
 
-        // Cancel stops activity but preserves resumable state.
+        // User-visible cancel removes disposable resumable state.
         manager.cancelDownload(for: model)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: task.metadataURL.path))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: task.resumeDataURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: task.metadataURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: task.resumeDataURL.path))
         XCTAssertEqual(manager.status(for: model).baseState, .notDownloaded)
 
-        // Explicit discard removes resumable state.
+        // Explicit discard remains idempotent.
         manager.discardPartialDownload(for: model)
         XCTAssertFalse(FileManager.default.fileExists(atPath: task.metadataURL.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: task.resumeDataURL.path))

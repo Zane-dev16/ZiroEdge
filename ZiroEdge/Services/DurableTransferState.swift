@@ -5,8 +5,10 @@ import Foundation
 
 struct DurableTransferSnapshot: Codable {
     let version: Int
-    let modelID: String
+    /// Version 1/2 compatibility only. Ownership is artifact-scoped in v3.
+    let modelID: String?
     let artifact: String
+    let expectedSHA256: String?
     let expectedBytes: Int64
     let progress: Double
     let resumeAvailable: Bool
@@ -16,12 +18,13 @@ struct DurableTransferSnapshot: Codable {
     let activeBackgroundTask: Bool
     let failed: Bool
 
-    static let currentVersion = 2
+    static let currentVersion = 3
 
     init(
         version: Int,
-        modelID: String,
+        modelID: String? = nil,
         artifact: String,
+        expectedSHA256: String? = nil,
         expectedBytes: Int64,
         progress: Double,
         resumeAvailable: Bool,
@@ -31,6 +34,7 @@ struct DurableTransferSnapshot: Codable {
         self.version = version
         self.modelID = modelID
         self.artifact = artifact
+        self.expectedSHA256 = expectedSHA256
         self.expectedBytes = expectedBytes
         self.progress = progress
         self.resumeAvailable = resumeAvailable
@@ -41,8 +45,9 @@ struct DurableTransferSnapshot: Codable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         version = try container.decode(Int.self, forKey: .version)
-        modelID = try container.decode(String.self, forKey: .modelID)
+        modelID = try container.decodeIfPresent(String.self, forKey: .modelID)
         artifact = try container.decode(String.self, forKey: .artifact)
+        expectedSHA256 = try container.decodeIfPresent(String.self, forKey: .expectedSHA256)
         expectedBytes = try container.decode(Int64.self, forKey: .expectedBytes)
         progress = try container.decode(Double.self, forKey: .progress)
         resumeAvailable = try container.decode(Bool.self, forKey: .resumeAvailable)
@@ -82,8 +87,8 @@ extension DownloadManager {
         let hasStaging = fileManager.fileExists(atPath: task.stagingURL.path)
         let snapshot = DurableTransferSnapshot(
             version: DurableTransferSnapshot.currentVersion,
-            modelID: task.model.id,
             artifact: task.artifact == .base ? "base" : "mmproj",
+            expectedSHA256: task.expectedSHA256,
             expectedBytes: task.expectedBytes,
             progress: min(max(task.progress, 0), 1),
             resumeAvailable: hasResumeData || hasStaging,
@@ -106,6 +111,11 @@ extension DownloadManager {
     }
 
     func removeDurableState(for task: DownloadTask, discardStaging: Bool) {
+        if discardStaging,
+           (activeTasks[task.storageID].map({ $0.model.id != task.model.id }) == true
+            || hasOtherTransferReference(for: task)) {
+            return
+        }
         try? fileManager.removeItem(at: task.metadataURL)
         try? fileManager.removeItem(at: task.resumeDataURL)
         if discardStaging { try? fileManager.removeItem(at: task.stagingURL) }
@@ -134,10 +144,12 @@ extension DownloadManager {
             let artifacts: [ArtifactType] = model.requiresMMProj ? [.base, .mmproj] : [.base]
             for artifact in artifacts {
                 let task = DownloadTask(model: model, artifact: artifact)
-                guard restoredStorageIDs.insert(task.storageID).inserted,
+                guard !restoredStorageIDs.contains(task.storageID),
                       activeTasks[task.storageID] == nil,
                       fileManager.fileExists(atPath: task.metadataURL.path) else { continue }
-                restoreSingleDurableTransfer(task)
+                if restoreSingleDurableTransfer(task) {
+                    restoredStorageIDs.insert(task.storageID)
+                }
             }
         }
         DownloadDiagnosticRecorder.shared.record(

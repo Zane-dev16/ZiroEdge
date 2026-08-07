@@ -6,6 +6,7 @@
 // Observes memory pressure notifications for automatic eviction.
 
 import Foundation
+import SwiftLlama
 import UIKit
 import os
 
@@ -480,10 +481,10 @@ enum ModelManagerService {
         }
         guard isValidSHA256(expectedSHA),
               FileManager.default.fileExists(atPath: path.path) else { return false }
-        guard verifyGGUFHeader(fileURL: path),
-              let attrs = try? FileManager.default.attributesOfItem(atPath: path.path),
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path.path),
               let fileSize = attrs[.size] as? Int64,
               fileSize == expectedBytes,
+              verifyGGUFHeader(fileURL: path),
               verifySHA256(fileURL: path, expected: expectedSHA) else {
             quarantineInvalidArtifact(at: path, storageID: model.id)
             markRepairNeeded(for: model)
@@ -557,14 +558,14 @@ enum ModelManagerService {
     }
 
     static func isBaseArtifactShared(_ model: AIModel) -> Bool {
-        ModelRegistry.libraryModels.contains {
+        ModelRegistry.transferModels.contains {
             $0.id != model.id && $0.baseArtifactStorageID == model.baseArtifactStorageID
         }
     }
 
     static func isProjectorArtifactShared(_ model: AIModel) -> Bool {
         guard let digest = model.mmprojSHA256 else { return false }
-        return ModelRegistry.libraryModels.contains {
+        return ModelRegistry.transferModels.contains {
             $0.id != model.id && $0.mmprojSHA256 == digest
         }
     }
@@ -657,10 +658,10 @@ extension ModelManagerService {
         let basePath = baseModelPath(for: model)
         if !FileManager.default.fileExists(atPath: basePath.path) {
             issues.append(.missing(artifact: .base))
-        } else if !verifyGGUFHeader(fileURL: basePath) {
-            issues.append(.missingGGUFHeader)
         } else if fileSize(at: basePath) != model.baseFileSizeBytes {
             issues.append(.sizeMismatch)
+        } else if !verifyGGUFHeader(fileURL: basePath) {
+            issues.append(.missingGGUFHeader)
         } else {
             guard let actualSHA = computeSHA256(fileURL: basePath) else {
                 issues.append(.sha256Mismatch)
@@ -676,10 +677,10 @@ extension ModelManagerService {
             let mmprojPath = mmprojModelPath(for: model)
             if !FileManager.default.fileExists(atPath: mmprojPath.path) {
                 issues.append(.missing(artifact: .mmproj))
-            } else if !verifyGGUFHeader(fileURL: mmprojPath) {
-                issues.append(.missingGGUFHeader)
             } else if fileSize(at: mmprojPath) != model.mmprojFileSizeBytes {
                 issues.append(.sizeMismatch)
+            } else if !verifyGGUFHeader(fileURL: mmprojPath) {
+                issues.append(.missingGGUFHeader)
             } else if let expectedSHA = model.mmprojSHA256 {
                 guard let actualSHA = computeSHA256(fileURL: mmprojPath) else {
                     issues.append(.sha256Mismatch)
@@ -835,32 +836,13 @@ extension ModelManagerService {
         return issues
     }
 
-    /// Verify the GGUF magic number at the start of a file.
-    /// GGUF format: 4-byte magic "GGUF" (0x47 0x47 0x55 0x46)
-    /// followed by a 4-byte little-endian version (2 or 3).
+    /// Parse the complete GGUF metadata/tensor descriptor tables with
+    /// llama.cpp and prove every declared tensor fits inside the file. The
+    /// historical name is retained because this is a widely used validation
+    /// seam, but the check is intentionally much stronger than an 8-byte
+    /// magic/version probe.
     static func verifyGGUFHeader(fileURL: URL) -> Bool {
-        guard let handle = try? FileHandle(forReadingFrom: fileURL) else {
-            return false
-        }
-        defer { try? handle.close() }
-
-        guard let header = try? handle.read(upToCount: 8),
-              header.count >= 8 else {
-            return false
-        }
-
-        let magic = header[0..<4]
-        let expectedMagic: [UInt8] = [0x47, 0x47, 0x55, 0x46]  // "GGUF"
-        guard Array(magic) == expectedMagic else {
-            return false
-        }
-
-        // Version is little-endian uint32 at bytes 4-7.
-        let version = UInt32(header[4])
-            | (UInt32(header[5]) << 8)
-            | (UInt32(header[6]) << 16)
-            | (UInt32(header[7]) << 24)
-        return version == 2 || version == 3
+        GGUFFileValidator.isStructurallyValid(atPath: fileURL.path)
     }
 }
 

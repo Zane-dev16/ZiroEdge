@@ -38,7 +38,8 @@ final class ModelPickerTests: XCTestCase {
     }
 
     private func makeViewModel(
-        provider: MockDownloadStatusProvider = MockDownloadStatusProvider()
+        provider: MockDownloadStatusProvider = MockDownloadStatusProvider(),
+        models: [AIModel] = ModelRegistry.libraryModels
     ) -> ChatViewModel {
         let persistence = PersistenceController(inMemory: true)
         let inferenceService = InferenceService()
@@ -56,7 +57,8 @@ final class ModelPickerTests: XCTestCase {
             inferenceService: inferenceService,
             sessionActor: sessionActor,
             lifecycleManager: lifecycleManager,
-            downloadStatusProvider: provider
+            downloadStatusProvider: provider,
+            modelProvider: { models }
         )
     }
 
@@ -171,6 +173,25 @@ final class ModelPickerTests: XCTestCase {
         XCTAssertTrue(viewModel.availableModels.isEmpty)
     }
 
+    func testInstalledImportAppearsBeforeConsentAndSelectionRequestsConsent() async {
+        let model = makeImportedModel()
+        ExperimentalModelConsent.setGranted(false, for: model)
+        defer { ExperimentalModelConsent.setGranted(false, for: model) }
+        let provider = MockDownloadStatusProvider()
+        provider.readyModelIDs = [model.id]
+        let viewModel = makeViewModel(provider: provider, models: [model])
+
+        XCTAssertEqual(viewModel.availableModels, [model])
+
+        let selected = await viewModel.selectModel(model)
+
+        XCTAssertFalse(selected)
+        XCTAssertTrue(viewModel.showingExperimentalConsent)
+        XCTAssertEqual(viewModel.pendingExperimentalModel?.id, model.id)
+        XCTAssertNil(viewModel.selectedModel)
+        XCTAssertFalse(ExperimentalModelConsent.isGranted(for: model))
+    }
+
     // MARK: - Model Selection Persistence Tests
 
     func testSelectModelPersistsLastUsed() throws {
@@ -206,6 +227,32 @@ final class ModelPickerTests: XCTestCase {
     func testIsSwitchingModelStartsFalse() throws {
         let viewModel = makeViewModel()
         XCTAssertFalse(viewModel.isSwitchingModel)
+    }
+
+    private func makeImportedModel() -> AIModel {
+        let bytes = TestModelFixtures.gguf()
+        let artifact = HFArtifact(
+            filename: "model-Q4_K_M.gguf",
+            size: Int64(bytes.count),
+            sha256: TestModelFixtures.sha256(bytes),
+            quantization: "Q4_K_M",
+            architecture: "llama",
+            role: .base,
+            metadata: HFGGUFMetadata(
+                architecture: "llama",
+                contextLength: 2048,
+                chatTemplate: nil,
+                modelName: "Picker Fixture"
+            )
+        )
+        let review = HFRepositoryReview(
+            repositoryID: "test/chat-picker",
+            revision: String(repeating: "a", count: 40),
+            licenseName: "MIT",
+            licenseURL: URL(string: "https://spdx.org/licenses/MIT.html")!,
+            artifacts: [artifact]
+        )
+        return ImportedModelFactory.makeRecord(review: review, base: artifact).model
     }
 
     // MARK: - Cleanup

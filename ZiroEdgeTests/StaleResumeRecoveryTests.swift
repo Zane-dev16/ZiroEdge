@@ -243,9 +243,7 @@ final class StaleResumeRecoveryTests: XCTestCase {
     // MARK: - Helpers
 
     private func validGGUF(length: Int) -> Data {
-        var bytes = Data([0x47, 0x47, 0x55, 0x46, 0x03, 0, 0, 0])
-        bytes.append(Data(repeating: 0xA5, count: max(0, length - bytes.count)))
-        return bytes
+        TestModelFixtures.gguf(count: length)
     }
 
     private func fixtureModel(bytes: Data) -> AIModel {

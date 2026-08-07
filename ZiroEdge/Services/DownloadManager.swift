@@ -1,12 +1,14 @@
 import Foundation
 import Network
 import CryptoKit
+import UIKit
 import os
 final class DownloadTask {
     let model: AIModel
     let artifact: ArtifactType
     var task: URLSessionDownloadTask?
     var chunkTask: URLSessionDataTask?
+    var resolutionTask: URLSessionDataTask?
     var resumeData: Data?
     var progress: Double = 0.0
     var state: DownloadState = .notDownloaded
@@ -132,6 +134,7 @@ final class DownloadManager: NSObject, ObservableObject {
     private var availableDiskSpaceProviderForTesting: (@MainActor () -> Int64)?
     var lastProgressTime: [String: Date] = [:]
     var stuckTimer: Timer?
+    var protectedDataObserver: NSObjectProtocol?
     static let chunkSize: Int64 = 100 * 1_024 * 1_024
     static let chunkedDownloadThreshold: Int64 = 2_147_483_648
     static let maximumChunkRetries = 3
@@ -153,6 +156,15 @@ final class DownloadManager: NSObject, ObservableObject {
             reclaimOrphanedStorage()
         }
         reconcileBackgroundTasks()
+        protectedDataObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.protectedDataDidBecomeAvailableNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.recoverProtectedImportedState()
+            }
+        }
     }
     deinit {
         MainActor.assumeIsolated {
@@ -161,6 +173,9 @@ final class DownloadManager: NSObject, ObservableObject {
             }
             chunkSessionStorage?.invalidateAndCancel()
             stuckTimer?.invalidate()
+            if let protectedDataObserver {
+                NotificationCenter.default.removeObserver(protectedDataObserver)
+            }
         }
     }
     func status(for model: AIModel) -> ModelDownloadStatus {
@@ -171,6 +186,14 @@ final class DownloadManager: NSObject, ObservableObject {
         for model in ModelRegistry.libraryModels {
             downloadStatuses[model.id] = authoritativeDiskStatus(for: model)
         }
+    }
+
+    func recoverProtectedImportedState() {
+        guard ModelRegistry.importedRegistriesAvailable else { return }
+        updateStatusesFromDisk()
+        restoreDurableTransfers()
+        reconcileBackgroundTasks()
+        _ = reclaimOrphanedStorage()
     }
 }
 extension DownloadManager {
@@ -416,15 +439,11 @@ extension DownloadManager {
         updateStatus(model: model)
     }
     func cancelDownload(for model: AIModel) {
-        cancelArtifactDownload(model: model, artifact: .base, discardStaging: false)
-        if model.requiresMMProj {
-            cancelArtifactDownload(model: model, artifact: .mmproj, discardStaging: false)
-        }
-        updateStatus(model: model)
+        discardPartialDownload(for: model)
     }
 
     /// Discard partial download state including staging and resume data.
-    /// Distinct from cancel — cancel preserves resume data; discard removes everything except installed artifacts.
+    /// This is idempotent and is also the user-visible cancellation behavior.
     func discardPartialDownload(for model: AIModel) {
         for artifact: ArtifactType in [.base, .mmproj] {
             cancelArtifactDownload(model: model, artifact: artifact, discardStaging: true)
@@ -551,7 +570,12 @@ extension DownloadManager {
                     // No durable entry yet — try to rebuild from durable metadata
                     // or the model registry with staging evidence.
                     guard let resolved = DownloadManager.resolveStorageID(key) else {
-                        systemTask.cancel()
+                        // During a locked/background wake, protected imported
+                        // registries are unavailable rather than empty. Leave
+                        // system-owned tasks running until protected data returns.
+                        if ModelRegistry.importedRegistriesAvailable {
+                            systemTask.cancel()
+                        }
                         continue
                     }
 
@@ -617,18 +641,29 @@ extension DownloadManager {
     /// Restore durable state for a single transfer. Used by the bulk restore
     /// path and by background-task reconciliation when a system task needs a
     /// matching durable entry.
-    func restoreSingleDurableTransfer(_ task: DownloadTask) {
+    @discardableResult
+    func restoreSingleDurableTransfer(_ task: DownloadTask) -> Bool {
         guard fileManager.fileExists(atPath: task.metadataURL.path),
-              let data = try? Data(contentsOf: task.metadataURL),
-              let snapshot = try? JSONDecoder().decode(DurableTransferSnapshot.self, from: data),
-              (1...DurableTransferSnapshot.currentVersion).contains(snapshot.version),
-              snapshot.modelID == task.model.id,
+              let data = try? Data(contentsOf: task.metadataURL) else {
+            return false
+        }
+        guard let snapshot = try? JSONDecoder().decode(DurableTransferSnapshot.self, from: data) else {
+            // Corrupt artifact-scoped metadata cannot safely resume for any owner.
+            // Remove its opaque bytes so every referring model can start cleanly.
+            try? fileManager.removeItem(at: task.metadataURL)
+            try? fileManager.removeItem(at: task.resumeDataURL)
+            try? fileManager.removeItem(at: task.stagingURL)
+            return false
+        }
+        guard (1...DurableTransferSnapshot.currentVersion).contains(snapshot.version),
               snapshot.artifact == (task.artifact == .base ? "base" : "mmproj"),
               snapshot.expectedBytes == task.expectedBytes,
+              snapshot.expectedSHA256.map({ $0 == task.expectedSHA256 }) ?? true,
               snapshot.progress >= 0,
               snapshot.progress <= 1 else {
-            removeDurableState(for: task, discardStaging: true)
-            return
+            // Another model can reference the same digest-addressed storage ID.
+            // A mismatch is not proof that the artifact-scoped snapshot is stale.
+            return false
         }
 
         let hasResume = fileManager.fileExists(atPath: task.resumeDataURL.path)
@@ -636,13 +671,13 @@ extension DownloadManager {
         let hasResumableBytes = snapshot.resumeAvailable && (hasResume || hasStaging)
         guard hasResumableBytes || snapshot.activeBackgroundTask else {
             removeDurableState(for: task, discardStaging: false)
-            return
+            return false
         }
 
         task.progress = snapshot.progress
         task.awaitingBackgroundTaskReconciliation = snapshot.activeBackgroundTask && !hasResumableBytes
         task.isPaused = !snapshot.failed && !task.awaitingBackgroundTaskReconciliation
-        task.isChunked = hasStaging && task.expectedBytes > 2_147_483_648
+        task.isChunked = hasStaging && shouldUseChunkedTransfer(for: task)
         if task.isChunked {
             task.totalChunks = (task.expectedBytes + 100 * 1_024 * 1_024 - 1) / (100 * 1_024 * 1_024)
         }
@@ -653,6 +688,7 @@ extension DownloadManager {
                 : .paused(progress: snapshot.progress)
         activeTasks[task.storageID] = task
         updateStatus(model: task.model)
+        return true
     }
     func startArtifactDownload(
         model: AIModel,
@@ -680,20 +716,24 @@ extension DownloadManager {
             transfer(task: task, key: key, downloadURL: task.sourceURL)
             return
         }
-        resolveCDNURL(
+        task.resolutionTask = resolveCDNURL(
             task.sourceURL,
             modelID: model.id,
             artifact: artifact.label
-        ) { [weak self] resolvedURL in
-            guard let self else { return }
+        ) { [weak self, weak task] resolvedURL in
+            guard let self, let task,
+                  self.activeTasks[key] === task,
+                  !task.isCancelled else { return }
+            task.resolutionTask = nil
             self.transfer(task: task, key: key, downloadURL: resolvedURL ?? task.sourceURL)
         }
     }
 
     /// Starts the actual byte transfer after CDN resolution (if any).
     func transfer(task: DownloadTask, key: String, downloadURL: URL) {
+        guard activeTasks[key] === task, !task.isCancelled else { return }
         task.downloadURL = downloadURL
-        if task.expectedBytes > Self.chunkedDownloadThreshold {
+        if shouldUseChunkedTransfer(for: task) {
             task.isChunked = true
             task.totalChunks = (task.expectedBytes + Self.chunkSize - 1) / Self.chunkSize
             self.chunkedDownload(task: task, key: key)
@@ -711,16 +751,21 @@ extension DownloadManager {
         persistDurableState(for: task)
         task.task?.resume()
     }
+    func shouldUseChunkedTransfer(for task: DownloadTask) -> Bool {
+        task.expectedBytes > Self.chunkedDownloadThreshold && !task.model.isImported
+    }
+
+    @discardableResult
     func resolveCDNURL(
         _ url: URL,
         modelID: String,
         artifact: String,
         completion: @escaping (URL?) -> Void
-    ) {
+    ) -> URLSessionDataTask {
         var request = URLRequest(url: url)
         request.httpMethod = "HEAD"
         request.timeoutInterval = 15
-        URLSession.shared.dataTask(with: request) { _, response, _ in
+        let resolutionTask = URLSession.shared.dataTask(with: request) { _, response, _ in
             if let httpResponse = response as? HTTPURLResponse,
                let location = httpResponse.value(forHTTPHeaderField: "Location"),
                let cdnURL = URL(string: location) {
@@ -737,7 +782,9 @@ extension DownloadManager {
             } else {
                 DispatchQueue.main.async { completion(nil) }
             }
-        }.resume()
+        }
+        resolutionTask.resume()
+        return resolutionTask
     }
 }
 extension DownloadManager: URLSessionDownloadDelegate, URLSessionDataDelegate {

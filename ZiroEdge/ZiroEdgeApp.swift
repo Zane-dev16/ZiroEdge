@@ -626,6 +626,17 @@ struct SettingsView: View {
             } message: { model in
                 Text("This will permanently remove \(model.displayName) from your device. You can re-download it later.")
             }
+            .alert(
+                "Deletion Failed",
+                isPresented: Binding(
+                    get: { modelsViewModel.updateMessage != nil },
+                    set: { if !$0 { modelsViewModel.updateMessage = nil } }
+                )
+            ) {
+                Button("OK", role: .cancel) { modelsViewModel.updateMessage = nil }
+            } message: {
+                Text(modelsViewModel.updateMessage ?? "The model could not be removed.")
+            }
         }
     }
 
@@ -641,13 +652,13 @@ struct SettingsView: View {
 
     @MainActor
     private func deleteModel(_ model: AIModel) async {
-        // Never remove an mmap-backed file until the engine has finished unloading it.
-        if lifecycleManager.activeModel?.id == model.id {
-            await lifecycleManager.unloadCurrentModel()
+        do {
+            try await modelsViewModel.deleteModel(model)
+            storageRefreshID = UUID()
+            modelToDelete = nil
+        } catch {
+            modelsViewModel.updateMessage = error.localizedDescription
         }
-        downloadManager.deleteModel(model)
-        storageRefreshID = UUID()
-        modelToDelete = nil
     }
 
     @MainActor

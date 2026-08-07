@@ -238,7 +238,12 @@ extension DownloadManager {
     func cancelArtifactDownload(model: AIModel, artifact: ArtifactType, discardStaging: Bool) {
         let key = artifactTaskKey(model: model, artifact: artifact)
         guard let task = activeTasks[key], task.model.id == model.id else { return }
+        guard !hasOtherTransferReference(for: task) else {
+            logger.info("Preserving shared active transfer: \(key, privacy: .public)")
+            return
+        }
         task.isCancelled = true
+        task.resolutionTask?.cancel()
         task.task?.cancel()
         task.chunkTask?.cancel()
         task.verificationTask?.cancel()
@@ -291,6 +296,13 @@ extension DownloadManager {
         return finishVerifiedPromotion(task, validationFailure: failure, correlationID: verifyCID, durationMs: 0)
     }
 
+    func hasOtherTransferReference(for task: DownloadTask) -> Bool {
+        ModelRegistry.transferModels.contains { candidate in
+            candidate.id != task.model.id
+                && DownloadTask(model: candidate, artifact: task.artifact).storageID == task.storageID
+        }
+    }
+
     func verifyAndPromoteOffMain(task: DownloadTask, key: String) {
         task.state = .verifying
         updateStatus(model: task.model)
@@ -308,25 +320,29 @@ extension DownloadManager {
             expectedBytes: expectedBytes
         )
         let verifyStart = ContinuousClock.now
-        task.verificationTask = Task { [weak self, weak task] in
-            let failure = await Task.detached(priority: .utility) {
-                ModelArtifactVerifier.failure(
-                    fileURL: fileURL,
-                    expectedBytes: expectedBytes,
-                    expectedSHA256: expectedSHA256,
-                    onProgress: { progress in
-                        // Update task progress from the background thread.
-                        // DownloadTask is MainActor-isolated through DownloadManager;
-                        // this is safe because progress is Sendable and the write is
-                        // a simple Double assignment.
-                        Task { @MainActor [weak task] in
-                            task?.progress = progress.fraction
-                        }
+        let detachedVerification = Task.detached(priority: .utility) {
+            ModelArtifactVerifier.failure(
+                fileURL: fileURL,
+                expectedBytes: expectedBytes,
+                expectedSHA256: expectedSHA256,
+                onProgress: { progress in
+                    Task { @MainActor [weak task] in
+                        task?.progress = progress.fraction
                     }
-                )
-            }.value
+                }
+            )
+        }
+        task.verificationTask = Task { [weak self, weak task] in
+            let failure = await withTaskCancellationHandler {
+                await detachedVerification.value
+            } onCancel: {
+                detachedVerification.cancel()
+            }
             let durationMs = verifyStart.elapsedMilliseconds
-            guard let self, let task, self.activeTasks[key] === task else { return }
+            guard !Task.isCancelled,
+                  let self, let task,
+                  self.activeTasks[key] === task,
+                  !task.isCancelled else { return }
             let space = self.availableDiskSpace
             if space > 0, space < Self.storageSafetyMarginBytes {
                 DownloadDiagnosticRecorder.shared.record(
@@ -479,6 +495,10 @@ extension DownloadManager {
     /// transfer or known model identity. Returns total bytes reclaimed.
     @discardableResult
     func reclaimOrphanedStorage() -> Int64 {
+        guard ModelRegistry.importedRegistriesAvailable else {
+            logger.info("Skipping orphan reclamation while imported registries are unavailable")
+            return 0
+        }
         var reclaimed: Int64 = 0
         var knownPaths = Set<String>()
 

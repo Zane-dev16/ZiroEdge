@@ -29,6 +29,16 @@ struct ChatView: View {
         .onReceive(NotificationCenter.default.publisher(for: UIPasteboard.changedNotification)) { _ in
             refreshPasteboardState()
         }
+        .alert("Enable Experimental Runtime?", isPresented: $viewModel.showingExperimentalConsent) {
+            Button("Enable Experimental Use") {
+                Task { await viewModel.confirmExperimentalConsent() }
+            }
+            Button("Cancel", role: .cancel) {
+                viewModel.cancelExperimentalConsent()
+            }
+        } message: {
+            Text("This imported profile has not passed the full physical workload. ZiroEdge will still enforce its measured admission floor and reserve.")
+        }
         .sheet(isPresented: $showSystemPromptEditor) {
             ConversationSystemPromptEditor(
                 prompt: $systemPromptDraft,

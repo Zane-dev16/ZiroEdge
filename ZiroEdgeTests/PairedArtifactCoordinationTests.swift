@@ -442,9 +442,7 @@ final class PairedArtifactCoordinationTests: XCTestCase {
     }
 
     private func validGGUFData(length: Int) -> Data {
-        var data = Data([0x47, 0x47, 0x55, 0x46, 0x03, 0x00, 0x00, 0x00])
-        data.append(contentsOf: repeatElement(0xA5, count: max(0, length - data.count)))
-        return data
+        TestModelFixtures.gguf(count: length)
     }
 
     private func gguf() -> Data {

@@ -1,8 +1,8 @@
 // StorageCleanupTests.swift
 // ZiroEdgeTests
 //
-// Tests for STORAGE-CLEANUP: accurate storage checks, cancel/discard/delete
-// distinction, orphan reclamation, and deletion coordination.
+// Tests for STORAGE-CLEANUP: accurate storage checks, cancellation cleanup,
+// orphan reclamation, and deletion coordination.
 
 import CryptoKit
 import XCTest
@@ -41,9 +41,9 @@ final class StorageCleanupTests: XCTestCase {
         super.tearDown()
     }
 
-    // MARK: - Cancel vs Discard vs Delete Distinction
+    // MARK: - Cancel and Delete Cleanup
 
-    func testCancelPreservesResumeData() throws {
+    func testCancelRemovesResumeData() throws {
         let data = TestModelFixtures.gguf(count: 128)
         let model = TestModelFixtures.text(data: data)
         let task = DownloadTask(model: model, artifact: .base)
@@ -58,14 +58,12 @@ final class StorageCleanupTests: XCTestCase {
         downloadManager.persistDurableState(for: task)
         _ = downloadManager.registerActiveTaskIfAbsent(task)
 
-        // Cancel (preserve)
         downloadManager.cancelDownload(for: model)
 
-        // Resume data and staging must still exist
-        XCTAssertTrue(FileManager.default.fileExists(atPath: task.resumeDataURL.path),
-                      "Cancel must preserve resume data for later resumption")
-        XCTAssertTrue(FileManager.default.fileExists(atPath: task.stagingURL.path),
-                      "Cancel must preserve staging data for later resumption")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: task.resumeDataURL.path),
+                       "Cancel must remove disposable resume data")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: task.stagingURL.path),
+                       "Cancel must remove disposable staging data")
     }
 
     func testDiscardPartialRemovesResumeAndStaging() throws {

@@ -31,6 +31,8 @@ final class ModelsViewModel: ObservableObject {
     let downloadManager: DownloadManager
     let lifecycleManager: ModelLifecycleManager
     private let launchOfflineAvailabilityReport: OfflineAvailabilityReport
+    private let importedModelStore: ImportedModelStore
+    private let importedModelUpdateStore: ImportedModelUpdateStore
 
     // MARK: - Computed
 
@@ -56,11 +58,15 @@ final class ModelsViewModel: ObservableObject {
     init(
         downloadManager: DownloadManager,
         lifecycleManager: ModelLifecycleManager,
-        offlineAvailabilityReport: OfflineAvailabilityReport = OfflineAvailabilityGuard.sweep()
+        offlineAvailabilityReport: OfflineAvailabilityReport = OfflineAvailabilityGuard.sweep(),
+        importedModelStore: ImportedModelStore = .shared,
+        importedModelUpdateStore: ImportedModelUpdateStore = .shared
     ) {
         self.downloadManager = downloadManager
         self.lifecycleManager = lifecycleManager
         self.launchOfflineAvailabilityReport = offlineAvailabilityReport
+        self.importedModelStore = importedModelStore
+        self.importedModelUpdateStore = importedModelUpdateStore
 
         // Forward download manager changes to trigger UI updates
         downloadManager.objectWillChange
@@ -252,7 +258,7 @@ final class ModelsViewModel: ObservableObject {
         downloadManager.retryInvalidArtifacts(for: model)
     }
 
-    /// Cancel a download while preserving resumable state.
+    /// Cancel a download and remove disposable partial state.
     func cancelDownload(for model: AIModel) {
         downloadManager.cancelDownload(for: model)
     }
@@ -276,21 +282,48 @@ final class ModelsViewModel: ObservableObject {
         showingDeleteConfirmation = true
     }
 
-    /// Confirm deletion. Unloads the model first if it shares the currently loaded base artifact.
+    /// Confirm deletion through the same fail-closed path used by Settings.
     func confirmDelete() async {
         guard let model = pendingDeleteModel else { return }
-        // The engine may mmap the artifact. Finish unloading before deleting it.
+        do {
+            try await deleteModel(model)
+            showingDeleteConfirmation = false
+            pendingDeleteModel = nil
+        } catch {
+            updateMessage = error.localizedDescription
+        }
+    }
+
+    /// Remove the durable import record before deleting artifacts. A registry
+    /// write failure therefore leaves the installed model intact rather than a
+    /// visible record pointing at files that were already destroyed.
+    func deleteModel(_ model: AIModel) async throws {
         if let active = lifecycleManager.activeModel,
            !downloadManager.isSafeToDelete(model, activeModel: active) {
-            await lifecycleManager.unloadCurrentModel()
+            _ = await lifecycleManager.unloadCurrentModel()
+        }
+        let stagedUpdate = model.isImported
+            ? importedModelUpdateStore.record(targetModelID: model.id)
+            : nil
+        if model.isImported {
+            guard importedModelUpdateStore.isAvailable else {
+                throw ImportedModelStoreError.registryUnavailable
+            }
+            // Discard an update journal before removing the installed record.
+            // If the installed-registry write then fails, the current model and
+            // artifacts remain intact; only the optional update is abandoned.
+            try importedModelUpdateStore.remove(targetModelID: model.id)
+            guard try importedModelStore.remove(id: model.id) != nil else {
+                throw ImportedModelStoreError.recordNotFound(model.id)
+            }
+        }
+        if let stagedUpdate {
+            downloadManager.deleteModel(stagedUpdate.model)
         }
         downloadManager.deleteModel(model)
         if model.isImported {
-            _ = try? ImportedModelStore.shared.remove(id: model.id)
             ExperimentalModelConsent.setGranted(false, for: model)
         }
-        showingDeleteConfirmation = false
-        pendingDeleteModel = nil
     }
 
     func unavailableModelReason(for modelID: String) -> UnavailableModelReason? {

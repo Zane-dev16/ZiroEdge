@@ -57,7 +57,7 @@ final class OfflineAvailabilityGuardTests: XCTestCase {
 
         // Overwrite the installed file with invalid content (bypassing the install validation).
         let path = ModelManagerService.baseModelPath(for: model)
-        try Data("not a valid gguf file".utf8).write(to: path)
+        try Data(repeating: 0x00, count: data.count).write(to: path)
 
         let report = OfflineAvailabilityGuard.sweep(extraModels: [model])
         guard let readiness = report.models[model.id] else {

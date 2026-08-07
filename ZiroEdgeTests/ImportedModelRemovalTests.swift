@@ -150,17 +150,207 @@ final class ImportedModelRemovalTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
 
         var writeCount = 0
-        let store = ImportedModelStore(directory: directory) { data, url in
+        let store = ImportedModelStore(directory: directory, writer: { data, url in
             writeCount += 1
             if writeCount == 2 { throw CocoaError(.fileWriteNoPermission) }
             try data.write(to: url, options: .atomic)
-        }
+        })
         try store.upsert(makeRecord(id: "hf-good"))
 
         XCTAssertThrowsError(try store.upsert(makeRecord(id: "hf-must-rollback")))
         XCTAssertEqual(store.allRecords.count, 1)
         XCTAssertEqual(store.record(id: "hf-good")?.id, "hf-good")
         XCTAssertNil(store.record(id: "hf-must-rollback"))
+    }
+
+    func testMissingRecordUpdateThrows() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ImportedModelStore(directory: directory)
+
+        XCTAssertThrowsError(try store.update(id: "hf-missing") { _ in }) { error in
+            XCTAssertEqual(error as? ImportedModelStoreError, .recordNotFound("hf-missing"))
+        }
+    }
+
+    func testCompareAndSwapRejectsChangedProvenance() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ImportedModelStore(directory: directory)
+        let original = makeRecord(id: "hf-cas", repo: "acme/original")
+        let changed = makeRecord(id: "hf-cas", repo: "acme/changed")
+        let replacement = makeRecord(id: "hf-cas", repo: "acme/replacement")
+        try store.upsert(original)
+        try store.update(id: original.id) { $0 = changed }
+
+        XCTAssertThrowsError(try store.replace(
+            id: original.id,
+            expectedProvenance: original.provenance,
+            with: replacement
+        )) { error in
+            XCTAssertEqual(error as? ImportedModelStoreError, .provenanceChanged(original.id))
+        }
+        XCTAssertEqual(store.record(id: original.id)?.provenance, changed.provenance)
+    }
+
+    func testCorruptRegistryBlocksMutationInsteadOfOverwritingWithEmptyState() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let registryURL = directory.appendingPathComponent("registry.json")
+        let corrupt = Data("not-json".utf8)
+        try corrupt.write(to: registryURL)
+
+        let store = ImportedModelStore(directory: directory)
+
+        XCTAssertFalse(store.isAvailable)
+        XCTAssertThrowsError(try store.upsert(makeRecord(id: "hf-must-not-overwrite"))) { error in
+            XCTAssertEqual(error as? ImportedModelStoreError, .registryUnavailable)
+        }
+        XCTAssertEqual(try Data(contentsOf: registryURL), corrupt)
+    }
+
+    func testRegistryRecoversLastVersionedBackup() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ImportedModelStore(directory: directory)
+        try store.upsert(makeRecord(id: "hf-backed-up"))
+        try store.upsert(makeRecord(id: "hf-newer", repo: "acme/newer"))
+        try Data("corrupt-primary".utf8).write(to: directory.appendingPathComponent("registry.json"))
+
+        let recovered = ImportedModelStore(directory: directory)
+
+        XCTAssertTrue(recovered.isAvailable)
+        XCTAssertNotNil(recovered.record(id: "hf-backed-up"))
+        XCTAssertNil(recovered.record(id: "hf-newer"))
+
+        // Recovery must also repair the primary on the next mutation rather
+        // than trying to rotate corrupt bytes over the known-good backup.
+        try recovered.upsert(makeRecord(id: "hf-after-recovery", repo: "acme/after-recovery"))
+        let relaunched = ImportedModelStore(directory: directory)
+        XCTAssertNotNil(relaunched.record(id: "hf-backed-up"))
+        XCTAssertNotNil(relaunched.record(id: "hf-after-recovery"))
+    }
+
+    func testProtectedDataReadFailureBlocksThenRecoversRegistry() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let seeded = ImportedModelStore(directory: directory)
+        try seeded.upsert(makeRecord(id: "hf-protected"))
+
+        var protectedDataAvailable = false
+        let locked = ImportedModelStore(directory: directory, reader: { url in
+            guard protectedDataAvailable else { throw CocoaError(.fileReadNoPermission) }
+            return try Data(contentsOf: url)
+        })
+
+        XCTAssertFalse(locked.isAvailable)
+        XCTAssertThrowsError(try locked.upsert(makeRecord(id: "hf-must-wait"))) { error in
+            XCTAssertEqual(error as? ImportedModelStoreError, .registryUnavailable)
+        }
+
+        protectedDataAvailable = true
+        XCTAssertTrue(locked.isAvailable)
+        XCTAssertNotNil(locked.record(id: "hf-protected"))
+        try locked.upsert(makeRecord(id: "hf-after-unlock", repo: "acme/after-unlock"))
+        XCTAssertNotNil(ImportedModelStore(directory: directory).record(id: "hf-after-unlock"))
+    }
+
+    func testMissingPrimaryRecoversFromBackup() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ImportedModelStore(directory: directory)
+        try store.upsert(makeRecord(id: "hf-backup-base"))
+        try store.upsert(makeRecord(id: "hf-primary-only", repo: "acme/primary-only"))
+        try FileManager.default.removeItem(at: directory.appendingPathComponent("registry.json"))
+
+        let recovered = ImportedModelStore(directory: directory)
+
+        XCTAssertTrue(recovered.isAvailable)
+        XCTAssertNotNil(recovered.record(id: "hf-backup-base"))
+        XCTAssertNil(recovered.record(id: "hf-primary-only"))
+    }
+
+    @MainActor
+    func testDeletionWriteFailureLeavesRecordAndArtifactIntact() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var writeCount = 0
+        let store = ImportedModelStore(directory: directory, writer: { data, url in
+            writeCount += 1
+            if writeCount == 2 { throw CocoaError(.fileWriteNoPermission) }
+            try data.write(to: url, options: .atomic)
+        })
+        let record = makeRecord(id: "hf-delete-transaction")
+        try store.upsert(record)
+        let artifactURL = ModelManagerService.baseModelPath(for: record.model)
+        try TestModelFixtures.gguf().write(to: artifactURL, options: .atomic)
+        defer { try? FileManager.default.removeItem(at: artifactURL) }
+
+        let manager = DownloadManager(availableDiskSpaceProvider: { .max })
+        let lifecycle = ModelLifecycleManager(
+            inferenceService: InferenceService(),
+            memoryBudgeter: MemoryBudgeter()
+        )
+        let viewModel = ModelsViewModel(
+            downloadManager: manager,
+            lifecycleManager: lifecycle,
+            importedModelStore: store,
+            importedModelUpdateStore: ImportedModelUpdateStore(
+                directory: directory.appendingPathComponent("updates")
+            )
+        )
+
+        do {
+            try await viewModel.deleteModel(record.model)
+            XCTFail("Expected registry write failure")
+        } catch {
+            XCTAssertTrue(FileManager.default.fileExists(atPath: artifactURL.path))
+            XCTAssertNotNil(store.record(id: record.id))
+        }
+    }
+
+    @MainActor
+    func testDeletionAlsoForgetsPendingUpdateAndConsent() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = ImportedModelStore(directory: root.appendingPathComponent("installed"))
+        let updateStore = ImportedModelUpdateStore(directory: root.appendingPathComponent("updates"))
+        let installed = makeRecord(id: "hf-delete-with-update")
+        var staged = makeRecord(
+            id: "hf-delete-with-update-staged",
+            digest: String(repeating: "b", count: 64),
+            repo: "acme/model-update"
+        )
+        staged.updateTargetModelID = installed.id
+        try store.upsert(installed)
+        try updateStore.upsert(staged)
+        ExperimentalModelConsent.setGranted(true, for: installed.model)
+        defer { ExperimentalModelConsent.setGranted(false, for: installed.model) }
+
+        let stagedTask = DownloadTask(model: staged.model, artifact: .base)
+        try Data("partial".utf8).write(to: stagedTask.stagingURL, options: .atomic)
+        stagedTask.progress = 0.2
+        let manager = DownloadManager(availableDiskSpaceProvider: { .max })
+        manager.persistDurableState(for: stagedTask)
+        let lifecycle = ModelLifecycleManager(
+            inferenceService: InferenceService(),
+            memoryBudgeter: MemoryBudgeter()
+        )
+        let viewModel = ModelsViewModel(
+            downloadManager: manager,
+            lifecycleManager: lifecycle,
+            importedModelStore: store,
+            importedModelUpdateStore: updateStore
+        )
+
+        try await viewModel.deleteModel(installed.model)
+
+        XCTAssertNil(store.record(id: installed.id))
+        XCTAssertNil(updateStore.record(targetModelID: installed.id))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: stagedTask.stagingURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: stagedTask.metadataURL.path))
+        XCTAssertFalse(ExperimentalModelConsent.isGranted(for: installed.model))
     }
 
     // MARK: - Helpers

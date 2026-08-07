@@ -277,9 +277,7 @@ final class ModelMigrationTests: XCTestCase {
     }
 
     private func gguf(fill: UInt8) -> Data {
-        var data = Data([0x47, 0x47, 0x55, 0x46, 0x03, 0x00, 0x00, 0x00])
-        data.append(contentsOf: repeatElement(fill, count: 8))
-        return data
+        TestModelFixtures.gguf(fill: fill)
     }
 
     private func sha256(_ data: Data) -> String {

@@ -156,6 +156,55 @@ final class ImportedModelUpdateTests: XCTestCase {
         restored.discardStagedUpdate(modelID: existing.id)
     }
 
+    func testLaunchReconcilesJournalTailAfterInstalledCommit() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = ImportedModelStore(directory: root.appendingPathComponent("installed"))
+        let updateStore = ImportedModelUpdateStore(directory: root.appendingPathComponent("updates"))
+        let installedModel = makeImportedModel(revision: String(repeating: "b", count: 40))
+        let installed = makeRecord(model: installedModel, revision: String(repeating: "b", count: 40))
+        try store.upsert(installed)
+        var journalTail = installed
+        journalTail.id = "hf-update-journal-tail"
+        journalTail.updateTargetModelID = installed.id
+        try updateStore.upsert(journalTail)
+
+        let coordinator = ImportedModelUpdateCoordinator(
+            store: store,
+            downloadManager: DownloadManager(availableDiskSpaceProvider: { .max }),
+            updateStore: updateStore
+        )
+
+        XCTAssertFalse(coordinator.hasStagedUpdate(modelID: installed.id))
+        XCTAssertTrue(updateStore.allRecords.isEmpty)
+        XCTAssertEqual(store.record(id: installed.id)?.provenance, installed.provenance)
+    }
+
+    func testProtectedDataReadFailureBlocksThenRecoversPendingUpdates() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let model = makeImportedModel(revision: String(repeating: "a", count: 40))
+        var staged = makeRecord(model: model, revision: String(repeating: "b", count: 40))
+        staged.updateTargetModelID = model.id
+        let seeded = ImportedModelUpdateStore(directory: directory)
+        try seeded.upsert(staged)
+
+        var protectedDataAvailable = false
+        let locked = ImportedModelUpdateStore(directory: directory, reader: { url in
+            guard protectedDataAvailable else { throw CocoaError(.fileReadNoPermission) }
+            return try Data(contentsOf: url)
+        })
+
+        XCTAssertFalse(locked.isAvailable)
+        XCTAssertThrowsError(try locked.remove(targetModelID: model.id)) { error in
+            XCTAssertEqual(error as? ImportedModelStoreError, .registryUnavailable)
+        }
+
+        protectedDataAvailable = true
+        XCTAssertTrue(locked.isAvailable)
+        XCTAssertEqual(locked.record(targetModelID: model.id)?.provenance.revision, staged.provenance.revision)
+    }
+
     func testStagedTransferIdentityDoesNotMaskInstalledReadiness() throws {
         let manager = DownloadManager(availableDiskSpaceProvider: { 100_000_000_000 })
         let coordinator = ImportedModelUpdateCoordinator(downloadManager: manager)
@@ -206,7 +255,11 @@ final class ImportedModelUpdateTests: XCTestCase {
         let store = ImportedModelStore(directory: root.appendingPathComponent("installed"))
         let updateStore = ImportedModelUpdateStore(directory: root.appendingPathComponent("updates"))
         let oldData = TestModelFixtures.gguf(fill: 0x31, count: 16)
-        let oldArtifact = makeArtifact("model-Q4_K_M.gguf", digest: TestModelFixtures.sha256(oldData))
+        let oldArtifact = makeArtifact(
+            "model-Q4_K_M.gguf",
+            digest: TestModelFixtures.sha256(oldData),
+            size: Int64(oldData.count)
+        )
         let oldReview = makeReview(revision: String(repeating: "a", count: 40), artifacts: [oldArtifact])
         let oldRecord = ImportedModelFactory.makeRecord(
             review: oldReview,
@@ -243,7 +296,11 @@ final class ImportedModelUpdateTests: XCTestCase {
             lifecycleManager: lifecycle
         )
         let newData = TestModelFixtures.gguf(fill: 0x42, count: 16)
-        let newArtifact = makeArtifact("model-Q4_K_M.gguf", digest: TestModelFixtures.sha256(newData))
+        let newArtifact = makeArtifact(
+            "model-Q4_K_M.gguf",
+            digest: TestModelFixtures.sha256(newData),
+            size: Int64(newData.count)
+        )
         let newReview = makeReview(revision: String(repeating: "b", count: 40), artifacts: [newArtifact])
         let staged = try coordinator.stageUpdate(
             existing: oldRecord.model,

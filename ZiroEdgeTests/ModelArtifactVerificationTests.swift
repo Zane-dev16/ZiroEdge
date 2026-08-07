@@ -40,7 +40,7 @@ final class ModelArtifactVerificationTests: XCTestCase {
     func testCorrectSHA256WithWrongByteCountNeedsRepair() throws {
         let model = makeRuntimeModel(id: "wrong-size")
         defer { ModelManagerService.deleteModel(model) }
-        try validGGUFData(length: 12).write(to: ModelManagerService.baseModelPath(for: model))
+        try validGGUFData(length: 69).write(to: ModelManagerService.baseModelPath(for: model))
 
         guard case .repairNeeded(let issues) = ModelManagerService.availability(for: model) else {
             return XCTFail("Wrong byte count must be repairable")
@@ -148,7 +148,7 @@ final class ModelArtifactVerificationTests: XCTestCase {
     }
 
     func testPromotionRejectsStructurallyInvalidGGUFBeforeHashing() throws {
-        let invalid = Data(repeating: 0x41, count: 16)
+        let invalid = Data(repeating: 0x41, count: 68)
         let model = makeRuntimeModel(
             id: "invalid-structure-\(UUID().uuidString.lowercased())",
             baseSHA256: sha256(invalid)
@@ -983,9 +983,7 @@ extension ModelArtifactVerificationTests {
     }
 
     private func validGGUFData(length: Int) -> Data {
-        var data = Data([0x47, 0x47, 0x55, 0x46, 0x03, 0x00, 0x00, 0x00])
-        data.append(contentsOf: repeatElement(0xA5, count: max(0, length - data.count)))
-        return data
+        TestModelFixtures.gguf(count: length)
     }
 
     private func sha256(_ data: Data) -> String {

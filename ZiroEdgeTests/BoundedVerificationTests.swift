@@ -15,8 +15,7 @@ final class BoundedVerificationTests: XCTestCase {
 
         // Use a smaller 2x buffer fixture to isolate whether size is the problem.
         let payloadSize = ModelArtifactVerifier.bufferSize * 2
-        var bytes = Data([0x47, 0x47, 0x55, 0x46, 0x03, 0, 0, 0])
-        bytes.append(Data(repeating: 0xA5, count: payloadSize))
+        let bytes = TestModelFixtures.gguf(count: payloadSize)
         try bytes.write(to: url, options: .atomic)
         let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
         let expectedBytes = Int64(bytes.count)
@@ -55,8 +54,8 @@ final class BoundedVerificationTests: XCTestCase {
             .appendingPathComponent("sparse-256m-\(UUID().uuidString).gguf")
         defer { try? FileManager.default.removeItem(at: url) }
 
-        // Write a valid GGUF header then extend with a sparse region.
-        let header = Data([0x47, 0x47, 0x55, 0x46, 0x03, 0, 0, 0])
+        // Write a valid GGUF structure then extend with a sparse region.
+        let header = TestModelFixtures.gguf()
         try header.write(to: url)
 
         let handle = try FileHandle(forWritingTo: url)
@@ -110,8 +109,7 @@ final class BoundedVerificationTests: XCTestCase {
             .appendingPathComponent("perf-measure-\(UUID().uuidString).gguf")
         defer { try? FileManager.default.removeItem(at: url) }
 
-        var bytes = Data([0x47, 0x47, 0x55, 0x46, 0x03, 0, 0, 0])
-        bytes.append(Data(repeating: 0xA5, count: 4 * 1_024 * 1_024)) // 4 MiB
+        let bytes = TestModelFixtures.gguf(count: 4 * 1_024 * 1_024) // 4 MiB
         try bytes.write(to: url)
         let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
 
@@ -136,7 +134,7 @@ final class BoundedVerificationTests: XCTestCase {
             .appendingPathComponent("peak-mem-\(UUID().uuidString).gguf")
         defer { try? FileManager.default.removeItem(at: url) }
 
-        let header = Data([0x47, 0x47, 0x55, 0x46, 0x03, 0, 0, 0])
+        let header = TestModelFixtures.gguf()
         try header.write(to: url)
         let handle = try FileHandle(forWritingTo: url)
         defer { try? handle.close() }
@@ -185,8 +183,7 @@ final class BoundedVerificationTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: url) }
 
         // 64 MiB — enough that cancellation can interrupt mid-stream on any device.
-        var bytes = Data([0x47, 0x47, 0x55, 0x46, 0x03, 0, 0, 0])
-        bytes.append(Data(repeating: 0xA5, count: 64 * 1_024 * 1_024))
+        let bytes = TestModelFixtures.gguf(count: 64 * 1_024 * 1_024)
         try bytes.write(to: url)
         let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
 
@@ -216,8 +213,7 @@ final class BoundedVerificationTests: XCTestCase {
             .appendingPathComponent("cancel-preserve-\(UUID().uuidString).gguf")
         defer { try? FileManager.default.removeItem(at: url) }
 
-        let originalBytes = Data([0x47, 0x47, 0x55, 0x46, 0x03, 0, 0, 0]
-            + Array(repeating: UInt8(0xA5), count: 1_024 * 1_024))
+        let originalBytes = TestModelFixtures.gguf(count: 1_024 * 1_024)
         try originalBytes.write(to: url)
 
         let digest = SHA256.hash(data: originalBytes).map { String(format: "%02x", $0) }.joined()
@@ -250,8 +246,7 @@ final class BoundedVerificationTests: XCTestCase {
             .appendingPathComponent("mismatch-preserve-\(UUID().uuidString).gguf")
         defer { try? FileManager.default.removeItem(at: url) }
 
-        let originalBytes = Data([0x47, 0x47, 0x55, 0x46, 0x03, 0, 0, 0]
-            + Array(repeating: UInt8(0xA5), count: 512))
+        let originalBytes = TestModelFixtures.gguf(count: 512)
         try originalBytes.write(to: url)
 
         // Deliberately wrong digest.
@@ -278,8 +273,7 @@ final class BoundedVerificationTests: XCTestCase {
             .appendingPathComponent("size-mismatch-preserve-\(UUID().uuidString).gguf")
         defer { try? FileManager.default.removeItem(at: url) }
 
-        let bytes = Data([0x47, 0x47, 0x55, 0x46, 0x03, 0, 0, 0]
-            + Array(repeating: UInt8(0xA5), count: 256))
+        let bytes = TestModelFixtures.gguf(count: 256)
         try bytes.write(to: url)
 
         let error = await Task.detached(priority: .utility) {
@@ -302,8 +296,7 @@ final class BoundedVerificationTests: XCTestCase {
             .appendingPathComponent("progress-\(UUID().uuidString).gguf")
         defer { try? FileManager.default.removeItem(at: url) }
 
-        var bytes = Data([0x47, 0x47, 0x55, 0x46, 0x03, 0, 0, 0])
-        bytes.append(Data(repeating: 0xA5, count: 500_000))
+        let bytes = TestModelFixtures.gguf(count: 500_000)
         try bytes.write(to: url)
         let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
 
@@ -334,8 +327,7 @@ final class BoundedVerificationTests: XCTestCase {
             .appendingPathComponent("fraction-\(UUID().uuidString).gguf")
         defer { try? FileManager.default.removeItem(at: url) }
 
-        var bytes = Data([0x47, 0x47, 0x55, 0x46, 0x03, 0, 0, 0])
-        bytes.append(Data(repeating: 0xA5, count: 65_536)) // exactly one buffer
+        let bytes = TestModelFixtures.gguf(count: 65_536) // exactly one buffer
         try bytes.write(to: url)
         let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
 
@@ -365,8 +357,7 @@ final class BoundedVerificationTests: XCTestCase {
             .appendingPathComponent("off-main-progress-\(UUID().uuidString).gguf")
         defer { try? FileManager.default.removeItem(at: url) }
 
-        var bytes = Data([0x47, 0x47, 0x55, 0x46, 0x03, 0, 0, 0])
-        bytes.append(Data(repeating: 0xA5, count: 1_000_000))
+        let bytes = TestModelFixtures.gguf(count: 1_000_000)
         try bytes.write(to: url)
         let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
 
@@ -395,8 +386,7 @@ final class BoundedVerificationTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: url) }
 
         // Write a valid GGUF file.
-        let bytes = Data([0x47, 0x47, 0x55, 0x46, 0x03, 0, 0, 0]
-            + Array(repeating: UInt8(0xA5), count: 128))
+        let bytes = TestModelFixtures.gguf(count: 128)
         try bytes.write(to: url)
 
         // Empty SHA-256 is invalid.

@@ -53,7 +53,7 @@ struct ModelsView: View {
             }
             Button("Keep Downloading", role: .cancel) {}
         } message: {
-            Text("Cancelling stops the current transfer and preserves resumable progress for \(viewModel.pendingCancelModel?.displayName ?? "this model"). Use Discard Partial Download to start over.")
+            Text("Cancelling stops the current transfer and removes its partial download data for \(viewModel.pendingCancelModel?.displayName ?? "this model").")
         }
     }
 

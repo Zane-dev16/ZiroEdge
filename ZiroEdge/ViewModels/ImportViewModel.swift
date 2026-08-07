@@ -250,10 +250,24 @@ final class ImportedModelUpdateCoordinator: ObservableObject {
         self.updateStore = resolvedUpdateStore
         self.lifecycleManager = lifecycleManager
         self.physicalRAM = physicalRAM
-        self.stagedRecords = Dictionary(
-            resolvedUpdateStore.allRecords.map { ($0.updateTargetModelID ?? $0.id, $0) },
-            uniquingKeysWith: { _, latest in latest }
-        )
+        self.stagedRecords = [:]
+        refreshJournalIfAvailable()
+    }
+
+    private func refreshJournalIfAvailable() {
+        guard store.isAvailable, updateStore.isAvailable else { return }
+        var unresolved: [String: ImportedModelRecord] = [:]
+        for staged in updateStore.allRecords {
+            let targetID = staged.updateTargetModelID ?? staged.id
+            if store.record(id: targetID)?.provenance == staged.provenance {
+                // The installed-registry commit completed before a crash. The
+                // pending entry is a journal tail, not another update.
+                try? updateStore.remove(targetModelID: targetID)
+            } else {
+                unresolved[targetID] = staged
+            }
+        }
+        stagedRecords = unresolved
     }
 
     func checkForUpdate(model: AIModel) async throws -> CheckResult {
@@ -379,12 +393,16 @@ final class ImportedModelUpdateCoordinator: ObservableObject {
     /// is verified. Old unshared artifacts are cleaned up after the record swap.
     @discardableResult
     func promoteIfVerified(modelID: String) async throws -> AIModel? {
+        refreshJournalIfAvailable()
         guard let staged = stagedRecords[modelID] else { return nil }
         let baseReady = ModelManagerService.isBaseDownloaded(staged.model)
         let projectorReady = !staged.model.requiresMMProj || ModelManagerService.isMMProjDownloaded(staged.model)
         guard baseReady, projectorReady else { return nil }
 
-        let oldModel = store.record(id: modelID)?.model
+        guard let oldRecord = store.record(id: modelID) else {
+            throw ImportedModelStoreError.recordNotFound(modelID)
+        }
+        let oldModel = oldRecord.model
         if lifecycleManager?.activeModel?.id == modelID {
             // The engine may mmap the old digest-addressed artifacts. Complete
             // unload and clear active provenance before swapping the registry
@@ -395,21 +413,23 @@ final class ImportedModelUpdateCoordinator: ObservableObject {
         var promoted = staged
         promoted.id = modelID
         promoted.updateTargetModelID = nil
-        try updateStore.remove(targetModelID: modelID)
-        do {
-            try store.update(id: modelID) { $0 = promoted }
-        } catch {
-            try? updateStore.upsert(staged)
-            throw error
-        }
+        // Re-check after the awaited unload, then atomically compare-and-swap
+        // the installed record. The pending store remains the recovery journal
+        // until this durable commit succeeds.
+        try store.replace(
+            id: modelID,
+            expectedProvenance: oldRecord.provenance,
+            with: promoted
+        )
         stagedRecords.removeValue(forKey: modelID)
+        // If journal cleanup fails, launch reconciliation recognizes that the
+        // installed provenance already matches and removes the stale tail.
+        try? updateStore.remove(targetModelID: modelID)
 
-        if let oldModel {
-            ModelManagerService.deleteReplacedArtifacts(
-                previous: oldModel,
-                retaining: promoted.model
-            )
-        }
+        ModelManagerService.deleteReplacedArtifacts(
+            previous: oldModel,
+            retaining: promoted.model
+        )
         downloadManager.downloadStatuses.removeValue(forKey: staged.id)
         downloadManager.updateStatusesFromDisk()
         // Reset experimental consent after update — the new revision needs fresh consent.
@@ -420,6 +440,7 @@ final class ImportedModelUpdateCoordinator: ObservableObject {
     /// Discard a staged update, cancelling any in-flight downloads and removing
     /// partial artifacts. The installed revision is never touched.
     func discardStagedUpdate(modelID: String) {
+        refreshJournalIfAvailable()
         guard let staged = stagedRecords.removeValue(forKey: modelID) else { return }
         try? updateStore.remove(targetModelID: modelID)
         downloadManager.cancelDownload(for: staged.model)
@@ -429,11 +450,13 @@ final class ImportedModelUpdateCoordinator: ObservableObject {
 
     /// Whether a staged update exists for the given model ID.
     func hasStagedUpdate(modelID: String) -> Bool {
-        stagedRecords[modelID] != nil
+        refreshJournalIfAvailable()
+        return stagedRecords[modelID] != nil
     }
 
     /// The staged model, if any. Nil when no update is in progress.
     func stagedModel(modelID: String) -> AIModel? {
-        stagedRecords[modelID]?.model
+        refreshJournalIfAvailable()
+        return stagedRecords[modelID]?.model
     }
 }
