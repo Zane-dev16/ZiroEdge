@@ -876,7 +876,10 @@ class DeviceTestEvidenceSchemaTests(unittest.TestCase):
         script = (PROJECT_DIR / "Scripts" / "device-test.sh").read_text()
         self.assertIn('! -name .gitkeep -exec rm -rf {} +', script)
         self.assertNotIn('rm -rf "$OUTPUT_DIR"', script)
-        self.assertGreaterEqual(script.count("-parallel-testing-enabled NO"), 4)
+        self.assertNotIn("|| echo 0", script)
+        self.assertIn("--unit-test", script)
+        self.assertIn('UNIT_ONLY_CMD+=(-only-testing "ZiroEdgeTests/$suite")', script)
+        self.assertGreaterEqual(script.count("-parallel-testing-enabled NO"), 6)
 
     def test_gate_requires_hugging_face_suites_in_physical_qa(self):
         gate_script = GATE_SCRIPT.read_text()

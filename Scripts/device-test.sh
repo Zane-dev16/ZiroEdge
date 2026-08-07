@@ -14,6 +14,7 @@ set -euo pipefail
 #   bash Scripts/device-test.sh --layer offline     # Issue 07: offline operation
 #   bash Scripts/device-test.sh --layer qa-full     # Issue 08: full QA matrix
 #   bash Scripts/device-test.sh --test SmokeTests  # Specific UI test class
+#   bash Scripts/device-test.sh --unit-test Suite[:Suite] # Physical unit suite(s)
 #   bash Scripts/device-test.sh --evidence-dir PATH # Write evidence to PATH
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -25,6 +26,7 @@ PROJECT="$PROJECT_DIR/ZiroEdge.xcodeproj"
 # --- Args ---
 LAYER="smoke"
 TEST_CLASS=""
+UNIT_TEST_FILTER=""
 EVIDENCE_DIR=""
 while [[ $# -gt 0 ]]; do
 	case "$1" in
@@ -34,6 +36,10 @@ while [[ $# -gt 0 ]]; do
 		;;
 	--test)
 		TEST_CLASS="$2"
+		shift 2
+		;;
+	--unit-test)
+		UNIT_TEST_FILTER="$2"
 		shift 2
 		;;
 	--evidence-dir)
@@ -67,9 +73,9 @@ if [[ -z "$DEVICE_UDID" ]]; then
 	fi
 fi
 DEVICE_INFO=$(xcrun xctrace list devices 2>/dev/null | grep "$DEVICE_UDID" | head -1 || true)
-if [[ "$LAYER" == "lifecycle" || "$LAYER" == "offline" || "$LAYER" == "qa-full" ]]; then
+if [[ "$LAYER" == "lifecycle" || "$LAYER" == "offline" || "$LAYER" == "qa-full" || -n "$UNIT_TEST_FILTER" ]]; then
 	if [[ -z "$DEVICE_INFO" || "$DEVICE_INFO" == *Simulator* ]]; then
-		echo "ERROR: Release evidence layers require a connected physical device; '$DEVICE_UDID' was not verified as physical."
+		echo "ERROR: This test path requires a connected physical device; '$DEVICE_UDID' was not verified as physical."
 		exit 1
 	fi
 fi
@@ -133,6 +139,39 @@ echo "  Command:       $0 --layer $LAYER"
 echo "  Evidence dir:  $OUTPUT_DIR"
 echo "==========================="
 echo ""
+
+# --- Focused physical unit-test mode ---
+# This keeps development verification on the same physical-device harness
+# without forcing unrelated UI scenarios or operator-observation gates.
+if [[ -n "$UNIT_TEST_FILTER" ]]; then
+	echo ">> Building focused unit tests for physical device..."
+	xcodebuild build-for-testing \
+		-project "$PROJECT" \
+		-scheme "$UNIT_SCHEME" \
+		-destination "id=$DEVICE_UDID" \
+		-derivedDataPath "$OUTPUT_DIR/DerivedDataUnit" \
+		-parallel-testing-enabled NO \
+		-quiet \
+		SYMROOT="$OUTPUT_DIR/Build"
+
+	UNIT_ONLY_CMD=(
+		xcodebuild test-without-building
+		-project "$PROJECT"
+		-scheme "$UNIT_SCHEME"
+		-destination "id=$DEVICE_UDID"
+		-derivedDataPath "$OUTPUT_DIR/DerivedDataUnit"
+		-resultBundlePath "$OUTPUT_DIR/unit-tests.xcresult"
+		-parallel-testing-enabled NO
+		SYMROOT="$OUTPUT_DIR/Build"
+	)
+	IFS=':' read -ra UNIT_FILTERS <<<"$UNIT_TEST_FILTER"
+	for suite in "${UNIT_FILTERS[@]}"; do
+		UNIT_ONLY_CMD+=(-only-testing "ZiroEdgeTests/$suite")
+	done
+	echo ">> Running focused unit tests on physical device..."
+	"${UNIT_ONLY_CMD[@]}" 2>&1 | tee "$OUTPUT_DIR/unit-test.log"
+	exit "${PIPESTATUS[0]}"
+fi
 
 # --- Operator observation prompt for physical-only scenarios ---
 if [[ "$LAYER" == "lifecycle" || "$LAYER" == "offline" || "$LAYER" == "qa-full" ]]; then
@@ -427,7 +466,8 @@ PYEVIDENCE
 
 # --- Append operator prompt if observations file is empty ---
 if [[ -f "$OBSERVATIONS_FILE" ]]; then
-	obs_lines=$(grep -cv '^#' "$OBSERVATIONS_FILE" 2>/dev/null || echo 0)
+	obs_lines=$(grep -cv '^#' "$OBSERVATIONS_FILE" 2>/dev/null || true)
+	obs_lines=${obs_lines:-0}
 	if [[ "$obs_lines" -eq 0 ]]; then
 		echo "" >>"$OBSERVATIONS_FILE"
 		echo "# ⚠️  NO OPERATOR OBSERVATIONS RECORDED" >>"$OBSERVATIONS_FILE"
@@ -509,10 +549,15 @@ fi
 
 # For lifecycle / offline / qa-full layers: operator observations required
 if [[ "$LAYER" == "lifecycle" || "$LAYER" == "offline" || "$LAYER" == "qa-full" ]]; then
+	observation_count=0
+	if [[ -f "$OBSERVATIONS_FILE" ]]; then
+		observation_count=$(grep -cvE '^\s*#|^\s*$' "$OBSERVATIONS_FILE" 2>/dev/null || true)
+		observation_count=${observation_count:-0}
+	fi
 	if [[ ! -f "$OBSERVATIONS_FILE" ]]; then
 		echo "   ❌ Missing operator observations file for layer '$LAYER'"
 		EVIDENCE_ERRORS=$((EVIDENCE_ERRORS + 1))
-	elif [[ $(grep -cvE '^\s*#|^\s*$' "$OBSERVATIONS_FILE" 2>/dev/null || echo 0) -eq 0 ]]; then
+	elif [[ "$observation_count" -eq 0 ]]; then
 		echo "   ❌ Operator observations file is empty for layer '$LAYER'"
 		EVIDENCE_ERRORS=$((EVIDENCE_ERRORS + 1))
 	fi
