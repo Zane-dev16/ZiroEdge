@@ -13,7 +13,7 @@ set -euo pipefail
 #   bash Scripts/device-test.sh --layer lifecycle  # Issue 06: background/lifecycle
 #   bash Scripts/device-test.sh --layer offline     # Issue 07: offline operation
 #   bash Scripts/device-test.sh --layer qa-full     # Issue 08: full QA matrix
-#   bash Scripts/device-test.sh --test SmokeTests  # Specific test class
+#   bash Scripts/device-test.sh --test SmokeTests  # Specific UI test class
 #   bash Scripts/device-test.sh --evidence-dir PATH # Write evidence to PATH
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -88,7 +88,12 @@ EVIDENCE_JSON="$OUTPUT_DIR/evidence.json"
 OBSERVATIONS_FILE="$OUTPUT_DIR/operator-observations.txt"
 
 # --- Prepare output ---
-rm -rf "$OUTPUT_DIR"
+# Release-evidence directories contain tracked .gitkeep files. Preserve those
+# sentinels so the documented clean-tree command does not dirty the source tree
+# before xcodegen performs its reproducibility check.
+if [[ -d "$OUTPUT_DIR" ]]; then
+	find "$OUTPUT_DIR" -mindepth 1 -maxdepth 1 ! -name .gitkeep -exec rm -rf {} +
+fi
 mkdir -p "$SCREENSHOTS_DIR" "$DIAGNOSTICS_DIR" "$RETAINED_XCRESULTS_DIR"
 
 # --- Regenerate project (xcodegen) ---
@@ -165,6 +170,7 @@ xcodebuild build-for-testing \
 	-scheme "$SCHEME" \
 	-destination "id=$DEVICE_UDID" \
 	-derivedDataPath "$OUTPUT_DIR/DerivedData" \
+	-parallel-testing-enabled NO \
 	-quiet \
 	SYMROOT="$OUTPUT_DIR/Build" \
 	2>&1 | tail -5
@@ -212,6 +218,7 @@ TEST_CMD=(
 	-destination "id=$DEVICE_UDID"
 	-derivedDataPath "$OUTPUT_DIR/DerivedData"
 	-resultBundlePath "$OUTPUT_DIR/xcresult.xcresult"
+	-parallel-testing-enabled NO
 	SYMROOT="$OUTPUT_DIR/Build"
 )
 
@@ -239,6 +246,7 @@ XCODEBUILD_CMD="${TEST_CMD[*]}"
 UNIT_TEST_EXIT=-1
 UNIT_XCRESULT_HASH=""
 UNIT_XCODEBUILD_CMD=""
+UNIT_SUITES_CSV=""
 UNIT_SUITES_FILE="$OUTPUT_DIR/unit-test-suites.tsv"
 : >"$UNIT_SUITES_FILE"
 if [[ "$LAYER" == "lifecycle" || "$LAYER" == "offline" || "$LAYER" == "qa-full" ]]; then
@@ -248,6 +256,7 @@ if [[ "$LAYER" == "lifecycle" || "$LAYER" == "offline" || "$LAYER" == "qa-full" 
 		-scheme "$UNIT_SCHEME" \
 		-destination "id=$DEVICE_UDID" \
 		-derivedDataPath "$OUTPUT_DIR/DerivedDataUnit" \
+		-parallel-testing-enabled NO \
 		-quiet \
 		SYMROOT="$OUTPUT_DIR/Build" \
 		2>&1 | tail -5
@@ -266,9 +275,24 @@ if [[ "$LAYER" == "lifecycle" || "$LAYER" == "offline" || "$LAYER" == "qa-full" 
 			"ModelMigrationTests"
 			"DurableTransferStateTests"
 			"StoreRecoveryTests"
+			"HuggingFaceImportTests"
+			"ImportRejectionTests"
+			"ImportRelaunchPersistenceTests"
+			"ImportStoragePreflightTests"
+			"ImportTransferLifecycleTests"
+			"ImportVariantSelectionTests"
+			"ImportedModelConfigurationTests"
+			"ImportedModelLoadFailureTests"
+			"ImportedModelRelaunchTests"
+			"ImportedModelRemovalTests"
+			"ImportedModelUpdateTests"
+			"VisionImportTests"
+			"VisionRejectionRepairTests"
+			"VisionUpdateTests"
 		)
 		;;
 	esac
+	UNIT_SUITES_CSV=$(IFS=,; echo "${UNIT_TEST_SUITES[*]}")
 
 	UNIT_TEST_EXIT=0
 	mkdir -p "$OUTPUT_DIR/unit-xcresults"
@@ -281,6 +305,7 @@ if [[ "$LAYER" == "lifecycle" || "$LAYER" == "offline" || "$LAYER" == "qa-full" 
 			-destination "id=$DEVICE_UDID"
 			-derivedDataPath "$OUTPUT_DIR/DerivedDataUnit"
 			-resultBundlePath "$result_bundle"
+			-parallel-testing-enabled NO
 			SYMROOT="$OUTPUT_DIR/Build"
 			-only-testing "ZiroEdgeTests/$suite"
 		)
@@ -511,7 +536,7 @@ if [[ "$LAYER" == "lifecycle" || "$LAYER" == "offline" || "$LAYER" == "qa-full" 
 		;;
 	qa-full)
 		VALIDATION_LAYERS="qa-full"
-		VALIDATION_SUITES="SubmissionReadinessTests,DownloadDiagnosticTests,ModelMigrationTests,DurableTransferStateTests,StoreRecoveryTests"
+		VALIDATION_SUITES="$UNIT_SUITES_CSV"
 		VALIDATION_SCENARIOS="wifi-loss-reconnect,cellular-handoff,repeated-pause-resume,cancel-redownload,low-storage-warn,out-of-space-recovery,repeated-transfer-e2b,repeated-transfer-e4b,reboot-recovery,storage-pressure-recover"
 		;;
 	esac

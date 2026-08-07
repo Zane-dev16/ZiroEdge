@@ -277,7 +277,7 @@ PY
 		QA_DIR="$EVIDENCE_ROOT/physical-qa"
 		if [[ "$SOURCE_TREE_CLEAN" == true && -f "$QA_DIR/evidence.json" ]] && validate_physical_layer \
 			"$QA_DIR/evidence.json" "$QA_DIR/operator-observations.txt" \
-			"qa-full,all" "SubmissionReadinessTests,DownloadDiagnosticTests,ModelMigrationTests,DurableTransferStateTests,StoreRecoveryTests" \
+			"qa-full,all" "SubmissionReadinessTests,DownloadDiagnosticTests,ModelMigrationTests,DurableTransferStateTests,StoreRecoveryTests,HuggingFaceImportTests,ImportRejectionTests,ImportRelaunchPersistenceTests,ImportStoragePreflightTests,ImportTransferLifecycleTests,ImportVariantSelectionTests,ImportedModelConfigurationTests,ImportedModelLoadFailureTests,ImportedModelRelaunchTests,ImportedModelRemovalTests,ImportedModelUpdateTests,VisionImportTests,VisionRejectionRepairTests,VisionUpdateTests" \
 			"wifi-loss-reconnect,cellular-handoff,repeated-pause-resume,cancel-redownload,low-storage-warn,out-of-space-recovery,repeated-transfer-e2b,repeated-transfer-e4b,reboot-recovery,storage-pressure-recover" >/dev/null 2>&1; then
 			status="PASS"
 		else

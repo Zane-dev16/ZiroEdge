@@ -125,6 +125,8 @@ bash Scripts/device-test.sh --layer lifecycle --evidence-dir docs/release-eviden
 bash Scripts/device-test.sh --layer offline --evidence-dir docs/release-evidence/offline
 
 # Issue 08 — Full QA matrix
+# Also records each of the 14 Hugging Face import unit suites as an individual
+# physical-device outcome with a retained xcresult archive.
 bash Scripts/device-test.sh --layer qa-full --evidence-dir docs/release-evidence/physical-qa
 
 # Issue 09 — Gate reconciliation

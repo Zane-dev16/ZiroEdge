@@ -38,13 +38,10 @@ final class BoundedVerificationTests: XCTestCase {
         }.value
 
         XCTAssertFalse(result.0)
-        // The verifier may fail when the simulator sandbox cannot read temp-file
-        // attributes (rdar: feedback). When it does fail, skip instead of asserting.
-        if let error = result.1 {
-            try XCTSkipIf(true, "Simulator sandbox cannot read temp file: \(error)")
-            return
-        }
-        XCTAssertNil(result.1)
+        XCTAssertNil(
+            result.1,
+            "A verifier read failure is a real regression on the required physical-device path"
+        )
     }
 
     /// A 256 MiB sparse file exercises the same buffer path as a multi-gigabyte
@@ -142,8 +139,9 @@ final class BoundedVerificationTests: XCTestCase {
         try handle.seek(toOffset: UInt64(sparseSize) - 1)
         try handle.write(contentsOf: [0x00])
 
-        // Compute expected digest.
-        guard let readHandle = try? FileHandle(forReadingFrom: url) else { return }
+        // Compute expected digest. Fixture setup failures must fail rather than
+        // silently turning the bounded-memory assertion into a passing no-op.
+        let readHandle = try FileHandle(forReadingFrom: url)
         defer { try? readHandle.close() }
         var hasher = SHA256()
         var totalBytes: Int64 = 0

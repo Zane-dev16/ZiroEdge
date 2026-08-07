@@ -851,12 +851,53 @@ class DeviceTestEvidenceSchemaTests(unittest.TestCase):
             "ModelMigrationTests",
             "DurableTransferStateTests",
             "StoreRecoveryTests",
+            "HuggingFaceImportTests",
+            "ImportRejectionTests",
+            "ImportRelaunchPersistenceTests",
+            "ImportStoragePreflightTests",
+            "ImportTransferLifecycleTests",
+            "ImportVariantSelectionTests",
+            "ImportedModelConfigurationTests",
+            "ImportedModelLoadFailureTests",
+            "ImportedModelRelaunchTests",
+            "ImportedModelRemovalTests",
+            "ImportedModelUpdateTests",
+            "VisionImportTests",
+            "VisionRejectionRepairTests",
+            "VisionUpdateTests",
         ):
             self.assertIn(f'"{suite}"', script)
         self.assertIn('"unit_test_suites"', script)
         self.assertIn('"xcodebuild_command": command', script)
         self.assertIn('"xcresult_archive_sha256": archive_hash or None', script)
         self.assertIn('"xcresult_archive_path": archive_path', script)
+
+    def test_device_runner_preserves_clean_tree_and_disables_parallel_testing(self):
+        script = (PROJECT_DIR / "Scripts" / "device-test.sh").read_text()
+        self.assertIn('! -name .gitkeep -exec rm -rf {} +', script)
+        self.assertNotIn('rm -rf "$OUTPUT_DIR"', script)
+        self.assertGreaterEqual(script.count("-parallel-testing-enabled NO"), 4)
+
+    def test_gate_requires_hugging_face_suites_in_physical_qa(self):
+        gate_script = GATE_SCRIPT.read_text()
+        gate_eight = gate_script.split("\n\t8)", 1)[1].split("\n\t9)", 1)[0]
+        for suite in (
+            "HuggingFaceImportTests",
+            "ImportRejectionTests",
+            "ImportRelaunchPersistenceTests",
+            "ImportStoragePreflightTests",
+            "ImportTransferLifecycleTests",
+            "ImportVariantSelectionTests",
+            "ImportedModelConfigurationTests",
+            "ImportedModelLoadFailureTests",
+            "ImportedModelRelaunchTests",
+            "ImportedModelRemovalTests",
+            "ImportedModelUpdateTests",
+            "VisionImportTests",
+            "VisionRejectionRepairTests",
+            "VisionUpdateTests",
+        ):
+            self.assertIn(suite, gate_eight)
 
     def test_automated_recorder_and_gate_use_canonical_evidence(self):
         recorder = (

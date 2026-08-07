@@ -207,6 +207,16 @@ bash Scripts/device-test.sh --layer qa-full --evidence-dir docs/release-evidence
 expectations, observations, evidence, and status (`PENDING`, `PASS`, `FAIL`).
 Simulator coverage is a separate column.
 
+**Hugging Face import regression suites:** The physical `qa-full` run must
+record individual passing outcomes and retained xcresult archives for all 14
+import suites: `HuggingFaceImportTests`, `ImportRejectionTests`,
+`ImportRelaunchPersistenceTests`, `ImportStoragePreflightTests`,
+`ImportTransferLifecycleTests`, `ImportVariantSelectionTests`,
+`ImportedModelConfigurationTests`, `ImportedModelLoadFailureTests`,
+`ImportedModelRelaunchTests`, `ImportedModelRemovalTests`,
+`ImportedModelUpdateTests`, `VisionImportTests`,
+`VisionRejectionRepairTests`, and `VisionUpdateTests`.
+
 **Failure mapping:** Every failed row must link to a focused ticket URL in
 `docs/qa-failure-map.md`. Missing ticket URLs remain blocking.
 

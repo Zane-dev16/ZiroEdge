@@ -12,7 +12,7 @@ public enum GGUFFileValidator {
         let fileSize = fileSizeNumber.uint64Value
         guard fileSize >= 24, hasReasonableHeader(atPath: path) else { return false }
 
-        var parameters = gguf_init_params(no_alloc: true, ctx: nil)
+        let parameters = gguf_init_params(no_alloc: true, ctx: nil)
         guard let context = path.withCString({ gguf_init_from_file($0, parameters) }) else {
             return false
         }
