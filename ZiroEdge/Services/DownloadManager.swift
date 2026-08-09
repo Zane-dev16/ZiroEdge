@@ -482,11 +482,15 @@ extension DownloadManager {
             model,
             preservingReferences: additionalTransferModelsProvider()
         )
-        if !ModelManagerService.isBaseArtifactShared(model) {
-            try? fileManager.removeItem(at: DownloadTask(model: model, artifact: .base).resumeDataURL)
+        let baseTask = DownloadTask(model: model, artifact: .base)
+        if !hasOtherTransferReference(for: baseTask) {
+            try? fileManager.removeItem(at: baseTask.resumeDataURL)
         }
         if model.requiresMMProj {
-            try? fileManager.removeItem(at: DownloadTask(model: model, artifact: .mmproj).resumeDataURL)
+            let projectorTask = DownloadTask(model: model, artifact: .mmproj)
+            if !hasOtherTransferReference(for: projectorTask) {
+                try? fileManager.removeItem(at: projectorTask.resumeDataURL)
+            }
         }
         updateStatusesFromDisk()
         downloadStatuses[model.id] = authoritativeDiskStatus(for: model)

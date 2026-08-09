@@ -447,6 +447,63 @@ final class ImportedModelRemovalTests: XCTestCase {
     }
 
     @MainActor
+    func testForgetPreservesSharedProjectorResumeAcrossRelaunch() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = ImportedModelStore(directory: root.appendingPathComponent("models"))
+        let projectorDigest = TestModelFixtures.sha256(Data(UUID().uuidString.utf8))
+        let first = makeVisionRecord(
+            id: "hf-shared-projector-a-\(UUID().uuidString)",
+            baseDigest: TestModelFixtures.sha256(Data(UUID().uuidString.utf8)),
+            projectorDigest: projectorDigest,
+            repo: "acme/vision-a"
+        )
+        let second = makeVisionRecord(
+            id: "hf-shared-projector-b-\(UUID().uuidString)",
+            baseDigest: TestModelFixtures.sha256(Data(UUID().uuidString.utf8)),
+            projectorDigest: projectorDigest,
+            repo: "acme/vision-b"
+        )
+        try store.upsert(first)
+        try store.upsert(second)
+
+        let firstProjectorTask = DownloadTask(model: first.model, artifact: .mmproj)
+        let secondProjectorTask = DownloadTask(model: second.model, artifact: .mmproj)
+        XCTAssertNotEqual(first.model.baseArtifactStorageID, second.model.baseArtifactStorageID)
+        XCTAssertEqual(firstProjectorTask.storageID, secondProjectorTask.storageID)
+        defer {
+            try? FileManager.default.removeItem(at: secondProjectorTask.resumeDataURL)
+            try? FileManager.default.removeItem(at: secondProjectorTask.metadataURL)
+        }
+        try Data("projector resume".utf8).write(
+            to: secondProjectorTask.resumeDataURL,
+            options: .atomic
+        )
+        secondProjectorTask.progress = 0.35
+        let manager = DownloadManager(availableDiskSpaceProvider: { .max })
+        manager.persistDurableState(for: secondProjectorTask)
+        let viewModel = removalViewModel(manager: manager, store: store, root: root)
+
+        try await viewModel.deleteModel(first.model)
+
+        XCTAssertNil(store.record(id: first.id))
+        XCTAssertNotNil(store.record(id: second.id))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: secondProjectorTask.resumeDataURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: secondProjectorTask.metadataURL.path))
+
+        let relaunched = DownloadManager(availableDiskSpaceProvider: { .max })
+        relaunched.restoreDurableTransfers(models: [second.model])
+        guard let restored = relaunched.activeTasks[secondProjectorTask.storageID] else {
+            return XCTFail("Shared projector transfer should restore for the remaining variant")
+        }
+        XCTAssertEqual(restored.model.id, second.id)
+        guard case .paused(let progress) = restored.state else {
+            return XCTFail("Restored shared projector transfer should remain paused")
+        }
+        XCTAssertEqual(progress, 0.35, accuracy: 0.001)
+    }
+
+    @MainActor
     func testForgetPartialVisionImportRemovesBaseAndProjectorState() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -517,21 +574,26 @@ final class ImportedModelRemovalTests: XCTestCase {
 
     // MARK: - Helpers
 
-    private func makeVisionRecord(id: String) -> ImportedModelRecord {
+    private func makeVisionRecord(
+        id: String,
+        baseDigest: String = String(repeating: "1", count: 64),
+        projectorDigest: String = String(repeating: "2", count: 64),
+        repo: String = "acme/vision"
+    ) -> ImportedModelRecord {
         let base = HFArtifact(
             filename: "vision-Q4_K_M.gguf", size: 16,
-            sha256: String(repeating: "1", count: 64),
+            sha256: baseDigest,
             quantization: "Q4_K_M", architecture: "llama", role: .base,
             metadata: HFGGUFMetadata(architecture: "llama", contextLength: 2048)
         )
         let projector = HFArtifact(
             filename: "mmproj-vision-F16.gguf", size: 16,
-            sha256: String(repeating: "2", count: 64),
+            sha256: projectorDigest,
             quantization: "F16", architecture: "clip", role: .projector,
             metadata: HFGGUFMetadata(architecture: "clip", contextLength: nil)
         )
         let review = HFRepositoryReview(
-            repositoryID: "acme/vision", revision: String(repeating: "f", count: 40),
+            repositoryID: repo, revision: String(repeating: "f", count: 40),
             licenseName: "MIT", licenseURL: URL(string: "https://example.com/license")!,
             artifacts: [base, projector]
         )
