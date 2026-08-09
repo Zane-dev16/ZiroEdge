@@ -38,11 +38,21 @@ struct ModelsView: View {
         } message: {
             Text("This profile has measured load evidence but has not passed the full physical workload. ZiroEdge will still enforce its measured admission floor and reserve.")
         }
-        .confirmationDialog("Delete Model", isPresented: $viewModel.showingDeleteConfirmation) {
-            Button("Delete", role: .destructive) { Task { await viewModel.confirmDelete() } }
+        .confirmationDialog(
+            viewModel.pendingDeleteModel.map(viewModel.canForgetImport) == true ? "Forget Import" : "Delete Model",
+            isPresented: $viewModel.showingDeleteConfirmation
+        ) {
+            Button(
+                viewModel.pendingDeleteModel.map(viewModel.canForgetImport) == true ? "Forget Import" : "Delete",
+                role: .destructive
+            ) { Task { await viewModel.confirmDelete() } }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Delete \(viewModel.pendingDeleteModel?.displayName ?? "this model")? You can download it again later.")
+            if let model = viewModel.pendingDeleteModel, viewModel.canForgetImport(model) {
+                Text("Forget \(model.displayName)? Its import record and unreferenced partial transfer data will be removed.")
+            } else {
+                Text("Delete \(viewModel.pendingDeleteModel?.displayName ?? "this model")? You can download it again later.")
+            }
         }
         .confirmationDialog(
             "Cancel Download",

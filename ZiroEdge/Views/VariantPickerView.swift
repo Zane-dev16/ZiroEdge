@@ -12,10 +12,25 @@ import SwiftUI
 struct VariantPickerView: View {
     let candidates: [HFArtifact]
     @Binding var selection: HFArtifact?
+    let capabilityEstimate: (HFArtifact) -> VariantCapabilityEstimate?
+
+    init(
+        candidates: [HFArtifact],
+        selection: Binding<HFArtifact?>,
+        capabilityEstimate: @escaping (HFArtifact) -> VariantCapabilityEstimate? = { _ in nil }
+    ) {
+        self.candidates = candidates
+        _selection = selection
+        self.capabilityEstimate = capabilityEstimate
+    }
 
     var body: some View {
         ForEach(candidates) { artifact in
-            VariantRow(artifact: artifact, isSelected: selection?.id == artifact.id)
+            VariantRow(
+                artifact: artifact,
+                isSelected: selection?.id == artifact.id,
+                capability: capabilityEstimate(artifact)
+            )
                 .contentShape(Rectangle())
                 .onTapGesture { selection = artifact }
         }
@@ -25,6 +40,7 @@ struct VariantPickerView: View {
 struct VariantRow: View {
     let artifact: HFArtifact
     let isSelected: Bool
+    let capability: VariantCapabilityEstimate?
 
     var body: some View {
         HStack(spacing: ZiroTheme.Spacing.small) {
@@ -40,6 +56,12 @@ struct VariantRow: View {
                     Text(ByteCountFormatter.string(fromByteCount: artifact.size, countStyle: .file))
                         .font(.caption)
                         .foregroundStyle(.tertiary)
+                }
+                if let caption = capability?.caption {
+                    Text(caption)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
                 }
                 Text("SHA-256 \(artifact.sha256.prefix(12))…")
                     .font(.caption2)

@@ -51,6 +51,52 @@ final class MemoryProfileTests: XCTestCase {
         }
     }
 
+    func testExtremeImportedContextEstimateSaturatesWithoutTrapping() {
+        let config = ModelConfiguration(
+            promptPath: .raw,
+            addBos: nil,
+            stopStrings: [],
+            defaultSampling: .default,
+            contextLength: Int.max,
+            batchSize: 256,
+            microBatchSize: 64,
+            threadCount: 2,
+            useMmap: true,
+            f16KV: true,
+            gpuLayers: 0
+        )
+        let provenance = HuggingFaceProvenance(
+            repositoryID: "acme/extreme",
+            revision: String(repeating: "a", count: 40),
+            baseFilename: "model.gguf",
+            baseSHA256: String(repeating: "b", count: 64),
+            architecture: "llama",
+            projectorFilename: nil,
+            projectorSHA256: nil
+        )
+        let model = AIModel(
+            id: "hf-memory-extreme",
+            displayName: "Extreme",
+            description: "Fixture",
+            modelType: .text,
+            baseURL: URL(string: "https://huggingface.co/acme/extreme/resolve/\(provenance.revision)/model.gguf")!,
+            mmprojURL: nil,
+            baseFileSizeBytes: Int64.max,
+            mmprojFileSizeBytes: nil,
+            baseSHA256: provenance.baseSHA256,
+            mmprojSHA256: nil,
+            quantization: "Q4_K_M",
+            config: config,
+            license: LicenseInfo(name: "MIT", url: URL(string: "https://example.com")!, copyright: ""),
+            source: .huggingFace(provenance)
+        )
+
+        XCTAssertEqual(
+            MemoryProfileRegistry.importedProfile(for: model).measuredLoadDeltaBytes,
+            UInt64.max
+        )
+    }
+
     func testE4BTextCalibrationHasSpecifiedSafeShapeAndNoProjector() {
         let profile = MemoryProfileRegistry.e4bTextCalibration
         XCTAssertEqual(profile.modelID, ModelRegistry.gemma4E4BTextCalibration.id)

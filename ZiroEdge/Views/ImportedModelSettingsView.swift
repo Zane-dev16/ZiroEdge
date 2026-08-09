@@ -23,6 +23,7 @@ struct ImportedModelSettingsView: View {
     @State private var repeatPenalty: Double
 
     @State private var savedMessage: String?
+    @State private var saveFailed = false
     @State private var updateCheckMessage: String?
     @State private var availableUpdate: HFRepositoryReview?
     @State private var selectedUpdateBase: HFArtifact?
@@ -115,23 +116,29 @@ struct ImportedModelSettingsView: View {
                 maxTokens: maxTokens,
                 repeatPenalty: Float(repeatPenalty)
             )
-            viewModel.updateImportedConfiguration(
+            switch viewModel.updateImportedConfiguration(
                 for: model,
                 contextLength: contextLength,
                 sampling: sampling
-            )
-            savedMessage = "Settings saved. Changes take effect on next load."
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                if savedMessage == "Settings saved. Changes take effect on next load." {
-                    savedMessage = nil
+            ) {
+            case .success:
+                saveFailed = false
+                savedMessage = "Settings saved. Changes take effect on next load."
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                    if savedMessage == "Settings saved. Changes take effect on next load." {
+                        savedMessage = nil
+                    }
                 }
+            case .failure(let error):
+                saveFailed = true
+                savedMessage = error.localizedDescription
             }
         }
 
         if let savedMessage {
             Text(savedMessage)
                 .font(.caption)
-                .foregroundStyle(.green)
+                .foregroundStyle(saveFailed ? .red : .green)
         }
 
         Button("Retry Native Load") {
@@ -181,7 +188,13 @@ struct ImportedModelSettingsView: View {
                         selectedUpdateBase = $0
                         updatePairConfirmed = false
                     }
-                )
+                ),
+                capabilityEstimate: {
+                    updateCoordinator.capabilityEstimate(
+                        for: $0,
+                        candidates: availableUpdate.baseArtifacts
+                    )
+                }
             )
             if model.modelType == .vision, let selectedUpdateBase {
                 if let pair = VisionPairResolver().bestPair(for: selectedUpdateBase, in: availableUpdate) {

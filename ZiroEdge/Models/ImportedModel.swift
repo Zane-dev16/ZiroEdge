@@ -530,6 +530,9 @@ struct HFRepositoryInspector: Sendable {
     private static let supportedArchitectures: Set<String> = [
         "llama", "gemma", "gemma2", "gemma3", "qwen2", "qwen2vl", "phi3", "mistral", "clip"
     ]
+    /// Defensive supported-artifact ceiling. Larger metadata is rejected before
+    /// it can influence storage, transfer, or memory arithmetic.
+    static let maximumSupportedArtifactBytes: Int64 = 4 * 1_024 * 1_024 * 1_024 * 1_024
 
     init(loader: @escaping Loader = { request in
         try await HFRepositoryInspector.liveLoader(request)
@@ -592,7 +595,8 @@ struct HFRepositoryInspector: Sendable {
                 throw HFInspectionError.unsupportedShardedArtifact(filename)
             }
             guard filename.lowercased().hasSuffix(".gguf") else { continue }
-            guard let size = Self.int64(sibling["size"]), size > 0 else {
+            guard let size = Self.int64(sibling["size"]),
+                  (1...Self.maximumSupportedArtifactBytes).contains(size) else {
                 throw HFInspectionError.malformedMetadata(filename)
             }
             let lfs = sibling["lfs"] as? [String: Any]
@@ -745,7 +749,11 @@ struct ImportStoragePreflight: Equatable, Sendable {
     let requiredBytes: Int64
     let safetyMarginBytes: Int64
     let availableBytes: Int64
-    var canProceed: Bool { availableBytes >= requiredBytes + safetyMarginBytes }
+    var canProceed: Bool {
+        guard requiredBytes >= 0, safetyMarginBytes >= 0, availableBytes >= 0 else { return false }
+        let (total, overflow) = requiredBytes.addingReportingOverflow(safetyMarginBytes)
+        return !overflow && availableBytes >= total
+    }
 }
 
 struct ImportRAMAssessment: Equatable, Sendable {
@@ -755,9 +763,12 @@ struct ImportRAMAssessment: Equatable, Sendable {
     let classification: Classification
 
     static func estimatedBytes(artifactBytes: Int64, contextLength: Int) -> UInt64 {
-        UInt64(clamping: artifactBytes / 3)
-            + UInt64(max(contextLength, 512)) * 256_000
-            + MemoryProfile.productionReserveBytes
+        let artifact = UInt64(clamping: artifactBytes / 3)
+        let context = SaturatedArithmetic.multiply(UInt64(clamping: max(contextLength, 512)), 256_000)
+        return SaturatedArithmetic.add(
+            SaturatedArithmetic.add(artifact, context),
+            MemoryProfile.productionReserveBytes
+        )
     }
 
     var warning: String? {

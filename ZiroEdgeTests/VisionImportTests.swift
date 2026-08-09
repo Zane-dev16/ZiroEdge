@@ -138,6 +138,25 @@ final class VisionImportTests: XCTestCase {
 
     // MARK: - Vision Pair Candidate Properties
 
+    func testVisionPairCandidateCombinedSizeSaturates() {
+        let base = makeArtifact("base.gguf", role: .base, size: Int64.max)
+        let projector = makeArtifact("mmproj.gguf", role: .projector, size: 1)
+        let pair = VisionPairCandidate(base: base, projector: projector, confidence: .high)
+        XCTAssertEqual(pair.combinedSizeBytes, Int64.max)
+    }
+
+    func testVisionModelTotalSizeSaturates() {
+        let base = makeArtifact("base.gguf", role: .base, size: Int64.max)
+        let projector = makeArtifact("mmproj.gguf", role: .projector, size: 1)
+        let review = makeReview(artifacts: [base, projector])
+        let model = ImportedModelFactory.makeRecord(
+            review: review,
+            base: base,
+            projector: projector
+        ).model
+        XCTAssertEqual(model.totalFileSizeBytes, Int64.max)
+    }
+
     func testVisionPairCandidateCombinedSize() {
         let base = makeArtifact("base-Q4_K_M.gguf", role: .base, size: 3_000_000_000)
         let projector = makeArtifact("mmproj-Q8_0.gguf", role: .projector, size: 500_000_000)

@@ -353,7 +353,192 @@ final class ImportedModelRemovalTests: XCTestCase {
         XCTAssertFalse(ExperimentalModelConsent.isGranted(for: installed.model))
     }
 
+    // MARK: - Forget incomplete imports
+
+    @MainActor
+    func testCanForgetImportPredicateCoversIncompleteStatesInstalledAndCurated() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = ImportedModelStore(directory: root.appendingPathComponent("models"))
+        let record = makeRecord(id: "hf-forget-predicate-\(UUID().uuidString)")
+        try store.upsert(record)
+        let manager = DownloadManager(availableDiskSpaceProvider: { .max })
+        let viewModel = removalViewModel(manager: manager, store: store, root: root)
+
+        for state: DownloadState in [
+            .notDownloaded, .paused(progress: 0.2), .cancelled, .failed(error: .networkError),
+        ] {
+            manager.downloadStatuses[record.id] = ModelDownloadStatus(
+                modelID: record.id,
+                baseState: state,
+                mmprojState: nil
+            )
+            XCTAssertTrue(viewModel.canForgetImport(record.model), "Expected forget for \(state)")
+        }
+        manager.downloadStatuses[record.id] = ModelDownloadStatus(
+            modelID: record.id,
+            baseState: .downloaded,
+            mmprojState: nil
+        )
+        XCTAssertFalse(viewModel.canForgetImport(record.model))
+        XCTAssertFalse(viewModel.canForgetImport(ModelRegistry.llama32_3B))
+    }
+
+    @MainActor
+    func testForgetIncompleteImportRemovesRecordResumeMetadataAndStaging() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = ImportedModelStore(directory: root.appendingPathComponent("models"))
+        let record = makeRecord(id: "hf-forget-incomplete-\(UUID().uuidString)")
+        try store.upsert(record)
+        let task = DownloadTask(model: record.model, artifact: .base)
+        try Data("partial".utf8).write(to: task.stagingURL, options: .atomic)
+        try Data("resume".utf8).write(to: task.resumeDataURL, options: .atomic)
+        task.progress = 0.25
+        let manager = DownloadManager(availableDiskSpaceProvider: { .max })
+        manager.persistDurableState(for: task)
+        manager.downloadStatuses[record.id] = ModelDownloadStatus(
+            modelID: record.id,
+            baseState: .paused(progress: 0.25),
+            mmprojState: nil
+        )
+        let viewModel = removalViewModel(manager: manager, store: store, root: root)
+
+        try await viewModel.deleteModel(record.model)
+
+        XCTAssertNil(store.record(id: record.id))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: task.stagingURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: task.resumeDataURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: task.metadataURL.path))
+    }
+
+    @MainActor
+    func testForgetPreservesSharedDigestSiblingActiveTransfer() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = ImportedModelStore(directory: root.appendingPathComponent("models"))
+        let digest = String(repeating: "d", count: 64)
+        let first = makeRecord(id: "hf-shared-forget-a-\(UUID().uuidString)", digest: digest)
+        let second = makeRecord(
+            id: "hf-shared-forget-b-\(UUID().uuidString)",
+            digest: digest,
+            repo: "acme/shared-sibling"
+        )
+        try store.upsert(first)
+        try store.upsert(second)
+        let task = DownloadTask(model: first.model, artifact: .base)
+        try Data("shared partial".utf8).write(to: task.stagingURL, options: .atomic)
+        task.progress = 0.4
+        let manager = DownloadManager(availableDiskSpaceProvider: { .max })
+        manager.activeTasks[task.storageID] = task
+        manager.persistDurableState(for: task)
+        let viewModel = removalViewModel(manager: manager, store: store, root: root)
+
+        try await viewModel.deleteModel(first.model)
+
+        XCTAssertNil(store.record(id: first.id))
+        XCTAssertNotNil(store.record(id: second.id))
+        XCTAssertTrue(manager.activeTasks[task.storageID] === task)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: task.stagingURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: task.metadataURL.path))
+        manager.activeTasks.removeValue(forKey: task.storageID)
+        try? FileManager.default.removeItem(at: task.stagingURL)
+        try? FileManager.default.removeItem(at: task.metadataURL)
+    }
+
+    @MainActor
+    func testForgetPartialVisionImportRemovesBaseAndProjectorState() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = ImportedModelStore(directory: root.appendingPathComponent("models"))
+        let record = makeVisionRecord(id: "hf-forget-vision-\(UUID().uuidString)")
+        try store.upsert(record)
+        let baseTask = DownloadTask(model: record.model, artifact: .base)
+        let projectorTask = DownloadTask(model: record.model, artifact: .mmproj)
+        for task in [baseTask, projectorTask] {
+            try Data("partial".utf8).write(to: task.stagingURL, options: .atomic)
+            task.progress = 0.1
+        }
+        let manager = DownloadManager(availableDiskSpaceProvider: { .max })
+        manager.persistDurableState(for: baseTask)
+        manager.persistDurableState(for: projectorTask)
+        let viewModel = removalViewModel(manager: manager, store: store, root: root)
+
+        try await viewModel.deleteModel(record.model)
+
+        XCTAssertNil(store.record(id: record.id))
+        for task in [baseTask, projectorTask] {
+            XCTAssertFalse(FileManager.default.fileExists(atPath: task.stagingURL.path))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: task.metadataURL.path))
+        }
+    }
+
+    @MainActor
+    func testReimportAfterForgetHasNoStaleDurableState() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = ImportedModelStore(directory: root.appendingPathComponent("models"))
+        let record = makeRecord(id: "hf-reimport-\(UUID().uuidString)")
+        try store.upsert(record)
+        let task = DownloadTask(model: record.model, artifact: .base)
+        try Data("partial".utf8).write(to: task.stagingURL, options: .atomic)
+        task.progress = 0.2
+        let manager = DownloadManager(availableDiskSpaceProvider: { .max })
+        manager.persistDurableState(for: task)
+        let viewModel = removalViewModel(manager: manager, store: store, root: root)
+        try await viewModel.deleteModel(record.model)
+
+        try store.upsert(record)
+        let relaunched = DownloadManager(availableDiskSpaceProvider: { .max })
+        relaunched.restoreDurableTransfers(models: [record.model])
+        XCTAssertNil(relaunched.activeTasks[task.storageID])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: task.stagingURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: task.metadataURL.path))
+    }
+
+    @MainActor
+    private func removalViewModel(
+        manager: DownloadManager,
+        store: ImportedModelStore,
+        root: URL
+    ) -> ModelsViewModel {
+        ModelsViewModel(
+            downloadManager: manager,
+            lifecycleManager: ModelLifecycleManager(
+                inferenceService: InferenceService(),
+                memoryBudgeter: MemoryBudgeter()
+            ),
+            importedModelStore: store,
+            importedModelUpdateStore: ImportedModelUpdateStore(
+                directory: root.appendingPathComponent("updates")
+            )
+        )
+    }
+
     // MARK: - Helpers
+
+    private func makeVisionRecord(id: String) -> ImportedModelRecord {
+        let base = HFArtifact(
+            filename: "vision-Q4_K_M.gguf", size: 16,
+            sha256: String(repeating: "1", count: 64),
+            quantization: "Q4_K_M", architecture: "llama", role: .base,
+            metadata: HFGGUFMetadata(architecture: "llama", contextLength: 2048)
+        )
+        let projector = HFArtifact(
+            filename: "mmproj-vision-F16.gguf", size: 16,
+            sha256: String(repeating: "2", count: 64),
+            quantization: "F16", architecture: "clip", role: .projector,
+            metadata: HFGGUFMetadata(architecture: "clip", contextLength: nil)
+        )
+        let review = HFRepositoryReview(
+            repositoryID: "acme/vision", revision: String(repeating: "f", count: 40),
+            licenseName: "MIT", licenseURL: URL(string: "https://example.com/license")!,
+            artifacts: [base, projector]
+        )
+        return ImportedModelFactory.makeRecord(
+            review: review, base: base, projector: projector, stableID: id
+        )
+    }
 
     private func makeRecord(
         id: String,

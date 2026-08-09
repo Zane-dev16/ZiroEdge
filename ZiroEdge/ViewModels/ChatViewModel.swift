@@ -74,7 +74,7 @@ final class ChatViewModel: ObservableObject {
     // MARK: - Dependencies
 
     private let persistence: PersistenceController
-    private let inferenceService: InferenceService
+    private let inferenceService: any InferenceServiceProtocol
     private let sessionActor: ChatSessionActor
     private let lifecycleManager: ModelLifecycleManager
     private let downloadStatusProvider: any ModelDownloadStatusProvider
@@ -99,7 +99,7 @@ final class ChatViewModel: ObservableObject {
 
     init(
         persistence: PersistenceController,
-        inferenceService: InferenceService,
+        inferenceService: any InferenceServiceProtocol,
         sessionActor: ChatSessionActor,
         lifecycleManager: ModelLifecycleManager,
         downloadStatusProvider: any ModelDownloadStatusProvider,
@@ -253,7 +253,7 @@ final class ChatViewModel: ObservableObject {
         truncationWarning = nil
         errorMessage = nil
 
-        if let model = ModelRegistry.libraryModels.first(where: { $0.id == conversation.modelID }) {
+        if let model = modelProvider().first(where: { $0.id == conversation.modelID }) {
             unavailableConversationModelID = nil
             if let readyVariant = availableModels.first(where: { $0.id == model.id }) {
                 await selectModel(readyVariant)
@@ -479,16 +479,22 @@ extension ChatViewModel {
         }
 
         let systemPrompt = effectiveSystemPrompt
+        let sampling: SamplingConfig
+        if let selectedModel, selectedModel.isImported {
+            sampling = modelProvider().first(where: { $0.id == selectedModel.id })?.config.defaultSampling ?? .default
+        } else {
+            sampling = selectedModel?.config.defaultSampling ?? .default
+        }
         if hasImages {
             await sessionActor.startVisionStream(
                 conversationID: conversationID, messages: history, images: images,
-                systemPrompt: systemPrompt, sampling: .default,
+                systemPrompt: systemPrompt, sampling: sampling,
                 onToken: onToken, onComplete: onComplete, onError: onError
             )
         } else {
             await sessionActor.startStream(
                 conversationID: conversationID, messages: history,
-                systemPrompt: systemPrompt, sampling: .default,
+                systemPrompt: systemPrompt, sampling: sampling,
                 onToken: onToken, onComplete: onComplete, onError: onError
             )
         }

@@ -196,10 +196,72 @@ final class ImportTransferLifecycleTests: XCTestCase {
     }
 
     @MainActor
-    func testLargeImportedArtifactUsesBackgroundDownloadPath() {
+    func testLargeImportedArtifactUsesBoundedChunkedTransfer() {
         let model = makeImportedModel(size: DownloadManager.chunkedDownloadThreshold + 1)
         let task = DownloadTask(model: model, artifact: .base)
-        XCTAssertFalse(managerForTransferDecision().shouldUseChunkedTransfer(for: task))
+        XCTAssertTrue(managerForTransferDecision().shouldUseChunkedTransfer(for: task))
+    }
+
+    @MainActor
+    func testLargeImportedDurableStagingRestoresAsChunked() throws {
+        let size = DownloadManager.chunkSize * 3 + 1
+        let model = makeImportedModel(size: size)
+        let task = DownloadTask(model: model, artifact: .base)
+        try Data(repeating: 0xAA, count: 1).write(to: task.stagingURL)
+        task.progress = 0.1
+        managerForTransferDecision().persistDurableState(for: task)
+        defer {
+            try? FileManager.default.removeItem(at: task.stagingURL)
+            try? FileManager.default.removeItem(at: task.metadataURL)
+        }
+
+        let restored = managerForTransferDecision()
+        restored.restoreDurableTransfers(models: [model])
+        let active = try XCTUnwrap(restored.activeTasks[task.storageID])
+        XCTAssertTrue(active.isChunked)
+        XCTAssertEqual(active.totalChunks, 4)
+    }
+
+    @MainActor
+    func testChunkCountHandlesExtremeByteCountWithoutOverflow() {
+        XCTAssertEqual(DownloadManager.chunkCount(for: Int64.max), 87_960_930_223)
+    }
+
+    @MainActor
+    func testChunkResumeTruncatesToPreviousBoundary() throws {
+        let model = makeImportedModel(size: DownloadManager.chunkSize * 3)
+        let task = DownloadTask(model: model, artifact: .base)
+        let partialSize = DownloadManager.chunkSize + 17
+        let handle = try FileHandle(forWritingTo: task.stagingURL)
+        try handle.truncate(atOffset: UInt64(partialSize))
+        try handle.close()
+        defer { try? FileManager.default.removeItem(at: task.stagingURL) }
+
+        let offset = try managerForTransferDecision().resumableChunkOffset(for: task)
+        XCTAssertEqual(offset, DownloadManager.chunkSize)
+        let size = try FileManager.default.attributesOfItem(atPath: task.stagingURL.path)[.size] as? NSNumber
+        XCTAssertEqual(size?.int64Value, DownloadManager.chunkSize)
+    }
+
+    @MainActor
+    func testContentRangeMustMatchExactly() {
+        let manager = managerForTransferDecision()
+        let url = URL(string: "https://huggingface.co/acme/model/resolve/revision/model.gguf")!
+        let accepted = HTTPURLResponse(
+            url: url, statusCode: 206, httpVersion: nil,
+            headerFields: ["Content-Range": "bytes 0-99/200"]
+        )!
+        let rejected = HTTPURLResponse(
+            url: url, statusCode: 206, httpVersion: nil,
+            headerFields: ["Content-Range": "bytes 0-100/200"]
+        )!
+        let wrongStatus = HTTPURLResponse(
+            url: url, statusCode: 200, httpVersion: nil,
+            headerFields: ["Content-Range": "bytes 0-99/200"]
+        )!
+        XCTAssertTrue(manager.isValidChunkResponse(accepted, start: 0, end: 99, total: 200))
+        XCTAssertFalse(manager.isValidChunkResponse(rejected, start: 0, end: 99, total: 200))
+        XCTAssertFalse(manager.isValidChunkResponse(wrongStatus, start: 0, end: 99, total: 200))
     }
 
     @MainActor

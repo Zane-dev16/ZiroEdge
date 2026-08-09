@@ -67,6 +67,9 @@ final class ModelsViewModel: ObservableObject {
         self.launchOfflineAvailabilityReport = offlineAvailabilityReport
         self.importedModelStore = importedModelStore
         self.importedModelUpdateStore = importedModelUpdateStore
+        downloadManager.additionalTransferModelsProvider = {
+            importedModelStore.models + importedModelUpdateStore.models
+        }
 
         // Forward download manager changes to trigger UI updates
         downloadManager.objectWillChange
@@ -116,13 +119,13 @@ final class ModelsViewModel: ObservableObject {
         let basePath = ModelManagerService.baseModelPath(for: model)
         if let attrs = try? FileManager.default.attributesOfItem(atPath: basePath.path),
            let size = attrs[.size] as? Int64 {
-            total += size
+            total = SaturatedArithmetic.add(total, size)
         }
         if model.requiresMMProj {
             let mmprojPath = ModelManagerService.mmprojModelPath(for: model)
             if let attrs = try? FileManager.default.attributesOfItem(atPath: mmprojPath.path),
                let size = attrs[.size] as? Int64 {
-                total += size
+                total = SaturatedArithmetic.add(total, size)
             }
         }
         return ByteCountFormatter.string(fromByteCount: total, countStyle: .file)
@@ -276,7 +279,12 @@ final class ModelsViewModel: ObservableObject {
         downloadManager.discardPartialDownload(for: model)
     }
 
-    /// Request model deletion.
+    /// An incomplete imported record can be forgotten without presenting it as installed.
+    func canForgetImport(_ model: AIModel) -> Bool {
+        model.isImported && !isDownloaded(model)
+    }
+
+    /// Request model deletion or import removal.
     func requestDelete(_ model: AIModel) {
         pendingDeleteModel = model
         showingDeleteConfirmation = true
@@ -339,17 +347,24 @@ final class ModelsViewModel: ObservableObject {
         for model: AIModel,
         contextLength: Int,
         sampling: SamplingConfig
-    ) {
-        guard model.isImported else { return }
-        try? ImportedModelStore.shared.update(id: model.id) { record in
-            record.config = .imported(
-                promptPath: record.config.promptPath,
-                contextLength: contextLength,
-                sampling: sampling,
-                addBos: record.config.addBos,
-                stopStrings: record.config.stopStrings
-            )
-            if case .loadFailed = record.loadStatus { record.loadStatus = .configurationChanged }
+    ) -> Result<Void, Error> {
+        guard model.isImported else {
+            return .failure(ImportedModelStoreError.recordNotFound(model.id))
+        }
+        do {
+            try importedModelStore.update(id: model.id) { record in
+                record.config = .imported(
+                    promptPath: record.config.promptPath,
+                    contextLength: contextLength,
+                    sampling: sampling,
+                    addBos: record.config.addBos,
+                    stopStrings: record.config.stopStrings
+                )
+                if case .loadFailed = record.loadStatus { record.loadStatus = .configurationChanged }
+            }
+            return .success(())
+        } catch {
+            return .failure(error)
         }
     }
 

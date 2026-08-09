@@ -31,6 +31,8 @@ struct ModelDetailView: View {
             downloadSection
             if viewModel.isDownloaded(model) {
                 actionsSection
+            } else if viewModel.canForgetImport(model) {
+                forgetImportSection
             }
         }
         .navigationTitle(model.displayName)
@@ -400,6 +402,18 @@ struct ModelDetailView: View {
             } label: {
                 Label("Delete Model", systemImage: "trash")
             }
+        }
+    }
+
+    private var forgetImportSection: some View {
+        Section {
+            Button(role: .destructive) {
+                viewModel.requestDelete(model)
+            } label: {
+                Label("Forget Import", systemImage: "trash")
+            }
+        } footer: {
+            Text("Forgetting removes this import record and its unreferenced partial transfer data.")
         }
     }
 }

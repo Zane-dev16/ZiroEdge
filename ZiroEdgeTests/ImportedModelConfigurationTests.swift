@@ -135,6 +135,81 @@ final class ImportedModelConfigurationTests: XCTestCase {
         XCTAssertEqual(record.config.contextLength, 4096)
     }
 
+    // MARK: - Persisted settings
+
+    @MainActor
+    func testConfigurationSaveFailureIsReturnedAndRecordIsUnchanged() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var writes = 0
+        let store = ImportedModelStore(directory: root, writer: { data, url in
+            writes += 1
+            if writes == 2 { throw CocoaError(.fileWriteNoPermission) }
+            try data.write(to: url, options: .atomic)
+        })
+        let record = ImportedModelFactory.makeRecord(
+            review: makeReview(artifacts: [makeArtifact("model-Q4_K_M.gguf")]),
+            base: makeArtifact("model-Q4_K_M.gguf"),
+            stableID: "hf-config-failure-\(UUID().uuidString)"
+        )
+        try store.upsert(record)
+        let viewModel = modelsViewModel(store: store, root: root)
+        let requested = SamplingConfig(
+            temperature: 1.5, topP: 0.4, topK: 7, maxTokens: 777, repeatPenalty: 1.4
+        )
+
+        guard case .failure = viewModel.updateImportedConfiguration(
+            for: record.model,
+            contextLength: 3072,
+            sampling: requested
+        ) else { return XCTFail("Expected visible save failure") }
+        XCTAssertEqual(store.record(id: record.id)?.config, record.config)
+    }
+
+    @MainActor
+    func testConfigurationSaveSuccessPersistsBoundedValues() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = ImportedModelStore(directory: root)
+        let base = makeArtifact("model-Q4_K_M.gguf")
+        let record = ImportedModelFactory.makeRecord(
+            review: makeReview(artifacts: [base]),
+            base: base,
+            stableID: "hf-config-success-\(UUID().uuidString)"
+        )
+        try store.upsert(record)
+        let viewModel = modelsViewModel(store: store, root: root)
+
+        guard case .success = viewModel.updateImportedConfiguration(
+            for: record.model,
+            contextLength: 99_999,
+            sampling: SamplingConfig(
+                temperature: 9, topP: -1, topK: 900, maxTokens: 99_999, repeatPenalty: 5
+            )
+        ) else { return XCTFail("Expected save success") }
+        let persisted = try XCTUnwrap(store.record(id: record.id))
+        XCTAssertEqual(persisted.config.contextLength, 4096)
+        XCTAssertEqual(persisted.config.defaultSampling.temperature, 2)
+        XCTAssertEqual(persisted.config.defaultSampling.topP, 0)
+        XCTAssertEqual(persisted.config.defaultSampling.topK, 100)
+        XCTAssertEqual(persisted.config.defaultSampling.maxTokens, 4096)
+    }
+
+    @MainActor
+    private func modelsViewModel(store: ImportedModelStore, root: URL) -> ModelsViewModel {
+        ModelsViewModel(
+            downloadManager: DownloadManager(availableDiskSpaceProvider: { .max }),
+            lifecycleManager: ModelLifecycleManager(
+                inferenceService: InferenceService(),
+                memoryBudgeter: MemoryBudgeter()
+            ),
+            importedModelStore: store,
+            importedModelUpdateStore: ImportedModelUpdateStore(
+                directory: root.appendingPathComponent("updates")
+            )
+        )
+    }
+
     // MARK: - Experimental labeling
 
     func testImportedModelsAreLabeledExperimental() {

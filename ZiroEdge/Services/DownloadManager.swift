@@ -132,12 +132,19 @@ final class DownloadManager: NSObject, ObservableObject {
     var injectPromotionFailureForTesting = false
     var injectAvailableDiskSpaceForTesting: Int64?
     private var availableDiskSpaceProviderForTesting: (@MainActor () -> Int64)?
+    var additionalTransferModelsProvider: @MainActor () -> [AIModel] = { [] }
     var lastProgressTime: [String: Date] = [:]
     var stuckTimer: Timer?
     var protectedDataObserver: NSObjectProtocol?
     static let chunkSize: Int64 = 100 * 1_024 * 1_024
     static let chunkedDownloadThreshold: Int64 = 2_147_483_648
     static let maximumChunkRetries = 3
+
+    static func chunkCount(for byteCount: Int64) -> Int64 {
+        guard byteCount > 0 else { return 0 }
+        return byteCount / chunkSize + (byteCount.isMultiple(of: chunkSize) ? 0 : 1)
+    }
+
     /// Free-space reserve kept beyond missing artifact bytes so filesystem
     /// metadata, atomic promotion, and normal app writes cannot consume the
     /// device's final capacity during a multi-gigabyte installation.
@@ -471,7 +478,10 @@ extension DownloadManager {
     func deleteModel(_ model: AIModel) {
         cancelDownload(for: model)
         discardPartialDownload(for: model)
-        ModelManagerService.deleteModel(model)
+        ModelManagerService.deleteModel(
+            model,
+            preservingReferences: additionalTransferModelsProvider()
+        )
         if !ModelManagerService.isBaseArtifactShared(model) {
             try? fileManager.removeItem(at: DownloadTask(model: model, artifact: .base).resumeDataURL)
         }
@@ -679,7 +689,7 @@ extension DownloadManager {
         task.isPaused = !snapshot.failed && !task.awaitingBackgroundTaskReconciliation
         task.isChunked = hasStaging && shouldUseChunkedTransfer(for: task)
         if task.isChunked {
-            task.totalChunks = (task.expectedBytes + 100 * 1_024 * 1_024 - 1) / (100 * 1_024 * 1_024)
+            task.totalChunks = Self.chunkCount(for: task.expectedBytes)
         }
         task.state = snapshot.failed
             ? .failed(error: .networkError)
@@ -734,8 +744,12 @@ extension DownloadManager {
         guard activeTasks[key] === task, !task.isCancelled else { return }
         task.downloadURL = downloadURL
         if shouldUseChunkedTransfer(for: task) {
+            // Background-session resume data belongs to the pre-chunk path and
+            // cannot describe the bounded range protocol entered here.
+            try? fileManager.removeItem(at: task.resumeDataURL)
+            task.resumeData = nil
             task.isChunked = true
-            task.totalChunks = (task.expectedBytes + Self.chunkSize - 1) / Self.chunkSize
+            task.totalChunks = Self.chunkCount(for: task.expectedBytes)
             self.chunkedDownload(task: task, key: key)
             return
         }
@@ -752,7 +766,7 @@ extension DownloadManager {
         task.task?.resume()
     }
     func shouldUseChunkedTransfer(for task: DownloadTask) -> Bool {
-        task.expectedBytes > Self.chunkedDownloadThreshold && !task.model.isImported
+        task.expectedBytes > Self.chunkedDownloadThreshold
     }
 
     @discardableResult
@@ -811,8 +825,12 @@ extension DownloadManager: URLSessionDownloadDelegate, URLSessionDataDelegate {
             }
             let start = task.currentChunkOffset
             let end = task.currentChunkEnd
-            guard response.statusCode == 206,
-                  contentRange(response, matchesStart: start, end: end, total: task.expectedBytes) else {
+            guard isValidChunkResponse(
+                response,
+                start: start,
+                end: end,
+                total: task.expectedBytes
+            ) else {
                 let isStaleAuth = response.statusCode == 401 || response.statusCode == 403
                 let hadSignedURL = task.downloadURL != task.sourceURL
                 let hadResumeData = fileManager.fileExists(atPath: task.resumeDataURL.path)
@@ -1038,7 +1056,10 @@ extension DownloadManager: URLSessionDownloadDelegate, URLSessionDataDelegate {
             var redirectedRequest = request
             if let downloadTask = activeTasks[key], downloadTask.isChunked {
                 let start = downloadTask.currentChunkOffset
-                let end = min(start + Self.chunkSize - 1, downloadTask.expectedBytes - 1)
+                let end = min(
+                    SaturatedArithmetic.add(start, Self.chunkSize - 1),
+                    downloadTask.expectedBytes - 1
+                )
                 redirectedRequest.setValue("bytes=\(start)-\(end)", forHTTPHeaderField: "Range")
             }
             completionHandler(redirectedRequest)

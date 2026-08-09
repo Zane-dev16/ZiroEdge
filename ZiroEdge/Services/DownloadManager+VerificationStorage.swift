@@ -19,7 +19,10 @@ extension DownloadManager {
             guard stagedBytes < task.expectedBytes else {
                 throw CocoaError(.fileReadCorruptFile)
             }
-            let end = min(stagedBytes + Self.chunkSize - 1, task.expectedBytes - 1)
+            let end = min(
+                SaturatedArithmetic.add(stagedBytes, Self.chunkSize - 1),
+                task.expectedBytes - 1
+            )
             var request = URLRequest(url: task.downloadURL ?? task.sourceURL)
             request.setValue("bytes=\(stagedBytes)-\(end)", forHTTPHeaderField: "Range")
             request.timeoutInterval = 300
@@ -69,7 +72,7 @@ extension DownloadManager {
     func completeChunk(task: DownloadTask, key: String) {
         let completedBytes = task.currentChunkEnd + 1
         task.currentChunkOffset = completedBytes
-        task.currentChunkIndex = (completedBytes + Self.chunkSize - 1) / Self.chunkSize
+        task.currentChunkIndex = Self.chunkCount(for: completedBytes)
         task.chunkRetryCount = 0
         task.progress = Double(completedBytes) / Double(task.expectedBytes)
         task.state = .downloading(progress: task.progress)
@@ -101,6 +104,16 @@ extension DownloadManager {
         }
         return value == "bytes \(start)-\(end)/\(total)"
     }
+    func isValidChunkResponse(
+        _ response: HTTPURLResponse,
+        start: Int64,
+        end: Int64,
+        total: Int64
+    ) -> Bool {
+        response.statusCode == 206
+            && contentRange(response, matchesStart: start, end: end, total: total)
+    }
+
     func retryChunk(task: DownloadTask, key: String, reason: String) {
         guard activeTasks[key] === task, !task.isPaused, !task.isCancelled else { return }
         closeChunkFile(for: task)
@@ -166,7 +179,10 @@ extension DownloadManager {
         // Recheck storage before resuming — space may have changed since the pause.
         let stagedBytes = ((try? fileManager.attributesOfItem(atPath: task.stagingURL.path))?[.size] as? NSNumber)?.int64Value ?? 0
         let remaining = max(0, task.expectedBytes - stagedBytes)
-        let required = remaining + (remaining > 0 ? Self.storageSafetyMarginBytes : 0)
+        let required = SaturatedArithmetic.add(
+            remaining,
+            remaining > 0 ? Self.storageSafetyMarginBytes : 0
+        )
         if required > 0 && availableDiskSpace < required {
             task.state = .failed(error: .diskSpaceInsufficient)
             updateStatus(model: model)
@@ -297,7 +313,7 @@ extension DownloadManager {
     }
 
     func hasOtherTransferReference(for task: DownloadTask) -> Bool {
-        ModelRegistry.transferModels.contains { candidate in
+        (ModelRegistry.transferModels + additionalTransferModelsProvider()).contains { candidate in
             candidate.id != task.model.id
                 && DownloadTask(model: candidate, artifact: task.artifact).storageID == task.storageID
         }

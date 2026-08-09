@@ -36,6 +36,16 @@ final class ImportStoragePreflightTests: XCTestCase {
     }
 
     @MainActor
+    func testStoragePreflightRejectsOverflowingRequirementAndMargin() {
+        let preflight = ImportStoragePreflight(
+            requiredBytes: Int64.max,
+            safetyMarginBytes: 1,
+            availableBytes: Int64.max
+        )
+        XCTAssertFalse(preflight.canProceed)
+    }
+
+    @MainActor
     func testStoragePreflightAllowsWhenWellAboveMargin() {
         let required: Int64 = 16_000_000
         let safetyMargin: Int64 = 500_000_000
@@ -94,6 +104,16 @@ final class ImportStoragePreflightTests: XCTestCase {
         )
         XCTAssertEqual(assessment.classification, .likelyFits)
         XCTAssertNil(assessment.warning)
+    }
+
+    func testExtremeRAMInputsSaturateWithoutTrapping() {
+        XCTAssertEqual(
+            ImportRAMAssessment.estimatedBytes(
+                artifactBytes: Int64.max,
+                contextLength: Int.max
+            ),
+            UInt64.max
+        )
     }
 
     func testRAMAssessmentRiskyWhenEstimateAbovePhysical() {

@@ -62,7 +62,7 @@ struct VisionPairCandidate: Identifiable, Hashable, Sendable {
     let confidence: VisionPairConfidence
 
     /// Combined download size in bytes.
-    var combinedSizeBytes: Int64 { base.size + projector.size }
+    var combinedSizeBytes: Int64 { SaturatedArithmetic.add(base.size, projector.size) }
 
     /// Human-readable combined size.
     var formattedCombinedSize: String {

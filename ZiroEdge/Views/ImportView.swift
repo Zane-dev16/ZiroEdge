@@ -68,7 +68,8 @@ struct ImportView: View {
                                 viewModel.selectedBase = artifact
                                 viewModel.visionPairConfirmed = false
                             }
-                        )
+                        ),
+                        capabilityEstimate: { viewModel.capabilityEstimate(for: $0) }
                     )
                 }
             }

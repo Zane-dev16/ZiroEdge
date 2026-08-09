@@ -45,6 +45,15 @@ final class ImportViewModel: ObservableObject {
 
     var baseCandidates: [HFArtifact] { review?.baseArtifacts ?? [] }
 
+    func capabilityEstimate(for artifact: HFArtifact) -> VariantCapabilityEstimate {
+        VariantCapabilityEstimate(
+            artifact: artifact,
+            candidates: baseCandidates,
+            physicalRAM: physicalRAM(),
+            contextLength: artifact.metadata.contextLength ?? 2048
+        )
+    }
+
     // MARK: - Vision Pair Resolution
 
     /// All compatible vision pairs for the current review, ranked by confidence.
@@ -99,7 +108,7 @@ final class ImportViewModel: ObservableObject {
 
     var selectedBytes: Int64 {
         guard let selectedBase else { return 0 }
-        return selectedBase.size + (selectedProjector?.size ?? 0)
+        return SaturatedArithmetic.add(selectedBase.size, selectedProjector?.size ?? 0)
     }
 
     var storagePreflight: ImportStoragePreflight {
@@ -113,8 +122,10 @@ final class ImportViewModel: ObservableObject {
                 $0.mmprojSHA256 == artifact.sha256 && ModelManagerService.isMMProjDownloaded($0)
             }
         } ?? false
-        let required = (reusableBase ? 0 : (selectedBase?.size ?? 0))
-            + (reusableProjector ? 0 : (selectedProjector?.size ?? 0))
+        let required = SaturatedArithmetic.add(
+            reusableBase ? 0 : (selectedBase?.size ?? 0),
+            reusableProjector ? 0 : (selectedProjector?.size ?? 0)
+        )
         return ImportStoragePreflight(
             requiredBytes: required,
             safetyMarginBytes: downloadManager.storageSafetyMargin(for: required),
@@ -285,8 +296,10 @@ final class ImportedModelUpdateCoordinator: ObservableObject {
                 $0.mmprojSHA256 == artifact.sha256 && ModelManagerService.isMMProjDownloaded($0)
             }
         } ?? false
-        let required = (reusableBase ? 0 : base.size)
-            + (reusableProjector ? 0 : (projector?.size ?? 0))
+        let required = SaturatedArithmetic.add(
+            reusableBase ? 0 : base.size,
+            reusableProjector ? 0 : (projector?.size ?? 0)
+        )
         return ImportStoragePreflight(
             requiredBytes: required,
             safetyMarginBytes: downloadManager.storageSafetyMargin(for: required),
@@ -294,8 +307,17 @@ final class ImportedModelUpdateCoordinator: ObservableObject {
         )
     }
 
+    func capabilityEstimate(for artifact: HFArtifact, candidates: [HFArtifact]) -> VariantCapabilityEstimate {
+        VariantCapabilityEstimate(
+            artifact: artifact,
+            candidates: candidates,
+            physicalRAM: physicalRAM(),
+            contextLength: artifact.metadata.contextLength ?? 2048
+        )
+    }
+
     func ramAssessment(base: HFArtifact, projector: HFArtifact?) -> ImportRAMAssessment {
-        let bytes = base.size + (projector?.size ?? 0)
+        let bytes = SaturatedArithmetic.add(base.size, projector?.size ?? 0)
         let estimated = ImportRAMAssessment.estimatedBytes(
             artifactBytes: bytes,
             contextLength: base.metadata.contextLength ?? 2048

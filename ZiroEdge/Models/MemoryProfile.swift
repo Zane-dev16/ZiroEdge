@@ -207,9 +207,12 @@ enum MemoryProfileRegistry {
     /// Imported models have no retained device calibration yet. The estimate is
     /// conservative and only enables the explicit experimental-consent path.
     static func importedProfile(for model: AIModel) -> MemoryProfile {
-        let contextScale = UInt64(max(model.config.contextLength, 512)) * 256_000
+        let contextScale = SaturatedArithmetic.multiply(
+            UInt64(clamping: max(model.config.contextLength, 512)),
+            256_000
+        )
         let artifactResidentEstimate = UInt64(clamping: model.totalFileSizeBytes / 3)
-        let (estimated, overflow) = artifactResidentEstimate.addingReportingOverflow(contextScale)
+        let estimated = SaturatedArithmetic.add(artifactResidentEstimate, contextScale)
         let revision = model.huggingFaceProvenance?.revision.prefix(12) ?? "unknown"
         return MemoryProfile(
             id: "hf-\(model.id)-\(revision)-ctx\(model.config.contextLength)-p1",
@@ -222,7 +225,7 @@ enum MemoryProfileRegistry {
             evidenceStatus: .unvalidated,
             policyVersion: 1,
             measuredFullWorkloadPeakDeltaBytes: nil,
-            measuredLoadDeltaBytes: overflow ? UInt64.max / 2 : estimated,
+            measuredLoadDeltaBytes: estimated,
             safetyMultiplier: MemoryProfile.productionSafetyMultiplier,
             fixedReserveBytes: MemoryProfile.productionReserveBytes,
             minimumPhysicalRAMBytes: 1

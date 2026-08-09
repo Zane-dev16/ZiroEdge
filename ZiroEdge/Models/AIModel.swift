@@ -56,7 +56,7 @@ struct AIModel: Identifiable, Hashable, Sendable {
 
     /// Total download size (base + mmproj if present).
     var totalFileSizeBytes: Int64 {
-        baseFileSizeBytes + (mmprojFileSizeBytes ?? 0)
+        SaturatedArithmetic.add(baseFileSizeBytes, mmprojFileSizeBytes ?? 0)
     }
 
     /// Installed base-artifact key. Calibration may reuse a registered artifact without copying it.

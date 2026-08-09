@@ -581,12 +581,25 @@ enum ModelManagerService {
 
     /// Delete artifacts owned exclusively by one catalog entry. A shared base
     /// remains installed while another catalog variant references that storage ID.
-    static func deleteModel(_ model: AIModel) {
+    static func deleteModel(
+        _ model: AIModel,
+        preservingReferences references: [AIModel] = []
+    ) {
         let fm = FileManager.default
-        if !isBaseArtifactShared(model) {
+        let otherReferences = references.filter { $0.id != model.id }
+        let baseIsReferenced = otherReferences.contains {
+            $0.baseArtifactStorageID == model.baseArtifactStorageID
+        }
+        if !baseIsReferenced, !isBaseArtifactShared(model) {
             try? fm.removeItem(at: baseModelPath(for: model))
         }
-        if model.requiresMMProj, !isProjectorArtifactShared(model) {
+        let projectorIsReferenced = model.requiresMMProj && otherReferences.contains {
+            $0.requiresMMProj
+                && mmprojModelPath(for: $0) == mmprojModelPath(for: model)
+        }
+        if model.requiresMMProj,
+           !projectorIsReferenced,
+           !isProjectorArtifactShared(model) {
             try? fm.removeItem(at: mmprojModelPath(for: model))
         }
         logger.info("Deleted model-owned files: \(model.id, privacy: .public)")

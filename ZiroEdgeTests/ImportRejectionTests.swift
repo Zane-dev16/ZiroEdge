@@ -319,6 +319,46 @@ final class ImportRejectionTests: XCTestCase {
         )
     }
 
+    // MARK: - Artifact Size Bounds
+
+    func testMaximumInt64ArtifactSizeIsMalformedMetadata() async throws {
+        let inspector = sizeInspector(size: Int64.max)
+        do {
+            _ = try await inspector.inspect("acme/extreme")
+            XCTFail("Expected malformed metadata")
+        } catch {
+            XCTAssertEqual(error as? HFInspectionError, .malformedMetadata("model-Q4_K_M.gguf"))
+        }
+    }
+
+    func testExactlyFourTiBArtifactIsAccepted() async throws {
+        let review = try await sizeInspector(
+            size: HFRepositoryInspector.maximumSupportedArtifactBytes
+        ).inspect("acme/ceiling")
+        XCTAssertEqual(review.baseArtifacts.first?.size, 4_398_046_511_104)
+    }
+
+    private func sizeInspector(size: Int64) -> HFRepositoryInspector {
+        HFRepositoryInspector { _ in
+            let data = try JSONSerialization.data(withJSONObject: [
+                "sha": String(repeating: "a", count: 40),
+                "cardData": ["license": "mit"],
+                "gguf": ["architecture": "llama"],
+                "siblings": [[
+                    "rfilename": "model-Q4_K_M.gguf",
+                    "size": size,
+                    "lfs": ["sha256": String(repeating: "b", count: 64)],
+                ]],
+            ])
+            return (data, HTTPURLResponse(
+                url: URL(string: "https://huggingface.co/api/models/acme/extreme")!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!)
+        }
+    }
+
     // MARK: - No Transfer State Created
 
     @MainActor

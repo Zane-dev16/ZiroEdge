@@ -402,6 +402,40 @@ final class ImportedModelUpdateTests: XCTestCase {
         XCTAssertEqual(persisted?.provenance.revision, String(repeating: "a", count: 40))
     }
 
+    @MainActor
+    func testExtremeUpdateSizeFailsStoragePreflightWithoutTrapping() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = ImportedModelStore(directory: root.appendingPathComponent("models"))
+        let installed = makeImportedModel()
+        try store.upsert(makeRecord(model: installed, revision: String(repeating: "a", count: 40)))
+        let artifact = makeArtifact(
+            "model-Q8_0.gguf",
+            digest: String(repeating: "e", count: 64),
+            size: Int64.max
+        )
+        let review = makeReview(revision: String(repeating: "b", count: 40), artifacts: [artifact])
+        let coordinator = ImportedModelUpdateCoordinator(
+            inspector: HFRepositoryInspector { _ in throw URLError(.badServerResponse) },
+            store: store,
+            downloadManager: DownloadManager(availableDiskSpaceProvider: { Int64.max }),
+            updateStore: ImportedModelUpdateStore(directory: root.appendingPathComponent("updates")),
+            physicalRAM: { UInt64.max }
+        )
+
+        XCTAssertFalse(coordinator.storagePreflight(base: artifact, projector: nil).canProceed)
+        XCTAssertThrowsError(
+            try coordinator.stageUpdate(
+                existing: installed,
+                review: review,
+                base: artifact,
+                projector: nil
+            )
+        ) { error in
+            XCTAssertEqual(error as? DownloadError, .diskSpaceInsufficient)
+        }
+    }
+
     // MARK: - Helpers
 
     private func makeImportedModel(revision: String = String(repeating: "a", count: 40)) -> AIModel {

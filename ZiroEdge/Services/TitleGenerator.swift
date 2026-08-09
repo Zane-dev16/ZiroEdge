@@ -25,7 +25,7 @@ protocol TitleGeneratorProtocol: Sendable {
 actor TitleGenerator: TitleGeneratorProtocol {
 
     private let logger = Logger(subsystem: "com.zanish-labs.ziroedge", category: "title-gen")
-    private let inferenceService: InferenceService
+    private let inferenceService: any InferenceServiceProtocol
 
     /// System prompt that instructs the model to generate a short title.
     private static let systemPrompt =
@@ -45,7 +45,7 @@ actor TitleGenerator: TitleGeneratorProtocol {
 
     // MARK: - Initialization
 
-    init(inferenceService: InferenceService) {
+    init(inferenceService: any InferenceServiceProtocol) {
         self.inferenceService = inferenceService
     }
 
