@@ -55,8 +55,16 @@ final class ModelMigrationTests: XCTestCase {
 
         let baseSource = legacyURL(for: model, artifact: .base)
         let projectorSource = legacyURL(for: model, artifact: .mmproj)
-        try write(base, to: baseSource)
-        try write(projector, to: projectorSource)
+        let alternateBaseSource = baseSource.resolvingSymlinksInPath().standardizedFileURL
+        let alternateProjectorSource = projectorSource.resolvingSymlinksInPath().standardizedFileURL
+        XCTAssertNotEqual(baseSource.path, alternateBaseSource.path, "Fixture must exercise an aliased source path")
+        XCTAssertNotEqual(
+            projectorSource.path,
+            alternateProjectorSource.path,
+            "Fixture must exercise an aliased source path"
+        )
+        try write(base, to: alternateBaseSource)
+        try write(projector, to: alternateProjectorSource)
 
         let result = ModelMigrationService.migrateIfNeeded(models: [model])
 
