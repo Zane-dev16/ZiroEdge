@@ -747,8 +747,18 @@ extension ModelManagerService {
 
 extension ModelManagerService {
 
+#if DEBUG
+    /// Redirects migration storage into a test-owned root.
+    static var storageRootOverride: URL?
+#endif
+
     /// Root directory for managed, backup-excluded model storage.
     static var managedStorageDirectory: URL {
+#if DEBUG
+        if let storageRootOverride {
+            return storageRootOverride.appendingPathComponent("Managed", isDirectory: true)
+        }
+#endif
         let appSupport = FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask
         )[0]
@@ -790,6 +800,11 @@ extension ModelManagerService {
 
     /// Legacy models directory (pre-#4 location in Documents).
     static var legacyModelsDirectory: URL {
+#if DEBUG
+        if let storageRootOverride {
+            return storageRootOverride.appendingPathComponent("Legacy/Models", isDirectory: true)
+        }
+#endif
         let documents = FileManager.default.urls(
             for: .documentDirectory, in: .userDomainMask
         )[0]

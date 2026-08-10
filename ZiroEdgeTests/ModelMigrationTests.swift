@@ -17,13 +17,19 @@ final class ModelMigrationTests: XCTestCase {
 
     private var model: AIModel?
     private var cleanupURLs: [URL] = []
+    private var storageRoot: URL?
 
-    override func setUp() {
-        super.setUp()
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ZiroEdge-ModelMigrationTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        storageRoot = root
+        ModelManagerService.storageRootOverride = root
         ModelMigrationService.resetForTesting()
     }
 
-    override func tearDown() {
+    override func tearDownWithError() throws {
         if let model {
             ModelManagerService.deleteModel(model)
         }
@@ -32,7 +38,12 @@ final class ModelMigrationTests: XCTestCase {
         }
         cleanupURLs.removeAll()
         ModelMigrationService.resetForTesting()
-        super.tearDown()
+        if let storageRoot {
+            try? FileManager.default.removeItem(at: storageRoot)
+        }
+        storageRoot = nil
+        ModelManagerService.storageRootOverride = nil
+        try super.tearDownWithError()
     }
 
     func testValidLegacyPairMovesIntoManagedInstalledLibrary() throws {

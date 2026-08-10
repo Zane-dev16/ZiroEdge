@@ -233,7 +233,8 @@ extension ModelMigrationService {
         // destinations. Move them intact, but keep them out of Models/.
         if let enumerator = fileManager.enumerator(at: legacyRoot, includingPropertiesForKeys: [.isRegularFileKey]) {
             for case let source as URL in enumerator {
-                guard isRegularFile(source), !recognizedSources.contains(source.path) else { continue }
+                guard isRegularFile(source),
+                      !recognizedSources.contains(resourceIdentity(source)) else { continue }
                 let kind = legacyKind(for: source, relativeTo: legacyRoot)
                 let destinationDirectory: URL
                 switch kind {
@@ -281,7 +282,7 @@ extension ModelMigrationService {
         usedDestinations: inout Set<String>
     ) {
         guard fileManager.fileExists(atPath: source.path) else { return }
-        recognizedSources.insert(source.path)
+        recognizedSources.insert(resourceIdentity(source))
 
         let issues = ModelManagerService.artifactValidationIssues(
             at: source,
@@ -386,6 +387,10 @@ extension ModelMigrationService {
         } catch {
             return false
         }
+    }
+
+    private static func resourceIdentity(_ url: URL) -> String {
+        url.resolvingSymlinksInPath().standardizedFileURL.path
     }
 
     private static func sameResource(_ lhs: URL, _ rhs: URL) -> Bool {
