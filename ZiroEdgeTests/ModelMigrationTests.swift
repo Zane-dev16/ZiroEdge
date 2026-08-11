@@ -55,16 +55,13 @@ final class ModelMigrationTests: XCTestCase {
 
         let baseSource = legacyURL(for: model, artifact: .base)
         let projectorSource = legacyURL(for: model, artifact: .mmproj)
-        let alternateBaseSource = baseSource.resolvingSymlinksInPath().standardizedFileURL
-        let alternateProjectorSource = projectorSource.resolvingSymlinksInPath().standardizedFileURL
-        XCTAssertNotEqual(baseSource.path, alternateBaseSource.path, "Fixture must exercise an aliased source path")
-        XCTAssertNotEqual(
-            projectorSource.path,
-            alternateProjectorSource.path,
-            "Fixture must exercise an aliased source path"
+        try installLegacyAlias()
+        try write(base, to: baseSource)
+        try write(projector, to: projectorSource)
+        try assertSweepObservesAlias(
+            planURLs: [baseSource, projectorSource],
+            expectedBytes: [base, projector]
         )
-        try write(base, to: alternateBaseSource)
-        try write(projector, to: alternateProjectorSource)
 
         let result = ModelMigrationService.migrateIfNeeded(models: [model])
 
@@ -85,8 +82,14 @@ final class ModelMigrationTests: XCTestCase {
 
         let baseSource = legacyURL(for: model, artifact: .base)
         let projectorSource = legacyURL(for: model, artifact: .mmproj)
+        let invalidProjector = gguf(fill: 0xCC)
+        try installLegacyAlias()
         try write(base, to: baseSource)
-        try write(gguf(fill: 0xCC), to: projectorSource)
+        try write(invalidProjector, to: projectorSource)
+        try assertSweepObservesAlias(
+            planURLs: [baseSource, projectorSource],
+            expectedBytes: [base, invalidProjector]
+        )
 
         let result = ModelMigrationService.migrateIfNeeded(models: [model])
 
@@ -287,6 +290,69 @@ final class ModelMigrationTests: XCTestCase {
     private func legacyURL(for model: AIModel, artifact: ArtifactType) -> URL {
         let name = artifact == .base ? "\(model.id).gguf" : "\(model.id)-mmproj.gguf"
         return ModelManagerService.legacyModelsDirectory.appendingPathComponent(name)
+    }
+
+    /// Makes planned legacy URLs traverse a test-owned alias while the legacy
+    /// sweep reports the canonical backing-directory spelling.
+    private func installLegacyAlias() throws {
+        let root = try XCTUnwrap(storageRoot)
+        let realLegacy = root.appendingPathComponent("_legacyReal", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: realLegacy.appendingPathComponent("Models", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createSymbolicLink(
+            at: root.appendingPathComponent("Legacy", isDirectory: true),
+            withDestinationURL: realLegacy
+        )
+    }
+
+    /// Fails closed unless every planned source has a distinct sweep spelling
+    /// that resolves to the same file identity and bytes.
+    private func assertSweepObservesAlias(planURLs: [URL], expectedBytes: [Data]) throws {
+        XCTAssertEqual(planURLs.count, expectedBytes.count)
+        let fileManager = FileManager.default
+        let legacyRoot = ModelManagerService.legacyModelsDirectory
+        let enumerator = try XCTUnwrap(fileManager.enumerator(
+            at: legacyRoot,
+            includingPropertiesForKeys: [.isRegularFileKey, .fileResourceIdentifierKey]
+        ))
+        let sweepURLs = enumerator.compactMap { element -> URL? in
+            guard let url = element as? URL,
+                  (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else {
+                return nil
+            }
+            return url
+        }
+        XCTAssertEqual(sweepURLs.count, planURLs.count, "Fixture sweep must observe every planned source")
+
+        let identityKeys: Set<URLResourceKey> = [.fileResourceIdentifierKey]
+        for (planURL, expectedData) in zip(planURLs, expectedBytes) {
+            let canonicalPlan = planURL.resolvingSymlinksInPath().standardizedFileURL
+            XCTAssertNotEqual(
+                planURL.path,
+                canonicalPlan.path,
+                "Planned source must retain the aliased path spelling"
+            )
+            let sweepURL = try XCTUnwrap(sweepURLs.first {
+                $0.resolvingSymlinksInPath().standardizedFileURL.path == canonicalPlan.path
+            }, "Legacy sweep must report the same resource through its canonical spelling")
+            XCTAssertNotEqual(
+                planURL.path,
+                sweepURL.path,
+                "Manifest planning and sweeping must use distinct raw path spellings"
+            )
+
+            let planIdentity = try XCTUnwrap(
+                try planURL.resourceValues(forKeys: identityKeys).fileResourceIdentifier as? AnyHashable
+            )
+            let sweepIdentity = try XCTUnwrap(
+                try sweepURL.resourceValues(forKeys: identityKeys).fileResourceIdentifier as? AnyHashable
+            )
+            XCTAssertEqual(planIdentity, sweepIdentity, "Alias spellings must identify the same file resource")
+            XCTAssertEqual(try Data(contentsOf: planURL), expectedData)
+            XCTAssertEqual(try Data(contentsOf: sweepURL), expectedData)
+        }
     }
 
     private func write(_ data: Data, to url: URL) throws {
