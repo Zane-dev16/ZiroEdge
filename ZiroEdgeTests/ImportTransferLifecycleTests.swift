@@ -204,7 +204,7 @@ final class ImportTransferLifecycleTests: XCTestCase {
 
     @MainActor
     func testLargeImportedDurableStagingRestoresAsChunked() throws {
-        let size = DownloadManager.chunkSize * 3 + 1
+        let size = DownloadManager.chunkedDownloadThreshold + 1
         let model = makeImportedModel(size: size)
         let task = DownloadTask(model: model, artifact: .base)
         try Data(repeating: 0xAA, count: 1).write(to: task.stagingURL)
@@ -219,7 +219,7 @@ final class ImportTransferLifecycleTests: XCTestCase {
         restored.restoreDurableTransfers(models: [model])
         let active = try XCTUnwrap(restored.activeTasks[task.storageID])
         XCTAssertTrue(active.isChunked)
-        XCTAssertEqual(active.totalChunks, 4)
+        XCTAssertEqual(active.totalChunks, DownloadManager.chunkCount(for: size))
     }
 
     @MainActor
@@ -232,10 +232,13 @@ final class ImportTransferLifecycleTests: XCTestCase {
         let model = makeImportedModel(size: DownloadManager.chunkSize * 3)
         let task = DownloadTask(model: model, artifact: .base)
         let partialSize = DownloadManager.chunkSize + 17
+        guard FileManager.default.createFile(atPath: task.stagingURL.path, contents: nil) else {
+            return XCTFail("Failed to create test-owned partial staging file")
+        }
+        defer { try? FileManager.default.removeItem(at: task.stagingURL) }
         let handle = try FileHandle(forWritingTo: task.stagingURL)
         try handle.truncate(atOffset: UInt64(partialSize))
         try handle.close()
-        defer { try? FileManager.default.removeItem(at: task.stagingURL) }
 
         let offset = try managerForTransferDecision().resumableChunkOffset(for: task)
         XCTAssertEqual(offset, DownloadManager.chunkSize)
