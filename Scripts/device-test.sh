@@ -316,7 +316,21 @@ if [[ "$LAYER" == "lifecycle" || "$LAYER" == "offline" || "$LAYER" == "qa-full" 
 		)
 		;;
 	offline)
-		UNIT_TEST_SUITES=("OfflineVerificationTests" "OfflineAvailabilityGuardTests")
+		# Issue 07 offline QA lives in OfflineVerificationTests.swift as eight
+		# distinct test classes plus OfflineAvailabilityGuardTests.swift. Map
+		# the real class names so a mistyped or renamed suite fails closed
+		# instead of exiting 0 with zero tests.
+		UNIT_TEST_SUITES=(
+			"ChatSessionCancellationTests"
+			"OfflineModelLoadingTests"
+			"OfflineConversationPersistenceTests"
+			"OfflineInferencePathTests"
+			"OfflineOnboardingTests"
+			"OfflineModelsPageTests"
+			"NetworkIsolationTests"
+			"OfflineFlowIntegrationTests"
+			"OfflineAvailabilityGuardTests"
+		)
 		;;
 	qa-full)
 		UNIT_TEST_SUITES=(
@@ -590,7 +604,7 @@ if [[ "$LAYER" == "lifecycle" || "$LAYER" == "offline" || "$LAYER" == "qa-full" 
 		;;
 	offline)
 		VALIDATION_LAYERS="offline"
-		VALIDATION_SUITES="OfflineVerificationTests,OfflineAvailabilityGuardTests"
+		VALIDATION_SUITES="ChatSessionCancellationTests,OfflineModelLoadingTests,OfflineConversationPersistenceTests,OfflineInferencePathTests,OfflineOnboardingTests,OfflineModelsPageTests,NetworkIsolationTests,OfflineFlowIntegrationTests,OfflineAvailabilityGuardTests"
 		VALIDATION_SCENARIOS="airplane-mode-launch,e2b-text-offline,e4b-text-offline,e2b-vision-offline,e4b-vision-offline,invalid-pair-recovery,conversation-history"
 		;;
 	qa-full)

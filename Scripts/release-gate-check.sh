@@ -264,12 +264,12 @@ PY
 		OFFLINE_DIR="$EVIDENCE_ROOT/offline"
 		if [[ "$SOURCE_TREE_CLEAN" == true && -f "$OFFLINE_DIR/evidence.json" ]] && validate_physical_layer \
 			"$OFFLINE_DIR/evidence.json" "$OFFLINE_DIR/operator-observations.txt" \
-			"offline" "OfflineVerificationTests,OfflineAvailabilityGuardTests" \
+			"offline" "ChatSessionCancellationTests,OfflineModelLoadingTests,OfflineConversationPersistenceTests,OfflineInferencePathTests,OfflineOnboardingTests,OfflineModelsPageTests,NetworkIsolationTests,OfflineFlowIntegrationTests,OfflineAvailabilityGuardTests" \
 			"airplane-mode-launch,e2b-text-offline,e4b-text-offline,e2b-vision-offline,e4b-vision-offline,invalid-pair-recovery,conversation-history" >/dev/null 2>&1; then
 			status="PASS"
 		else
 			status="FAIL"
-			blocker="Offline evidence must match the current clean build, record UI and both required unit-suite passes with retained archive digests, and contain exactly one explicit PASS observation for every required scenario."
+			blocker="Offline evidence must match the current clean build, record UI and all nine offline unit-suite passes (ChatSessionCancellationTests, OfflineModelLoadingTests, OfflineConversationPersistenceTests, OfflineInferencePathTests, OfflineOnboardingTests, OfflineModelsPageTests, NetworkIsolationTests, OfflineFlowIntegrationTests, OfflineAvailabilityGuardTests) with retained archive digests, and contain exactly one explicit PASS observation for every required scenario."
 		fi
 		;;
 
@@ -277,12 +277,12 @@ PY
 		QA_DIR="$EVIDENCE_ROOT/physical-qa"
 		if [[ "$SOURCE_TREE_CLEAN" == true && -f "$QA_DIR/evidence.json" ]] && validate_physical_layer \
 			"$QA_DIR/evidence.json" "$QA_DIR/operator-observations.txt" \
-			"qa-full,all" "SubmissionReadinessTests,DownloadDiagnosticTests,ModelMigrationTests,DurableTransferStateTests,StoreRecoveryTests,HuggingFaceImportTests,ImportRejectionTests,ImportRelaunchPersistenceTests,ImportStoragePreflightTests,ImportTransferLifecycleTests,ImportVariantSelectionTests,ImportedModelConfigurationTests,ImportedModelLoadFailureTests,ImportedModelRelaunchTests,ImportedModelRemovalTests,ImportedModelUpdateTests,VisionImportTests,VisionRejectionRepairTests,VisionUpdateTests" \
+			"qa-full,all" "SubmissionReadinessTests,DownloadDiagnosticTests,ModelMigrationTests,ImportedChatCompositionTests,VariantCapabilityEstimateTests,MemoryProfileTests,DurableTransferStateTests,StoreRecoveryTests,HuggingFaceImportTests,ImportRejectionTests,ImportRelaunchPersistenceTests,ImportStoragePreflightTests,ImportTransferLifecycleTests,ImportVariantSelectionTests,ImportedModelConfigurationTests,ImportedModelLoadFailureTests,ImportedModelRelaunchTests,ImportedModelRemovalTests,ImportedModelUpdateTests,VisionImportTests,VisionRejectionRepairTests,VisionUpdateTests" \
 			"wifi-loss-reconnect,cellular-handoff,repeated-pause-resume,cancel-redownload,low-storage-warn,out-of-space-recovery,repeated-transfer-e2b,repeated-transfer-e4b,reboot-recovery,storage-pressure-recover" >/dev/null 2>&1; then
 			status="PASS"
 		else
 			status="FAIL"
-			blocker="Physical QA evidence must match the current clean build, record UI and every required unit-suite pass with retained archive digests, and contain exactly one explicit PASS observation for every required scenario."
+			blocker="Physical QA evidence must match the current clean build, record UI and every required unit-suite pass (all 22 qa-full suites, including ImportedChatCompositionTests, VariantCapabilityEstimateTests, and MemoryProfileTests) with retained archive digests, and contain exactly one explicit PASS observation for every required scenario."
 		fi
 		;;
 

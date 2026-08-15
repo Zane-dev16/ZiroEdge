@@ -203,6 +203,26 @@ requires those models):
 - Invalid model pairs do not appear ready and provide recovery feedback.
 - Existing conversation history remains usable without network access.
 
+**Offline unit suites:** The offline layer runs the nine real test classes in
+`ZiroEdgeTests/OfflineVerificationTests.swift` and
+`ZiroEdgeTests/OfflineAvailabilityGuardTests.swift` individually —
+`ChatSessionCancellationTests` (2), `OfflineModelLoadingTests` (6),
+`OfflineConversationPersistenceTests` (9), `OfflineInferencePathTests` (5),
+`OfflineOnboardingTests` (3), `OfflineModelsPageTests` (5),
+`NetworkIsolationTests` (4), `OfflineFlowIntegrationTests` (7), and
+`OfflineAvailabilityGuardTests` (26), 67 tests total — each with its own
+retained xcresult archive. The harness maps real class names only; a suite name
+matching no test class is a harness error and the layer fails closed instead of
+reporting a vacuous pass.
+
+**Fail-closed exit behavior:** `device-test.sh --layer offline` exits nonzero
+until a human records exactly one explicit PASS observation per required
+scenario (`airplane-mode-launch`, `e2b-text-offline`, `e4b-text-offline`,
+`e2b-vision-offline`, `e4b-vision-offline`, `invalid-pair-recovery`,
+`conversation-history`). A run without operator observations therefore exits
+nonzero even when all 67 unit tests and the UI stage pass; that nonzero exit is
+expected and correct while the gate is incomplete.
+
 **Failure mode:** Any hot-path network call during model loading, inference,
 or conversation persistence → release blocked.
 
@@ -233,6 +253,14 @@ import suites: `HuggingFaceImportTests`, `ImportRejectionTests`,
 `ImportedModelRelaunchTests`, `ImportedModelRemovalTests`,
 `ImportedModelUpdateTests`, `VisionImportTests`,
 `VisionRejectionRepairTests`, and `VisionUpdateTests`.
+
+**Full qa-full suite set:** The `qa-full` layer runs 22 unit suites — the 14
+import suites above plus `SubmissionReadinessTests`, `DownloadDiagnosticTests`,
+`ModelMigrationTests`, `ImportedChatCompositionTests`,
+`VariantCapabilityEstimateTests`, `MemoryProfileTests`,
+`DurableTransferStateTests`, and `StoreRecoveryTests`. Gate 8 requires exactly
+this 22-suite set, and a script test keeps the device-test.sh qa-full arm and
+the release-gate-check.sh Gate 8 suite list identical.
 
 **Failure mapping:** Every failed row must link to a focused ticket URL in
 `docs/qa-failure-map.md`. Missing ticket URLs remain blocking.

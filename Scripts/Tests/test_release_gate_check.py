@@ -858,6 +858,9 @@ class DeviceTestEvidenceSchemaTests(unittest.TestCase):
             "SubmissionReadinessTests",
             "DownloadDiagnosticTests",
             "ModelMigrationTests",
+            "ImportedChatCompositionTests",
+            "VariantCapabilityEstimateTests",
+            "MemoryProfileTests",
             "DurableTransferStateTests",
             "StoreRecoveryTests",
             "HuggingFaceImportTests",
@@ -923,6 +926,112 @@ class DeviceTestEvidenceSchemaTests(unittest.TestCase):
             'UNIT_EVIDENCE="$EVIDENCE_ROOT/physical-qa/evidence.json"',
             gate_script,
         )
+
+
+class GateSuiteSyncTests(unittest.TestCase):
+    """Gate 7/8 required suite lists must stay identical to the device-test.sh
+    layer arms, and every mapped suite name must match a real test class.
+
+    Mirrors the lifecycle-mapping guard: a layer arm naming a test class that
+    does not exist resolves to zero tests under xcodebuild (exit 0, vacuous
+    pass), which validate-release-evidence.py cannot detect.
+    """
+
+    OFFLINE_CLASSES = [
+        "ChatSessionCancellationTests",
+        "OfflineModelLoadingTests",
+        "OfflineConversationPersistenceTests",
+        "OfflineInferencePathTests",
+        "OfflineOnboardingTests",
+        "OfflineModelsPageTests",
+        "NetworkIsolationTests",
+        "OfflineFlowIntegrationTests",
+        "OfflineAvailabilityGuardTests",
+    ]
+
+    QA_FULL_SUITES = [
+        "SubmissionReadinessTests",
+        "DownloadDiagnosticTests",
+        "ModelMigrationTests",
+        "ImportedChatCompositionTests",
+        "VariantCapabilityEstimateTests",
+        "MemoryProfileTests",
+        "DurableTransferStateTests",
+        "StoreRecoveryTests",
+        "HuggingFaceImportTests",
+        "ImportRejectionTests",
+        "ImportRelaunchPersistenceTests",
+        "ImportStoragePreflightTests",
+        "ImportTransferLifecycleTests",
+        "ImportVariantSelectionTests",
+        "ImportedModelConfigurationTests",
+        "ImportedModelLoadFailureTests",
+        "ImportedModelRelaunchTests",
+        "ImportedModelRemovalTests",
+        "ImportedModelUpdateTests",
+        "VisionImportTests",
+        "VisionRejectionRepairTests",
+        "VisionUpdateTests",
+    ]
+
+    @staticmethod
+    def _device_unit_suites(layer: str) -> list[str]:
+        """Extract a layer's UNIT_TEST_SUITES arm from device-test.sh."""
+        script = (PROJECT_DIR / "Scripts" / "device-test.sh").read_text()
+        # The unit-suite case is the one that follows the unit-test build step.
+        start = script.index(
+            'case "$LAYER" in', script.index("Building for unit testing")
+        )
+        end = script.index("esac", start)
+        block = script[start:end]
+        arm = block.split(f"\n\t{layer})\n", 1)[1]
+        arm = arm.split("\n\t\t;;", 1)[0]
+        return re.findall(r'^\t\t\t"([^"]+)"$', arm, re.M)
+
+    @staticmethod
+    def _gate_suites(gate_num: int, layer_literal: str) -> list[str]:
+        """Extract the --suites argument for one gate from release-gate-check.sh."""
+        gate_script = GATE_SCRIPT.read_text()
+        gate_block = gate_script.split(f"\n\t{gate_num})", 1)[1].split(
+            f"\n\t{gate_num + 1})", 1
+        )[0]
+        line = next(
+            ln for ln in gate_block.splitlines() if f'"{layer_literal}"' in ln
+        )
+        after = line.split(f'"{layer_literal}"', 1)[1]
+        return after.split('"', 2)[1].split(",")
+
+    def test_offline_arm_maps_real_classes(self):
+        device_suites = self._device_unit_suites("offline")
+        self.assertEqual(device_suites, self.OFFLINE_CLASSES)
+        self.assertNotIn("OfflineVerificationTests", device_suites)
+
+    def test_offline_gate7_suites_match_device_arm(self):
+        gate_suites = self._gate_suites(7, "offline")
+        self.assertEqual(sorted(gate_suites), sorted(self.OFFLINE_CLASSES))
+
+    def test_offline_mapped_classes_exist_in_test_sources(self):
+        sources = "\n".join(
+            p.read_text() for p in (PROJECT_DIR / "ZiroEdgeTests").glob("*.swift")
+        )
+        for cls in self.OFFLINE_CLASSES:
+            self.assertIn(f"final class {cls}: XCTestCase", sources, cls)
+
+    def test_qa_full_arm_has_exactly_22_suites(self):
+        device_suites = self._device_unit_suites("qa-full")
+        self.assertEqual(len(device_suites), len(set(device_suites)))
+        self.assertEqual(sorted(device_suites), sorted(self.QA_FULL_SUITES))
+
+    def test_qa_full_gate8_suites_match_device_arm(self):
+        gate_suites = self._gate_suites(8, "qa-full,all")
+        self.assertEqual(sorted(gate_suites), sorted(self.QA_FULL_SUITES))
+
+    def test_qa_full_mapped_suites_exist_in_test_sources(self):
+        sources = "\n".join(
+            p.read_text() for p in (PROJECT_DIR / "ZiroEdgeTests").glob("*.swift")
+        )
+        for cls in self.QA_FULL_SUITES:
+            self.assertIn(f"final class {cls}: XCTestCase", sources, cls)
 
 
 class CatalogInfoPlistPathTests(unittest.TestCase):
