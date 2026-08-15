@@ -302,7 +302,18 @@ if [[ "$LAYER" == "lifecycle" || "$LAYER" == "offline" || "$LAYER" == "qa-full" 
 
 	case "$LAYER" in
 	lifecycle)
-		UNIT_TEST_SUITES=("DeviceLifecycleQATests")
+		# Issue 06 lifecycle QA lives in DeviceLifecycleQATests.swift as seven
+		# distinct test classes. Map the real class names so a mistyped or
+		# renamed suite fails closed instead of exiting 0 with zero tests.
+		UNIT_TEST_SUITES=(
+			"FreshInstallLegacyUpgradeTests"
+			"NetworkConditionTests"
+			"BackgroundLifecycleQATests"
+			"StorageConstraintQATests"
+			"PauseResumeQATests"
+			"EvidenceArtifactQATests"
+			"EndToEndLifecycleQATests"
+		)
 		;;
 	offline)
 		UNIT_TEST_SUITES=("OfflineVerificationTests" "OfflineAvailabilityGuardTests")
@@ -574,7 +585,7 @@ if [[ "$LAYER" == "lifecycle" || "$LAYER" == "offline" || "$LAYER" == "qa-full" 
 	case "$LAYER" in
 	lifecycle)
 		VALIDATION_LAYERS="lifecycle"
-		VALIDATION_SUITES="DeviceLifecycleQATests"
+		VALIDATION_SUITES="FreshInstallLegacyUpgradeTests,NetworkConditionTests,BackgroundLifecycleQATests,StorageConstraintQATests,PauseResumeQATests,EvidenceArtifactQATests,EndToEndLifecycleQATests"
 		VALIDATION_SCENARIOS="background-suspension,lock-unlock,os-termination,force-quit,reboot"
 		;;
 	offline)

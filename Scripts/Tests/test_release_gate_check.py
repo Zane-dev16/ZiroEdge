@@ -468,7 +468,15 @@ class StrictPhysicalEvidenceTests(unittest.TestCase):
         self.evidence_path = self.root / "evidence.json"
         self.observations_path = self.root / "operator-observations.txt"
         self.scenarios = ["background-suspension", "lock-unlock"]
-        self.suites = ["DeviceLifecycleQATests"]
+        self.suites = [
+            "FreshInstallLegacyUpgradeTests",
+            "NetworkConditionTests",
+            "BackgroundLifecycleQATests",
+            "StorageConstraintQATests",
+            "PauseResumeQATests",
+            "EvidenceArtifactQATests",
+            "EndToEndLifecycleQATests",
+        ]
 
     def _archive_record(self, name: str, content: bytes = b"xcresult") -> dict:
         archive = self.root / f"{name}.tar"
@@ -485,12 +493,13 @@ class StrictPhysicalEvidenceTests(unittest.TestCase):
             layer="lifecycle",
             unit_test_suites=[
                 {
-                    "name": "DeviceLifecycleQATests",
+                    "name": name,
                     "outcome": "pass",
                     "exit_code": 0,
                     "xcodebuild_command": "xcodebuild test-without-building",
                     **self._archive_record("unit"),
                 }
+                for name in self.suites
             ],
         )
         record.update(self._archive_record("ui"))

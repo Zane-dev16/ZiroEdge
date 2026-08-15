@@ -251,12 +251,12 @@ PY
 		LIFECYCLE_DIR="$EVIDENCE_ROOT/lifecycle"
 		if [[ "$SOURCE_TREE_CLEAN" == true && -f "$LIFECYCLE_DIR/evidence.json" ]] && validate_physical_layer \
 			"$LIFECYCLE_DIR/evidence.json" "$LIFECYCLE_DIR/operator-observations.txt" \
-			"lifecycle" "DeviceLifecycleQATests" \
+			"lifecycle" "FreshInstallLegacyUpgradeTests,NetworkConditionTests,BackgroundLifecycleQATests,StorageConstraintQATests,PauseResumeQATests,EvidenceArtifactQATests,EndToEndLifecycleQATests" \
 			"background-suspension,lock-unlock,os-termination,force-quit,reboot" >/dev/null 2>&1; then
 			status="PASS"
 		else
 			status="FAIL"
-			blocker="Lifecycle evidence must match the current clean build, record UI and DeviceLifecycleQATests passes with retained archive digests, and contain exactly one explicit PASS observation for every required scenario."
+			blocker="Lifecycle evidence must match the current clean build, record UI and all seven lifecycle unit-suite passes (FreshInstallLegacyUpgradeTests, NetworkConditionTests, BackgroundLifecycleQATests, StorageConstraintQATests, PauseResumeQATests, EvidenceArtifactQATests, EndToEndLifecycleQATests) with retained archive digests, and contain exactly one explicit PASS observation for every required scenario."
 		fi
 		;;
 

@@ -155,6 +155,23 @@ bash Scripts/device-test.sh --layer lifecycle --evidence-dir docs/release-eviden
   current clean source revision, and retain immutable xcresult archives whose
   recorded SHA-256 values verify.
 
+**Lifecycle unit suites:** The lifecycle layer runs the seven real test classes
+in `ZiroEdgeTests/DeviceLifecycleQATests.swift` individually —
+`FreshInstallLegacyUpgradeTests` (10), `NetworkConditionTests` (9),
+`BackgroundLifecycleQATests` (8), `StorageConstraintQATests` (10),
+`PauseResumeQATests` (7), `EvidenceArtifactQATests` (9), and
+`EndToEndLifecycleQATests` (6), 59 tests total — each with its own retained
+xcresult archive. The harness maps real class names only; a suite name matching
+no test class is a harness error and the layer fails closed instead of
+reporting a vacuous pass.
+
+**Fail-closed exit behavior:** `device-test.sh --layer lifecycle` exits nonzero
+until a human records exactly one explicit PASS observation per required
+scenario (`background-suspension`, `lock-unlock`, `os-termination`,
+`force-quit`, `reboot`). A run without operator observations therefore exits
+nonzero even when all 59 unit tests and the UI stage pass; that nonzero exit is
+expected and correct while the gate is incomplete.
+
 **Regression tests:**
 
 - `RecreationRestoresPausedProgressWithoutStartingTransfer`
