@@ -518,20 +518,24 @@ extension DownloadManager {
         var reclaimed: Int64 = 0
         var knownPaths = Set<String>()
 
+        func canonicalPath(_ url: URL) -> String {
+            url.resolvingSymlinksInPath().standardizedFileURL.path
+        }
+
         // Collect every known path from active tasks and all model identities.
         for (_, task) in activeTasks {
-            knownPaths.insert(task.stagingURL.path)
-            knownPaths.insert(task.resumeDataURL.path)
-            knownPaths.insert(task.metadataURL.path)
+            knownPaths.insert(canonicalPath(task.stagingURL))
+            knownPaths.insert(canonicalPath(task.resumeDataURL))
+            knownPaths.insert(canonicalPath(task.metadataURL))
         }
         for model in ModelRegistry.transferModels {
             let calibrationModels = ModelRegistry.calibrationModels
             for candidateModel in [model] + calibrationModels {
                 for artifact: ArtifactType in [.base, .mmproj] {
                     let candidateTask = DownloadTask(model: candidateModel, artifact: artifact)
-                    knownPaths.insert(candidateTask.stagingURL.path)
-                    knownPaths.insert(candidateTask.resumeDataURL.path)
-                    knownPaths.insert(candidateTask.metadataURL.path)
+                    knownPaths.insert(canonicalPath(candidateTask.stagingURL))
+                    knownPaths.insert(canonicalPath(candidateTask.resumeDataURL))
+                    knownPaths.insert(canonicalPath(candidateTask.metadataURL))
                 }
             }
         }
@@ -552,7 +556,7 @@ extension DownloadManager {
                 guard (try? fileURL.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else {
                     continue
                 }
-                guard !knownPaths.contains(fileURL.path) else { continue }
+                guard !knownPaths.contains(canonicalPath(fileURL)) else { continue }
 
                 let size = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
                 do {
