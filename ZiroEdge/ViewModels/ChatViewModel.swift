@@ -79,7 +79,7 @@ final class ChatViewModel: ObservableObject {
 
     // MARK: - Dependencies
 
-    private let persistence: PersistenceController
+    private let persistence: any PersistenceProviding
     private let inferenceService: any InferenceServiceProtocol
     private let sessionActor: ChatSessionActor
     private let lifecycleManager: ModelLifecycleManager
@@ -111,7 +111,7 @@ final class ChatViewModel: ObservableObject {
     // MARK: - Initialization
 
     init(
-        persistence: PersistenceController,
+        persistence: any PersistenceProviding,
         inferenceService: any InferenceServiceProtocol,
         sessionActor: ChatSessionActor,
         lifecycleManager: ModelLifecycleManager,
@@ -234,7 +234,7 @@ final class ChatViewModel: ObservableObject {
         truncationWarning = nil
 
         async let messagesResult = persistence.fetchMessagesResult(conversationID: conversationID)
-        async let conversationsResult = persistence.fetchConversationsResult()
+        async let conversationsResult = persistence.fetchConversationsResult(historyEligibleOnly: false)
         let (messageResult, conversationResult) = await (messagesResult, conversationsResult)
         guard loadGeneration == myGeneration else { return }
 
@@ -328,6 +328,7 @@ final class ChatViewModel: ObservableObject {
 
         let defaultPrompt = UserDefaults.standard.string(forKey: DefaultsKeys.defaultSystemPrompt)
         let result = await persistence.createConversationResult(
+            id: UUID(),
             title: "New Conversation",
             modelID: model.id,
             systemPrompt: defaultPrompt?.nilIfBlank
@@ -431,6 +432,7 @@ extension ChatViewModel {
             conversationID: conversationID,
             role: .user,
             content: text,
+            imageData: nil,
             attachments: imagesToSend
         )
         if case .failure(let error) = insertResult {
