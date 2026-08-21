@@ -1,3 +1,4 @@
+// swiftlint:disable file_length
 import Foundation
 import Network
 import CryptoKit
@@ -102,8 +103,56 @@ final class DownloadManager: NSObject, ObservableObject {
     var activeTasks: [String: DownloadTask] = [:]
     let networkMonitor = NetworkMonitor()
     static let backgroundSessionIdentifier = "com.zanish-labs.ziroedge.model-downloads.v1"
-    var urlSessionStorage: URLSession?
-    var chunkSessionStorage: URLSession?
+    nonisolated(unsafe) var urlSessionStorage: URLSession?
+    nonisolated(unsafe) var chunkSessionStorage: URLSession?
+    // Weak proxy to break URLSession strong-retain cycle (session -> delegate -> manager -> session)
+    private final class WeakDelegate: NSObject, URLSessionDelegate, URLSessionDownloadDelegate, URLSessionDataDelegate {
+        weak var owner: DownloadManager?
+        init(owner: DownloadManager) { self.owner = owner; super.init() }
+        nonisolated func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
+            guard let owner else {
+                Task { @MainActor in BackgroundDownloadCompletionStore.drain(identifier: session.configuration.identifier ?? "") }
+                return
+            }
+            owner.urlSessionDidFinishEvents(forBackgroundURLSession: session)
+        }
+        nonisolated func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse, completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+            guard let owner else { completionHandler(.cancel); return }
+            owner.urlSession(session, dataTask: dataTask, didReceive: response, completionHandler: completionHandler)
+        }
+        nonisolated func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+            guard let owner else { return }
+            owner.urlSession(session, dataTask: dataTask, didReceive: data)
+        }
+        nonisolated func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
+            guard let owner else { return }
+            owner.urlSession(session, downloadTask: downloadTask, didFinishDownloadingTo: location)
+        }
+        nonisolated func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
+            guard let owner else { return }
+            owner.urlSession(session, downloadTask: downloadTask, didWriteData: bytesWritten, totalBytesWritten: totalBytesWritten, totalBytesExpectedToWrite: totalBytesExpectedToWrite)
+        }
+        nonisolated func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+            guard let owner else { return }
+            owner.urlSession(session, task: task, didCompleteWithError: error)
+        }
+        nonisolated func urlSession(
+            _ session: URLSession,
+            task: URLSessionTask,
+            willPerformHTTPRedirection response: HTTPURLResponse,
+            newRequest request: URLRequest,
+            completionHandler: @escaping (URLRequest?) -> Void
+        ) {
+            guard let owner else { completionHandler(nil); return }
+            owner.urlSession(
+                session,
+                task: task,
+                willPerformHTTPRedirection: response,
+                newRequest: request,
+                completionHandler: completionHandler
+            )
+        }
+    }
     func getSession() -> URLSession {
         if let existing = urlSessionStorage { return existing }
         let isTesting = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
@@ -114,7 +163,8 @@ final class DownloadManager: NSObject, ObservableObject {
         config.sessionSendsLaunchEvents = true
         config.timeoutIntervalForRequest = 300
         config.waitsForConnectivity = true
-        let session = URLSession(configuration: config, delegate: self, delegateQueue: .main)
+        let proxy = WeakDelegate(owner: self)
+        let session = URLSession(configuration: config, delegate: proxy, delegateQueue: .main)
         urlSessionStorage = session
         return session
     }
@@ -123,7 +173,8 @@ final class DownloadManager: NSObject, ObservableObject {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 300
         config.waitsForConnectivity = true
-        let session = URLSession(configuration: config, delegate: self, delegateQueue: .main)
+        let proxy = WeakDelegate(owner: self)
+        let session = URLSession(configuration: config, delegate: proxy, delegateQueue: .main)
         chunkSessionStorage = session
         return session
     }
@@ -134,8 +185,8 @@ final class DownloadManager: NSObject, ObservableObject {
     private var availableDiskSpaceProviderForTesting: (@MainActor () -> Int64)?
     var additionalTransferModelsProvider: @MainActor () -> [AIModel] = { [] }
     var lastProgressTime: [String: Date] = [:]
-    var stuckTimer: Timer?
-    var protectedDataObserver: NSObjectProtocol?
+    nonisolated(unsafe) var stuckTimer: Timer?
+    nonisolated(unsafe) var protectedDataObserver: NSObjectProtocol?
     static let chunkSize: Int64 = 100 * 1_024 * 1_024
     static let chunkedDownloadThreshold: Int64 = 2_147_483_648
     static let maximumChunkRetries = 3
@@ -173,15 +224,52 @@ final class DownloadManager: NSObject, ObservableObject {
             }
         }
     }
-    deinit {
-        MainActor.assumeIsolated {
-            if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
-                urlSessionStorage?.invalidateAndCancel()
+    /// Lifecycle-safe teardown that invalidates URLSessions and breaks the
+    /// delegate retain cycle. Chooses finish vs cancel based on active tasks,
+    /// nils storage to prevent recreation collisions, and is idempotent.
+    @MainActor
+    func teardown() {
+        if let session = urlSessionStorage {
+            let hasActiveBackgroundTask = activeTasks.values.contains { $0.task != nil && !$0.isCancelled }
+            if hasActiveBackgroundTask {
+                session.finishTasksAndInvalidate()
+            } else {
+                session.invalidateAndCancel()
             }
-            chunkSessionStorage?.invalidateAndCancel()
-            stuckTimer?.invalidate()
-            if let protectedDataObserver {
-                NotificationCenter.default.removeObserver(protectedDataObserver)
+            urlSessionStorage = nil
+        }
+        if let session = chunkSessionStorage {
+            session.invalidateAndCancel()
+            chunkSessionStorage = nil
+        }
+        stuckTimer?.invalidate()
+        stuckTimer = nil
+        if let observer = protectedDataObserver {
+            NotificationCenter.default.removeObserver(observer)
+            protectedDataObserver = nil
+        }
+    }
+    deinit {
+        // Non-trapping cleanup: must not use MainActor.assumeIsolated because
+        // the last reference may drop off the main thread (XCTest / service teardown).
+        // URLSession invalidate is thread-safe; timer/observer need main.
+        let backgroundSession = urlSessionStorage
+        let chunkSession = chunkSessionStorage
+        let timer = stuckTimer
+        let observer = protectedDataObserver
+        backgroundSession?.invalidateAndCancel()
+        chunkSession?.invalidateAndCancel()
+        if Thread.isMainThread {
+            timer?.invalidate()
+            if let observer {
+                NotificationCenter.default.removeObserver(observer)
+            }
+        } else {
+            DispatchQueue.main.async {
+                timer?.invalidate()
+                if let observer {
+                    NotificationCenter.default.removeObserver(observer)
+                }
             }
         }
     }

@@ -166,6 +166,9 @@ final class AppRuntime: ObservableObject {
     }
 
     private func makeServices(persistence: PersistenceController) throws -> RuntimeServices {
+        if case .ready(let existing) = state {
+            existing.downloadManager.teardown()
+        }
         let loadSafetyStore = try LoadSafetyStore()
         let inferenceService = InferenceService(loadSafetyStore: loadSafetyStore)
 #if DEBUG
