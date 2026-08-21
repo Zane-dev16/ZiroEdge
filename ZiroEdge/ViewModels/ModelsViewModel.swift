@@ -33,6 +33,8 @@ final class ModelsViewModel: ObservableObject {
     private let launchOfflineAvailabilityReport: OfflineAvailabilityReport
     private let importedModelStore: ImportedModelStore
     private let importedModelUpdateStore: ImportedModelUpdateStore
+    /// Storage queries behind a protocol so tests can substitute isolated readers.
+    private let storageReader: any ModelStorageReader.Type
 
     // MARK: - Computed
 
@@ -60,13 +62,15 @@ final class ModelsViewModel: ObservableObject {
         lifecycleManager: ModelLifecycleManager,
         offlineAvailabilityReport: OfflineAvailabilityReport = OfflineAvailabilityGuard.sweep(),
         importedModelStore: ImportedModelStore = .shared,
-        importedModelUpdateStore: ImportedModelUpdateStore = .shared
+        importedModelUpdateStore: ImportedModelUpdateStore = .shared,
+        storageReader: any ModelStorageReader.Type = ModelManagerService.self
     ) {
         self.downloadManager = downloadManager
         self.lifecycleManager = lifecycleManager
         self.launchOfflineAvailabilityReport = offlineAvailabilityReport
         self.importedModelStore = importedModelStore
         self.importedModelUpdateStore = importedModelUpdateStore
+        self.storageReader = storageReader
         downloadManager.additionalTransferModelsProvider = {
             importedModelStore.models + importedModelUpdateStore.models
         }
@@ -118,7 +122,7 @@ final class ModelsViewModel: ObservableObject {
     /// same bytes identically (single source of truth for storage strings).
     func diskUsage(for model: AIModel) -> String {
         guard isDownloaded(model) else { return "" }
-        return ModelManagerService.formattedDiskUsage(for: model)
+        return storageReader.formattedDiskUsage(for: model)
     }
 
     /// Initiate a capability-specific download with one consolidated risk review.
