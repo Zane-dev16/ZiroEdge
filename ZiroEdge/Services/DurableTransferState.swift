@@ -119,6 +119,7 @@ extension DownloadManager {
         try? fileManager.removeItem(at: task.metadataURL)
         try? fileManager.removeItem(at: task.resumeDataURL)
         if discardStaging { try? fileManager.removeItem(at: task.stagingURL) }
+        scheduleStorageBreakdownRefresh()
         DownloadDiagnosticRecorder.shared.record(
             event: .durableStateCleared,
             correlationID: DownloadDiagnosticRecorder.transferCorrelationID(
@@ -166,6 +167,7 @@ extension DownloadManager {
         }
         guard fileManager.fileExists(atPath: task.destinationURL.path) else {
             try fileManager.moveItem(at: task.stagingURL, to: task.destinationURL)
+            scheduleStorageBreakdownRefresh()
             return
         }
 
@@ -180,6 +182,7 @@ extension DownloadManager {
                 options: [.usingNewMetadataOnly]
             )
             try? fileManager.removeItem(at: backupURL)
+            scheduleStorageBreakdownRefresh()
         } catch {
             if !fileManager.fileExists(atPath: task.destinationURL.path),
                fileManager.fileExists(atPath: backupURL.path) {

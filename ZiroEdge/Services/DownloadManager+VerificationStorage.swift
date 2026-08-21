@@ -440,6 +440,7 @@ extension DownloadManager {
                 durationMs: durationMs
             )
             logger.info("Download verified and promoted: \(task.storageID, privacy: .public)")
+            scheduleStorageBreakdownRefresh()
             return .success(())
         } catch {
             DownloadDiagnosticRecorder.shared.record(
@@ -466,6 +467,7 @@ extension DownloadManager {
         } else {
             removeDurableState(for: task, discardStaging: discardStaging)
         }
+        scheduleStorageBreakdownRefresh()
         return .failure(error)
     }
     func updateStatus(model: AIModel) {
@@ -503,6 +505,7 @@ extension DownloadManager {
                 discardStaging: true
             )
         }
+        scheduleStorageBreakdownRefresh()
     }
 
     // MARK: - Orphan Reclamation
@@ -568,13 +571,14 @@ extension DownloadManager {
                 }
             }
         }
+        if reclaimed > 0 { scheduleStorageBreakdownRefresh() }
         return reclaimed
     }
 
     // MARK: - Managed Storage Breakdown
 
     /// Breakdown of managed storage usage across all managed directories.
-    struct ManagedStorageBreakdown {
+    struct ManagedStorageBreakdown: Equatable, Sendable {
         let installedBytes: Int64
         let stagingBytes: Int64
         let resumeBytes: Int64
@@ -593,7 +597,7 @@ extension DownloadManager {
 
     func managedStorageBreakdown() -> ManagedStorageBreakdown {
         func directorySize(_ url: URL) -> Int64 {
-            guard let enumerator = fileManager.enumerator(
+            guard let enumerator = FileManager.default.enumerator(
                 at: url,
                 includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey]
             ) else { return 0 }
@@ -613,6 +617,100 @@ extension DownloadManager {
             resumeBytes: directorySize(ModelManagerService.resumeDirectory),
             quarantineBytes: directorySize(ModelManagerService.quarantineDirectory)
         )
+    }
+
+    // BATCH-05: cached breakdown computed off-main, invalidated only on completion/promotion/quarantine/removal
+    func scheduleStorageBreakdownRefresh() {
+        storageBreakdownTask?.cancel()
+        storageBreakdownTask = Task { [weak self] in
+            guard let self else { return }
+            // Compute off-main via detached task
+            let breakdown = await Task.detached(priority: .utility) {
+                func directorySize(_ url: URL) -> Int64 {
+                    guard let enumerator = FileManager.default.enumerator(
+                        at: url,
+                        includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey]
+                    ) else { return 0 }
+                    var total: Int64 = 0
+                    for case let fileURL as URL in enumerator {
+                        guard (try? fileURL.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
+                        total += Int64((try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+                    }
+                    return total
+                }
+                // Also compute installed off-main (avoid MainActor)
+                let installed: Int64 = {
+                    guard let enumerator = FileManager.default.enumerator(
+                        at: ModelManagerService.modelsDirectory,
+                        includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey]
+                    ) else { return 0 }
+                    var total: Int64 = 0
+                    for case let fileURL as URL in enumerator {
+                        guard (try? fileURL.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
+                        total += Int64((try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+                    }
+                    return total
+                }()
+                return ManagedStorageBreakdown(
+                    installedBytes: installed,
+                    stagingBytes: directorySize(ModelManagerService.stagingDirectory),
+                    resumeBytes: directorySize(ModelManagerService.resumeDirectory),
+                    quarantineBytes: directorySize(ModelManagerService.quarantineDirectory)
+                )
+            }.value
+            guard !Task.isCancelled else { return }
+            // Back on MainActor (self is MainActor-isolated)
+            self.cachedStorageBreakdown = breakdown
+            self._storageBreakdownComputeCount += 1
+            self.lastStorageBreakdownWasOffMain = true
+        }
+    }
+
+    /// Synchronous refresh for tests that need immediate consistency without async wait.
+    func refreshStorageBreakdownForTests() {
+        let breakdown = managedStorageBreakdown()
+        cachedStorageBreakdown = breakdown
+        _storageBreakdownComputeCount += 1
+        lastStorageBreakdownWasOffMain = false
+    }
+
+    /// Async refresh that tests can await; verifies off-main execution.
+    func refreshStorageBreakdownAsyncForTests() async {
+        let breakdown = await Task.detached(priority: .utility) {
+            func directorySize(_ url: URL) -> Int64 {
+                guard let enumerator = FileManager.default.enumerator(
+                    at: url,
+                    includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey]
+                ) else { return 0 }
+                var total: Int64 = 0
+                for case let fileURL as URL in enumerator {
+                    guard (try? fileURL.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
+                    total += Int64((try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+                }
+                return total
+            }
+            let installed: Int64 = {
+                guard let enumerator = FileManager.default.enumerator(
+                    at: ModelManagerService.modelsDirectory,
+                    includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey]
+                ) else { return 0 }
+                var total: Int64 = 0
+                for case let fileURL as URL in enumerator {
+                    guard (try? fileURL.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
+                    total += Int64((try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+                }
+                return total
+            }()
+            return ManagedStorageBreakdown(
+                installedBytes: installed,
+                stagingBytes: directorySize(ModelManagerService.stagingDirectory),
+                resumeBytes: directorySize(ModelManagerService.resumeDirectory),
+                quarantineBytes: directorySize(ModelManagerService.quarantineDirectory)
+            )
+        }.value
+        cachedStorageBreakdown = breakdown
+        _storageBreakdownComputeCount += 1
+        lastStorageBreakdownWasOffMain = true
     }
 
     /// Actionable out-of-space message that includes required vs available bytes.

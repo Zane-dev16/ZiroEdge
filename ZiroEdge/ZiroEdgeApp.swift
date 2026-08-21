@@ -647,7 +647,7 @@ struct SettingsView: View {
     }
 
     private func formattedTotalDiskUsage() -> String {
-        downloadManager.managedStorageBreakdown().formattedTotal
+        downloadManager.cachedStorageBreakdown.formattedTotal
     }
 
     @MainActor

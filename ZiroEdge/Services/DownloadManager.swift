@@ -185,8 +185,16 @@ final class DownloadManager: NSObject, ObservableObject {
     private var availableDiskSpaceProviderForTesting: (@MainActor () -> Int64)?
     var additionalTransferModelsProvider: @MainActor () -> [AIModel] = { [] }
     var lastProgressTime: [String: Date] = [:]
+    // BATCH-05: cached storage breakdown — invalidated only on completion/promotion/quarantine/removal, computed off-main
+    @Published var cachedStorageBreakdown: ManagedStorageBreakdown = ManagedStorageBreakdown(installedBytes: 0, stagingBytes: 0, resumeBytes: 0, quarantineBytes: 0)
+    var storageBreakdownTask: Task<Void, Never>?
+    var _storageBreakdownComputeCount: Int = 0
+    var storageBreakdownComputeCount: Int { _storageBreakdownComputeCount }
+    var lastStorageBreakdownWasOffMain: Bool?
+    func resetStorageBreakdownComputeCountForTests() { _storageBreakdownComputeCount = 0; lastStorageBreakdownWasOffMain = nil }
     nonisolated(unsafe) var stuckTimer: Timer?
     nonisolated(unsafe) var protectedDataObserver: NSObjectProtocol?
+    nonisolated(unsafe) var storageObserver: NSObjectProtocol?
     static let chunkSize: Int64 = 100 * 1_024 * 1_024
     static let chunkedDownloadThreshold: Int64 = 2_147_483_648
     static let maximumChunkRetries = 3
@@ -213,6 +221,10 @@ final class DownloadManager: NSObject, ObservableObject {
         if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {
             reclaimOrphanedStorage()
         }
+        // BATCH-05: seed cache synchronously once at startup to avoid initial 0 flash; subsequent refreshes are off-main and coalesced
+        cachedStorageBreakdown = managedStorageBreakdown()
+        _storageBreakdownComputeCount = 1
+        lastStorageBreakdownWasOffMain = false
         reconcileBackgroundTasks()
         protectedDataObserver = NotificationCenter.default.addObserver(
             forName: UIApplication.protectedDataDidBecomeAvailableNotification,
@@ -221,6 +233,15 @@ final class DownloadManager: NSObject, ObservableObject {
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.recoverProtectedImportedState()
+            }
+        }
+        storageObserver = NotificationCenter.default.addObserver(
+            forName: .managedStorageDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.scheduleStorageBreakdownRefresh()
             }
         }
     }
@@ -248,6 +269,12 @@ final class DownloadManager: NSObject, ObservableObject {
             NotificationCenter.default.removeObserver(observer)
             protectedDataObserver = nil
         }
+        if let observer = storageObserver {
+            NotificationCenter.default.removeObserver(observer)
+            storageObserver = nil
+        }
+        storageBreakdownTask?.cancel()
+        storageBreakdownTask = nil
     }
     deinit {
         // Non-trapping cleanup: must not use MainActor.assumeIsolated because
@@ -257,18 +284,27 @@ final class DownloadManager: NSObject, ObservableObject {
         let chunkSession = chunkSessionStorage
         let timer = stuckTimer
         let observer = protectedDataObserver
+        let storageObs = storageObserver
+        let breakdownTask = storageBreakdownTask
         backgroundSession?.invalidateAndCancel()
         chunkSession?.invalidateAndCancel()
+        breakdownTask?.cancel()
         if Thread.isMainThread {
             timer?.invalidate()
             if let observer {
                 NotificationCenter.default.removeObserver(observer)
+            }
+            if let storageObs {
+                NotificationCenter.default.removeObserver(storageObs)
             }
         } else {
             DispatchQueue.main.async {
                 timer?.invalidate()
                 if let observer {
                     NotificationCenter.default.removeObserver(observer)
+                }
+                if let storageObs {
+                    NotificationCenter.default.removeObserver(storageObs)
                 }
             }
         }
@@ -582,6 +618,7 @@ extension DownloadManager {
         }
         updateStatusesFromDisk()
         downloadStatuses[model.id] = authoritativeDiskStatus(for: model)
+        scheduleStorageBreakdownRefresh()
     }
     func startStuckWatchdog() {
         stuckTimer?.invalidate()

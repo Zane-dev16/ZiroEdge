@@ -282,6 +282,9 @@ final class StorageCleanupTests: XCTestCase {
         let stagingFile = ModelManagerService.stagingDirectory
             .appendingPathComponent("view-model-staging.partial")
         try Data(repeating: 0xCD, count: 12_000).write(to: stagingFile, options: .atomic)
+        // BATCH-05: cached breakdown is now invalidated only on completion/promotion/quarantine/removal, not per read.
+        // Force a synchronous refresh so the cached value reflects the just-written staging file.
+        downloadManager.refreshStorageBreakdownForTests()
         let lifecycle = ModelLifecycleManager(
             inferenceService: InferenceService(),
             memoryBudgeter: MemoryBudgeter()

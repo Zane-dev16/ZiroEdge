@@ -876,6 +876,8 @@ extension ModelManagerService {
         } catch {
             try? FileManager.default.removeItem(at: source)
         }
+        // BATCH-05: notify storage cache to refresh (quarantine is a managed-storage mutation)
+        NotificationCenter.default.post(name: .managedStorageDidChange, object: nil)
     }
 
     /// Legacy models directory (pre-#4 location in Documents).
@@ -980,4 +982,9 @@ extension ModelManagerService {
             .appendingPathComponent("\(repairMarkerPrefix)\(model.id)")
         try? FileManager.default.removeItem(at: marker)
     }
+}
+
+
+extension Notification.Name {
+    static let managedStorageDidChange = Notification.Name("managedStorageDidChange")
 }

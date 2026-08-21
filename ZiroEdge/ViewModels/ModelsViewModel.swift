@@ -108,8 +108,9 @@ final class ModelsViewModel: ObservableObject {
 
     /// Total bytes owned by managed model storage, including partial and
     /// quarantined artifacts rather than installed models alone.
+    /// BATCH-05: reads cached breakdown to avoid per-tick enumeration on MainActor.
     var managedStorageUsage: String {
-        downloadManager.managedStorageBreakdown().formattedTotal
+        downloadManager.cachedStorageBreakdown.formattedTotal
     }
 
     /// Disk usage for a specific model.

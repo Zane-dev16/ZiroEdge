@@ -893,6 +893,7 @@ extension PersistenceController {
         context.performAndWait {
             let request = CDConversation.fetchRequest()
             request.sortDescriptors = [NSSortDescriptor(key: "updatedAt", ascending: false)]
+            request.fetchBatchSize = 50
             do {
                 if let injected = faultInjector.fault(for: .fetch) { throw injected }
                 let objects = try context.fetch(request)
@@ -933,6 +934,7 @@ extension PersistenceController {
             let request = CDChatMessage.fetchRequest()
             request.predicate = NSPredicate(format: "conversation.id == %@", conversationID as CVarArg)
             request.sortDescriptors = [NSSortDescriptor(key: "sequenceIndex", ascending: true)]
+            request.fetchBatchSize = 50
             do {
                 if let injected = faultInjector.fault(for: .fetch) { throw injected }
                 let objects = try context.fetch(request)
