@@ -725,10 +725,87 @@ extension ModelManagerService {
         return size.int64Value
     }
 
+    // MARK: - SHA256 mtime+size cache (BATCH-03 ANR fix)
+
+    private struct SHA256CacheEntry: Sendable {
+        let mtime: Date
+        let size: Int64
+        let hash: String
+    }
+
+    private static let sha256CacheLock = NSLock()
+    private static var sha256CacheStore: [String: SHA256CacheEntry] = [:]
+    private static var _sha256ComputeCount: Int = 0
+    private static var _sha256CacheHitCount: Int = 0
+    static var lastSHA256ComputeWasOffMain: Bool?
+
+    static var sha256ComputeCount: Int {
+        sha256CacheLock.lock(); defer { sha256CacheLock.unlock() }
+        return _sha256ComputeCount
+    }
+
+    static var sha256CacheHitCount: Int {
+        sha256CacheLock.lock(); defer { sha256CacheLock.unlock() }
+        return _sha256CacheHitCount
+    }
+
+    static func resetSHA256CacheForTests() {
+        sha256CacheLock.lock()
+        sha256CacheStore.removeAll()
+        _sha256ComputeCount = 0
+        _sha256CacheHitCount = 0
+        lastSHA256ComputeWasOffMain = nil
+        sha256CacheLock.unlock()
+    }
+
+    static func clearSHA256Cache() {
+        sha256CacheLock.lock()
+        sha256CacheStore.removeAll()
+        sha256CacheLock.unlock()
+    }
+
+    private static func cachedHashIfValid(for fileURL: URL, size: Int64, mtime: Date) -> String? {
+        sha256CacheLock.lock()
+        defer { sha256CacheLock.unlock() }
+        guard let entry = sha256CacheStore[fileURL.path], entry.size == size, entry.mtime == mtime else { return nil }
+        _sha256CacheHitCount += 1
+        return entry.hash
+    }
+
+    private static func storeHash(_ hash: String, for fileURL: URL, size: Int64, mtime: Date) {
+        sha256CacheLock.lock()
+        sha256CacheStore[fileURL.path] = SHA256CacheEntry(mtime: mtime, size: size, hash: hash)
+        _sha256ComputeCount += 1
+        lastSHA256ComputeWasOffMain = !Thread.isMainThread
+        sha256CacheLock.unlock()
+    }
+
     static func computeSHA256(fileURL: URL) -> String? {
+        // Fast-path: check mtime+size cache
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
+           let sizeNum = attrs[.size] as? NSNumber,
+           let mtime = attrs[.modificationDate] as? Date {
+            let size = sizeNum.int64Value
+            if let cached = cachedHashIfValid(for: fileURL, size: size, mtime: mtime) {
+                return cached
+            }
+            guard let handle = try? FileHandle(forReadingFrom: fileURL) else { return nil }
+            defer { try? handle.close() }
+            var hasher = SHA256()
+            while autoreleasepool(invoking: {
+                guard let chunk = try? handle.read(upToCount: 65_536), !chunk.isEmpty else {
+                    return false
+                }
+                hasher.update(data: chunk)
+                return true
+            }) {}
+            let hash = hasher.finalize().map { String(format: "%02x", $0) }.joined()
+            storeHash(hash, for: fileURL, size: size, mtime: mtime)
+            return hash
+        }
+        // Fallback without cache (no mtime)
         guard let handle = try? FileHandle(forReadingFrom: fileURL) else { return nil }
         defer { try? handle.close() }
-
         var hasher = SHA256()
         while autoreleasepool(invoking: {
             guard let chunk = try? handle.read(upToCount: 65_536), !chunk.isEmpty else {
@@ -737,9 +814,12 @@ extension ModelManagerService {
             hasher.update(data: chunk)
             return true
         }) {}
-
-        let digest = hasher.finalize()
-        return digest.map { String(format: "%02x", $0) }.joined()
+        let hash = hasher.finalize().map { String(format: "%02x", $0) }.joined()
+        sha256CacheLock.lock()
+        _sha256ComputeCount += 1
+        lastSHA256ComputeWasOffMain = !Thread.isMainThread
+        sha256CacheLock.unlock()
+        return hash
     }
 }
 

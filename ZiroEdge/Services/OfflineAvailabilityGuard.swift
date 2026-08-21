@@ -67,16 +67,13 @@ enum OfflineAvailabilityGuard {
 
     // MARK: - Public API
 
-    /// Sweep every catalog model and return a typed verdict for each one.
-    /// - Parameter extraModels: Optional additional models to verify (e.g. calibration-only).
-    /// - Returns: A report ready for UI consumption.
-    static func sweep(
-        extraModels: [AIModel] = []
-    ) -> OfflineAvailabilityReport {
+    // BATCH-03: mtime+size cache + off-main execution
+    static var lastSweepWasOffMain: Bool?
+
+    private static func makeReport(extraModels: [AIModel]) -> OfflineAvailabilityReport {
         let all = ModelRegistry.allModels + extraModels
         var models: [String: OfflineModelReadiness] = [:]
         var diagnostics: [String] = []
-
         for model in all {
             let availability = ModelManagerService.availability(for: model)
             switch availability {
@@ -87,7 +84,6 @@ enum OfflineAvailabilityGuard {
                 diagnostics.append(
                     "[offline-guard] \(model.id): verified — ready for offline use\(textOnly ? " (text-only)" : "")"
                 )
-
             case .repairNeeded(let issues):
                 models[model.id] = .repairNeeded(issues: issues)
                 let issueDescriptions = issues.map { issue -> String in
@@ -103,20 +99,37 @@ enum OfflineAvailabilityGuard {
                 diagnostics.append(
                     "[offline-guard] \(model.id): repair needed — \(issueDescriptions.joined(separator: ", "))"
                 )
-
             case .unavailable:
                 models[model.id] = .unavailable
                 diagnostics.append("[offline-guard] \(model.id): unavailable")
             }
         }
-
         logger.info("Offline sweep complete: \(self.modelsSummary(models), privacy: .public)")
-
         return OfflineAvailabilityReport(
             timestamp: Date(),
             models: models,
             diagnostics: diagnostics
         )
+    }
+
+    /// Sweep every catalog model and return a typed verdict for each one.
+    /// - Parameter extraModels: Optional additional models to verify (e.g. calibration-only).
+    /// - Returns: A report ready for UI consumption.
+    /// Runs off the main actor when awaited; the synchronous overload is retained for legacy tests.
+    static func sweep(extraModels: [AIModel] = []) async -> OfflineAvailabilityReport {
+        let report = await Task.detached(priority: .utility) {
+            lastSweepWasOffMain = !Thread.isMainThread
+            return makeReport(extraModels: extraModels)
+        }.value
+        return report
+    }
+
+    /// Synchronous sweep retained for legacy callers and tests.
+    /// For startup, prefer `await sweep(extraModels:)` which runs on a background task.
+    static func sweep(extraModels: [AIModel] = []) -> OfflineAvailabilityReport {
+        // If already off-main, just run; if on main, still run but record metric
+        lastSweepWasOffMain = !Thread.isMainThread
+        return makeReport(extraModels: extraModels)
     }
 
     /// Lightweight check: run the sweep and return true when at least one model is offline-ready.
@@ -128,6 +141,18 @@ enum OfflineAvailabilityGuard {
             }
         }
         return false
+    }
+
+    /// Async variant that performs availability checks off the main actor.
+    static func hasAnyOfflineReadyModel(extraModels: [AIModel] = []) async -> Bool {
+        await Task.detached(priority: .utility) {
+            for model in ModelRegistry.allModels + extraModels {
+                if case .ready = ModelManagerService.availability(for: model) {
+                    return true
+                }
+            }
+            return false
+        }.value
     }
 
     /// Verify that no model with a resumable download or staged artifact is

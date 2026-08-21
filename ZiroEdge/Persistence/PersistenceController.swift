@@ -143,6 +143,12 @@ actor PersistenceController {
         configuration: PersistenceConfiguration = .production,
         faultInjector: any PersistenceFaultInjecting = NoopPersistenceFaultInjector()
     ) async -> Result<PersistenceController, PersistenceFailure> {
+        // BATCH-03: ensure the semaphore-style wait inside loadPersistentStores never blocks MainActor
+        if Thread.isMainThread {
+            return await Task.detached(priority: .userInitiated) {
+                await PersistenceController.open(configuration: configuration, faultInjector: faultInjector)
+            }.value
+        }
         let controller = PersistenceController(configuration: configuration, faultInjector: faultInjector)
         if let injected = faultInjector.fault(for: .loadStore) {
             return .failure(.map(injected, operation: .loadStore))
@@ -176,15 +182,34 @@ actor PersistenceController {
 
     /// In-memory compatibility initializer for previews and legacy tests only.
     /// It never falls back to a disk store and never terminates the process.
+    /// BATCH-03: avoids blocking the MainActor by using a synchronous in-memory add
+    /// when called on the main thread; the semaphore path remains for background callers.
     init(inMemory: Bool) {
         precondition(inMemory, "Use await PersistenceController.open() for disk-backed stores")
         let controller = PersistenceController(configuration: .inMemory, faultInjector: NoopPersistenceFaultInjector())
         self.container = controller.container
         self.faultInjector = controller.faultInjector
         self.recoveryJournalURL = nil
-        let semaphore = DispatchSemaphore(value: 0)
-        container.loadPersistentStores { _, _ in semaphore.signal() }
-        semaphore.wait()
+        // For in-memory stores, a synchronous add is sufficient and avoids the semaphore ANR.
+        // This completes in microseconds without touching disk.
+        if Thread.isMainThread {
+            do {
+                try container.persistentStoreCoordinator.addPersistentStore(ofType: NSInMemoryStoreType, configurationName: nil, at: nil, options: nil)
+                return
+            } catch {
+                // Fall through to RunLoop-aware semaphore path
+            }
+            let semaphore = DispatchSemaphore(value: 0)
+            container.loadPersistentStores { _, _ in semaphore.signal() }
+            // Spin the runloop instead of hard-blocking the MainActor executor
+            while semaphore.wait(timeout: .now() + 0.01) == .timedOut {
+                RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.01))
+            }
+        } else {
+            let semaphore = DispatchSemaphore(value: 0)
+            container.loadPersistentStores { _, _ in semaphore.signal() }
+            semaphore.wait()
+        }
     }
 
     static var productionStoreURL: URL {

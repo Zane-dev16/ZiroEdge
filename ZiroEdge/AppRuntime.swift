@@ -128,10 +128,13 @@ final class AppRuntime: ObservableObject {
     private func openStore() async {
         attempt += 1
         state = .loading(attempt: attempt)
-        let result = await PersistenceController.open(
-            configuration: configuration,
-            faultInjector: faultInjector
-        )
+        // BATCH-03: move store opening off MainActor to avoid ANR
+        let result = await Task.detached(priority: .userInitiated) {
+            await PersistenceController.open(
+                configuration: self.configuration,
+                faultInjector: self.faultInjector
+            )
+        }.value
         switch result {
         case .success(let persistence):
             switch await persistence.recoverIncompleteStreams() {
@@ -140,7 +143,7 @@ final class AppRuntime: ObservableObject {
                 diagnosticsURL = nil
                 diagnosticsExportError = nil
                 do {
-                    state = .ready(try makeServices(persistence: persistence))
+                    state = .ready(try await makeServices(persistence: persistence))
                 } catch {
                     state = .loadSafetyFailed(
                         message: "Load-safety storage is unavailable or corrupt. Model loading is blocked to protect this device."
@@ -165,7 +168,7 @@ final class AppRuntime: ObservableObject {
         }
     }
 
-    private func makeServices(persistence: PersistenceController) throws -> RuntimeServices {
+    private func makeServices(persistence: PersistenceController) async throws -> RuntimeServices {
         if case .ready(let existing) = state {
             existing.downloadManager.teardown()
         }
@@ -197,7 +200,7 @@ final class AppRuntime: ObservableObject {
             downloadStatusProvider: downloadManager
         )
         chatViewModel.conversationListViewModel = conversationListViewModel
-        let offlineReport = OfflineAvailabilityGuard.sweep(extraModels: ModelRegistry.importedModels)
+        let offlineReport = await OfflineAvailabilityGuard.sweep(extraModels: ModelRegistry.importedModels)
         let modelsVM = ModelsViewModel(
             downloadManager: downloadManager,
             lifecycleManager: lifecycleManager,
