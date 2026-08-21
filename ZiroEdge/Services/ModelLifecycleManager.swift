@@ -481,11 +481,15 @@ enum ModelManagerService {
         }
         guard isValidSHA256(expectedSHA),
               FileManager.default.fileExists(atPath: path.path) else { return false }
-        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path.path),
-              let fileSize = attrs[.size] as? Int64,
-              fileSize == expectedBytes,
-              verifyGGUFHeader(fileURL: path),
-              verifySHA256(fileURL: path, expected: expectedSHA) else {
+        // Canonical validation pass; the quarantine decision stays here.
+        let outcome = ModelArtifactVerifier.validate(
+            fileURL: path,
+            expectedBytes: expectedBytes,
+            expectedSHA256: expectedSHA,
+            isCancelled: { false },
+            digestProvider: { computeSHA256(fileURL: $0) }
+        )
+        guard outcome == .valid else {
             quarantineInvalidArtifact(at: path, storageID: model.id)
             markRepairNeeded(for: model)
             return false
@@ -667,41 +671,70 @@ extension ModelManagerService {
 
         var issues: [ArtifactIssue] = []
 
+        // Single canonical validation pass per artifact (ModelArtifactVerifier);
+        // outcomes map onto the historical ArtifactIssue taxonomy.
+        // Returns true when the caller must stop processing further artifacts
+        // (unreadable file during hashing — the legacy short-circuit).
+        @discardableResult
+        func validateArtifact(
+            _ path: URL,
+            expectedBytes: Int64,
+            expectedSHA: String,
+            artifact: ArtifactType
+        ) -> Bool {
+            switch ModelArtifactVerifier.validate(
+                fileURL: path,
+                expectedBytes: expectedBytes,
+                expectedSHA256: expectedSHA,
+                isCancelled: { false },
+                digestProvider: { computeSHA256(fileURL: $0) }
+            ) {
+            case .valid:
+                return false
+            case .missingFile:
+                issues.append(.missing(artifact: artifact))
+                return false
+            case .unreadableSize, .sizeMismatch:
+                issues.append(.sizeMismatch)
+                return false
+            case .structureInvalid:
+                issues.append(.missingGGUFHeader)
+                return false
+            case .readFailure:
+                // Legacy behavior: an unreadable file aborts the whole sweep
+                // immediately with a SHA-256 issue for this artifact.
+                issues.append(.sha256Mismatch)
+                return true
+            case .hashMismatch:
+                issues.append(.sha256Mismatch)
+                return false
+            case .invalidMetadata, .cancelled:
+                // Unreachable: the catalog guard above guarantees positive
+                // sizes and lowercase digests, and cancellation is disabled.
+                issues.append(.unknown("invalid catalog integrity metadata"))
+                return true
+            }
+        }
+
         // Check base artifact.
-        let basePath = baseModelPath(for: model)
-        if !FileManager.default.fileExists(atPath: basePath.path) {
-            issues.append(.missing(artifact: .base))
-        } else if fileSize(at: basePath) != model.baseFileSizeBytes {
-            issues.append(.sizeMismatch)
-        } else if !verifyGGUFHeader(fileURL: basePath) {
-            issues.append(.missingGGUFHeader)
-        } else {
-            guard let actualSHA = computeSHA256(fileURL: basePath) else {
-                issues.append(.sha256Mismatch)
-                return .repairNeeded(issues: issues)
-            }
-            if actualSHA != model.baseSHA256 {
-                issues.append(.sha256Mismatch)
-            }
+        if validateArtifact(
+            baseModelPath(for: model),
+            expectedBytes: model.baseFileSizeBytes,
+            expectedSHA: model.baseSHA256,
+            artifact: .base
+        ) {
+            return .repairNeeded(issues: issues)
         }
 
         // Check mmproj artifact for vision models.
         if model.requiresMMProj {
-            let mmprojPath = mmprojModelPath(for: model)
-            if !FileManager.default.fileExists(atPath: mmprojPath.path) {
-                issues.append(.missing(artifact: .mmproj))
-            } else if fileSize(at: mmprojPath) != model.mmprojFileSizeBytes {
-                issues.append(.sizeMismatch)
-            } else if !verifyGGUFHeader(fileURL: mmprojPath) {
-                issues.append(.missingGGUFHeader)
-            } else if let expectedSHA = model.mmprojSHA256 {
-                guard let actualSHA = computeSHA256(fileURL: mmprojPath) else {
-                    issues.append(.sha256Mismatch)
-                    return .repairNeeded(issues: issues)
-                }
-                if actualSHA != expectedSHA {
-                    issues.append(.sha256Mismatch)
-                }
+            if validateArtifact(
+                mmprojModelPath(for: model),
+                expectedBytes: model.mmprojFileSizeBytes ?? 0,
+                expectedSHA: model.mmprojSHA256 ?? "",
+                artifact: .mmproj
+            ) {
+                return .repairNeeded(issues: issues)
             }
         }
 
@@ -709,117 +742,6 @@ extension ModelManagerService {
             return .ready
         }
         return .repairNeeded(issues: issues)
-    }
-}
-
-// MARK: - SHA256 Helper
-
-import CryptoKit
-
-extension ModelManagerService {
-    /// Compute SHA-256 of a file by streaming in 64 KB chunks.
-    /// Avoids loading the entire file into memory (critical for multi-GB GGUFs).
-    private static func fileSize(at url: URL) -> Int64? {
-        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
-              let size = attributes[.size] as? NSNumber else { return nil }
-        return size.int64Value
-    }
-
-    // MARK: - SHA256 mtime+size cache (BATCH-03 ANR fix)
-
-    private struct SHA256CacheEntry: Sendable {
-        let mtime: Date
-        let size: Int64
-        let hash: String
-    }
-
-    private static let sha256CacheLock = NSLock()
-    private static var sha256CacheStore: [String: SHA256CacheEntry] = [:]
-    private static var _sha256ComputeCount: Int = 0
-    private static var _sha256CacheHitCount: Int = 0
-    static var lastSHA256ComputeWasOffMain: Bool?
-
-    static var sha256ComputeCount: Int {
-        sha256CacheLock.lock(); defer { sha256CacheLock.unlock() }
-        return _sha256ComputeCount
-    }
-
-    static var sha256CacheHitCount: Int {
-        sha256CacheLock.lock(); defer { sha256CacheLock.unlock() }
-        return _sha256CacheHitCount
-    }
-
-    static func resetSHA256CacheForTests() {
-        sha256CacheLock.lock()
-        sha256CacheStore.removeAll()
-        _sha256ComputeCount = 0
-        _sha256CacheHitCount = 0
-        lastSHA256ComputeWasOffMain = nil
-        sha256CacheLock.unlock()
-    }
-
-    static func clearSHA256Cache() {
-        sha256CacheLock.lock()
-        sha256CacheStore.removeAll()
-        sha256CacheLock.unlock()
-    }
-
-    private static func cachedHashIfValid(for fileURL: URL, size: Int64, mtime: Date) -> String? {
-        sha256CacheLock.lock()
-        defer { sha256CacheLock.unlock() }
-        guard let entry = sha256CacheStore[fileURL.path], entry.size == size, entry.mtime == mtime else { return nil }
-        _sha256CacheHitCount += 1
-        return entry.hash
-    }
-
-    private static func storeHash(_ hash: String, for fileURL: URL, size: Int64, mtime: Date) {
-        sha256CacheLock.lock()
-        sha256CacheStore[fileURL.path] = SHA256CacheEntry(mtime: mtime, size: size, hash: hash)
-        _sha256ComputeCount += 1
-        lastSHA256ComputeWasOffMain = !Thread.isMainThread
-        sha256CacheLock.unlock()
-    }
-
-    static func computeSHA256(fileURL: URL) -> String? {
-        // Fast-path: check mtime+size cache
-        if let attrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
-           let sizeNum = attrs[.size] as? NSNumber,
-           let mtime = attrs[.modificationDate] as? Date {
-            let size = sizeNum.int64Value
-            if let cached = cachedHashIfValid(for: fileURL, size: size, mtime: mtime) {
-                return cached
-            }
-            guard let handle = try? FileHandle(forReadingFrom: fileURL) else { return nil }
-            defer { try? handle.close() }
-            var hasher = SHA256()
-            while autoreleasepool(invoking: {
-                guard let chunk = try? handle.read(upToCount: 65_536), !chunk.isEmpty else {
-                    return false
-                }
-                hasher.update(data: chunk)
-                return true
-            }) {}
-            let hash = hasher.finalize().map { String(format: "%02x", $0) }.joined()
-            storeHash(hash, for: fileURL, size: size, mtime: mtime)
-            return hash
-        }
-        // Fallback without cache (no mtime)
-        guard let handle = try? FileHandle(forReadingFrom: fileURL) else { return nil }
-        defer { try? handle.close() }
-        var hasher = SHA256()
-        while autoreleasepool(invoking: {
-            guard let chunk = try? handle.read(upToCount: 65_536), !chunk.isEmpty else {
-                return false
-            }
-            hasher.update(data: chunk)
-            return true
-        }) {}
-        let hash = hasher.finalize().map { String(format: "%02x", $0) }.joined()
-        sha256CacheLock.lock()
-        _sha256ComputeCount += 1
-        lastSHA256ComputeWasOffMain = !Thread.isMainThread
-        sha256CacheLock.unlock()
-        return hash
     }
 }
 
@@ -891,68 +813,6 @@ extension ModelManagerService {
             for: .documentDirectory, in: .userDomainMask
         )[0]
         return documents.appendingPathComponent("Models", isDirectory: true)
-    }
-}
-
-// MARK: - Artifact Validation
-
-extension ModelManagerService {
-
-    /// Lightweight pre-SHA validation of a model artifact. Returns a list of
-    /// human-readable issue descriptions. Empty list means the file passes.
-    static func artifactValidationIssues(
-        at url: URL,
-        model: AIModel,
-        artifact: ArtifactType
-    ) -> [String] {
-        var issues: [String] = []
-        let fm = FileManager.default
-
-        guard fm.fileExists(atPath: url.path) else {
-            issues.append("File does not exist at \(url.path)")
-            return issues
-        }
-
-        guard let attrs = try? fm.attributesOfItem(atPath: url.path),
-              let fileSize = attrs[.size] as? Int64,
-              fileSize > 0 else {
-            issues.append("File is empty or unreadable")
-            return issues
-        }
-
-        // Verify GGUF header magic.
-        guard verifyGGUFHeader(fileURL: url) else {
-            issues.append("Invalid or missing GGUF header magic")
-            return issues
-        }
-
-        // Size sanity check: must be at least the advertised model size.
-        let expectedSize = artifact == .base
-            ? model.baseFileSizeBytes
-            : model.mmprojFileSizeBytes ?? 0
-        if expectedSize > 0 && fileSize != expectedSize {
-            issues.append("File size does not match catalog metadata")
-        }
-
-        let expectedHash = artifact == .base ? model.baseSHA256 : model.mmprojSHA256 ?? ""
-        guard isValidSHA256(expectedHash) else {
-            issues.append("Catalog SHA-256 metadata is invalid")
-            return issues
-        }
-        if !verifySHA256(fileURL: url, expected: expectedHash) {
-            issues.append("SHA-256 does not match catalog metadata")
-        }
-
-        return issues
-    }
-
-    /// Parse the complete GGUF metadata/tensor descriptor tables with
-    /// llama.cpp and prove every declared tensor fits inside the file. The
-    /// historical name is retained because this is a widely used validation
-    /// seam, but the check is intentionally much stronger than an 8-byte
-    /// magic/version probe.
-    static func verifyGGUFHeader(fileURL: URL) -> Bool {
-        GGUFFileValidator.isStructurallyValid(atPath: fileURL.path)
     }
 }
 

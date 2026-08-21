@@ -33,6 +33,35 @@ struct VerificationMetrics: Sendable {
     let totalBytesProcessed: Int64
 }
 
+// MARK: - Canonical Validation Outcome
+
+/// Outcome of the single canonical artifact validation pass.
+/// Every hash + byte-size comparison in the app funnels through
+/// `ModelArtifactVerifier.validate`, and callers map this outcome onto their
+/// own externally observable error types (see `failure`,
+/// `ModelManagerService.availability`, `isArtifactDownloaded`,
+/// `artifactValidationIssues`).
+enum ArtifactValidationOutcome: Sendable, Equatable {
+    /// The artifact satisfies the full catalog contract.
+    case valid
+    /// Catalog metadata itself is unusable (non-positive bytes or malformed digest).
+    case invalidMetadata
+    /// No file exists at the validated path.
+    case missingFile
+    /// The file's byte size could not be read.
+    case unreadableSize
+    /// The file's byte size differs from the catalog-advertised size.
+    case sizeMismatch(expected: Int64, actual: Int64)
+    /// The GGUF metadata/tensor tables are structurally invalid.
+    case structureInvalid
+    /// The file could not be opened or read during hashing.
+    case readFailure
+    /// The streamed SHA-256 differs from the catalog digest.
+    case hashMismatch
+    /// Cooperative cancellation fired mid-pass.
+    case cancelled
+}
+
 // MARK: - Verifier
 
 /// Bounded-memory staged-file validation. Call from a detached task in production.
@@ -65,51 +94,36 @@ enum ModelArtifactVerifier {
     /// read operation; the hasher state is constant-size.
     static let bufferSize = 65_536
 
-    // MARK: - Core Validation
+    // MARK: - Canonical Hash Primitive
 
-    /// Validate a staged artifact file against catalog metadata.
-    ///
-    /// - Parameters:
-    ///   - fileURL: Path to the staged file.
-    ///   - expectedBytes: Catalog-advertised byte count.
-    ///   - expectedSHA256: Catalog-advertised lowercase hex SHA-256.
-    ///   - onProgress: Optional callback invoked after each chunk
-    ///     (never on the main actor).
-    /// - Returns: `nil` when the file passes; a `DownloadError` otherwise.
-    static func failure(
+    /// Result of the single streaming hash pass.
+    private enum StreamHashOutcome {
+        case digest(String, streamedBytes: Int64)
+        case openFailed
+        case readFailed
+        case cancelled
+    }
+
+    /// The sole streaming SHA-256 implementation in the app. Every hash
+    /// computation (`validate`, `ModelManagerService.computeSHA256`) routes
+    /// through this loop: one reused 64 KiB read buffer, constant-size hasher
+    /// state, cooperative cancellation checked once per chunk.
+    private static func streamHash(
         fileURL: URL,
-        expectedBytes: Int64,
-        expectedSHA256: String,
-        onProgress: ((VerificationProgress) -> Void)? = nil
-    ) -> DownloadError? {
-        guard expectedBytes > 0,
-              ModelManagerService.isValidSHA256(expectedSHA256) else {
-            return .invalidCatalogMetadata
-        }
-        guard FileManager.default.fileExists(atPath: fileURL.path) else {
-            return .contentRejected(reason: "the staged artifact does not exist")
-        }
-        guard let attributes = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
-              let actualBytes = attributes[.size] as? Int64 else {
-            return .contentRejected(reason: "the staged artifact size could not be read")
-        }
-        guard actualBytes == expectedBytes else {
-            return .sizeMismatch(expected: expectedBytes, actual: actualBytes)
-        }
-        guard ModelManagerService.verifyGGUFHeader(fileURL: fileURL) else {
-            return .structureInvalid(reason: "the GGUF metadata or tensor tables are invalid")
-        }
+        isCancelled: () -> Bool,
+        onChunk: ((Int64) -> Void)?
+    ) -> StreamHashOutcome {
         guard let inputStream = InputStream(url: fileURL) else {
-            return .contentRejected(reason: "the staged artifact could not be opened")
+            return .openFailed
         }
         inputStream.open()
         defer { inputStream.close() }
 
         var hasher = SHA256()
-        var actualSize: Int64 = 0
+        var processed: Int64 = 0
         var buffer = Data(count: bufferSize)
         while true {
-            if Task.isCancelled { return .cancelled }
+            if isCancelled() { return .cancelled }
             let bytesRead = buffer.withUnsafeMutableBytes { rawBuffer in
                 guard let baseAddress = rawBuffer.baseAddress else { return -1 }
                 return inputStream.read(
@@ -117,23 +131,150 @@ enum ModelArtifactVerifier {
                     maxLength: bufferSize
                 )
             }
-            if bytesRead < 0 {
-                return .contentRejected(reason: "the staged artifact could not be read")
-            }
+            if bytesRead < 0 { return .readFailed }
             if bytesRead == 0 { break }
-            actualSize += Int64(bytesRead)
+            processed += Int64(bytesRead)
             hasher.update(data: buffer.prefix(bytesRead))
-            onProgress?(VerificationProgress(
-                bytesProcessed: actualSize,
-                totalBytes: expectedBytes
-            ))
+            onChunk?(processed)
         }
-        guard actualSize == expectedBytes else {
-            return .sizeMismatch(expected: expectedBytes, actual: actualSize)
-        }
+        let digest = hasher.finalize().map { String(format: "%02x", $0) }.joined()
+        return .digest(digest, streamedBytes: processed)
+    }
 
-        let actual = hasher.finalize().map { String(format: "%02x", $0) }.joined()
-        return actual == expectedSHA256 ? nil : .sha256Mismatch
+    /// Compute the SHA-256 digest of a file. Returns `nil` when the file
+    /// cannot be opened or read (or when `isCancelled` fires).
+    /// Callers add any memoization they need (e.g. the mtime+size cache in
+    /// `ModelManagerService.computeSHA256`).
+    static func digest(fileURL: URL, isCancelled: () -> Bool = { false }) -> String? {
+        switch streamHash(fileURL: fileURL, isCancelled: isCancelled, onChunk: nil) {
+        case .digest(let digest, _): return digest
+        case .openFailed, .readFailed, .cancelled: return nil
+        }
+    }
+
+    // MARK: - Core Validation
+
+    /// Validate an artifact file against catalog metadata.
+    ///
+    /// This is the single canonical hash + byte-size comparison path. All
+    /// validators (download verification, availability sweeps, installed-
+    /// artifact integrity, migration preflight) call it and map the outcome
+    /// onto their own error types; quarantine decisions remain with callers.
+    ///
+    /// - Parameters:
+    ///   - fileURL: Path to the artifact file.
+    ///   - expectedBytes: Catalog-advertised byte count.
+    ///   - expectedSHA256: Catalog-advertised lowercase hex SHA-256.
+    ///   - onProgress: Optional callback invoked after each chunk
+    ///     (never on the main actor).
+    ///   - isCancelled: Cooperative cancellation probe, consulted once per
+    ///     chunk. Defaults to the surrounding task's cancellation state;
+    ///     pass `{ false }` when the pass must run to completion.
+    ///   - digestProvider: Optional replacement for the built-in streaming
+    ///     hash (e.g. `ModelManagerService.computeSHA256` to reuse its
+    ///     mtime+size memoization). Returning `nil` maps to `.readFailure`.
+    /// - Returns: A typed `ArtifactValidationOutcome`.
+    static func validate(
+        fileURL: URL,
+        expectedBytes: Int64,
+        expectedSHA256: String,
+        onProgress: ((VerificationProgress) -> Void)? = nil,
+        isCancelled: () -> Bool = { Task.isCancelled },
+        digestProvider: ((URL) -> String?)? = nil
+    ) -> ArtifactValidationOutcome {
+        guard expectedBytes > 0,
+              ModelManagerService.isValidSHA256(expectedSHA256) else {
+            return .invalidMetadata
+        }
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            return .missingFile
+        }
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
+              let actualBytes = attributes[.size] as? Int64 else {
+            return .unreadableSize
+        }
+        guard actualBytes == expectedBytes else {
+            return .sizeMismatch(expected: expectedBytes, actual: actualBytes)
+        }
+        guard ModelManagerService.verifyGGUFHeader(fileURL: fileURL) else {
+            return .structureInvalid
+        }
+        let hashed: StreamHashOutcome
+        if let digestProvider {
+            // External (possibly memoized) digest source. The attribute read
+            // above already pinned the byte count, so no post-stream re-check.
+            hashed = digestProvider(fileURL).map {
+                .digest($0, streamedBytes: actualBytes)
+            } ?? .readFailed
+        } else {
+            hashed = streamHash(
+                fileURL: fileURL,
+                isCancelled: isCancelled,
+                onChunk: onProgress.map { progress in
+                    { processed in
+                        progress(VerificationProgress(
+                            bytesProcessed: processed,
+                            totalBytes: expectedBytes
+                        ))
+                    }
+                }
+            )
+        }
+        switch hashed {
+        case .digest(let actual, let streamedBytes):
+            // Re-check size after streaming: catches truncation/mutation
+            // between the attribute read above and the hashing pass.
+            guard streamedBytes == expectedBytes else {
+                return .sizeMismatch(expected: expectedBytes, actual: streamedBytes)
+            }
+            return actual == expectedSHA256 ? .valid : .hashMismatch
+        case .openFailed:
+            return .readFailure
+        case .readFailed:
+            return .readFailure
+        case .cancelled:
+            return .cancelled
+        }
+    }
+
+    /// Post-stream byte-size re-check is folded into `validate`; this shim
+    /// retains the historical `DownloadError` surface for download callers.
+    static func failure(
+        fileURL: URL,
+        expectedBytes: Int64,
+        expectedSHA256: String,
+        onProgress: ((VerificationProgress) -> Void)? = nil
+    ) -> DownloadError? {
+        downloadError(from: validate(
+            fileURL: fileURL,
+            expectedBytes: expectedBytes,
+            expectedSHA256: expectedSHA256,
+            onProgress: onProgress
+        ))
+    }
+
+    /// Map the canonical outcome onto the download-domain error type.
+    static func downloadError(from outcome: ArtifactValidationOutcome) -> DownloadError? {
+        switch outcome {
+        case .valid:
+            return nil
+        case .invalidMetadata:
+            return .invalidCatalogMetadata
+        case .missingFile:
+            return .contentRejected(reason: "the staged artifact does not exist")
+        case .unreadableSize:
+            return .contentRejected(reason: "the staged artifact size could not be read")
+        case .sizeMismatch(let expected, let actual):
+            return .sizeMismatch(expected: expected, actual: actual)
+        case .structureInvalid:
+            return .structureInvalid(reason: "the GGUF metadata or tensor tables are invalid")
+        case .readFailure:
+            return .contentRejected(reason: "the staged artifact could not be read")
+        case .hashMismatch:
+            return .sha256Mismatch
+        case .cancelled:
+            return .cancelled
+        }
     }
 
     // MARK: - Measured Validation
