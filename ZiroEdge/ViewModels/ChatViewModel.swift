@@ -46,6 +46,12 @@ final class ChatViewModel: ObservableObject {
     /// Warning shown when user tries to send images with a text-only model.
     @Published var visionWarning: String?
 
+#if DEBUG
+    /// Test hook injected between the two awaits in sendMessage to simulate
+    /// the pendingImages lost-update race deterministically.
+    var testHookBetweenAwaits: (() async -> Void)?
+#endif
+
     /// Context window size in tokens (default 4096).
     let contextWindowSize: Int = 4096
 
@@ -398,11 +404,20 @@ extension ChatViewModel {
             text: text, hasImages: hasImages
         ) else { return }
 
+        // Snapshot and atomically drop only the prefix that is being sent.
+        // This makes the window between snapshot and the first await safe: any
+        // addImage that runs while we are suspended will append after the
+        // removed prefix and therefore survive the post-streaming cleanup.
+        let imagesToSend = pendingImages
+        let snapshotCount = imagesToSend.count
+        if snapshotCount > 0 {
+            pendingImages.removeFirst(snapshotCount)
+        }
+        let hasImagesToSend = !imagesToSend.isEmpty
         inputText = ""
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         let isFirstExchange = messages.isEmpty
         let firstUserMessage = text
-        let imagesToSend = hasImages ? pendingImages : []
 
         let insertResult = await persistence.insertMessageResult(
             conversationID: conversationID,
@@ -412,6 +427,11 @@ extension ChatViewModel {
         )
         if case .failure(let error) = insertResult {
             inputText = text
+            if snapshotCount > 0 {
+                // Restore the snapshot in front of any interleaved adds
+                // that arrived during the insert await.
+                pendingImages.insert(contentsOf: imagesToSend, at: 0)
+            }
             errorMessage = error.localizedDescription
             showError = true
             return
@@ -426,13 +446,22 @@ extension ChatViewModel {
         let generationID = UUID()
         activeGenerationID = generationID
 
+#if DEBUG
+        await testHookBetweenAwaits?()
+#endif
         await startStreaming(
             generationID: generationID,
             conversationID: conversationID, history: history, images: imagesToSend,
-            hasImages: hasImages, isFirstExchange: isFirstExchange,
+            hasImages: hasImagesToSend, isFirstExchange: isFirstExchange,
             firstUserMessage: firstUserMessage
         )
-        clearImages()
+        // Snapshot was already removed before the first await. Do not use
+        // removeAll which would wipe interleaved adds that arrived during
+        // either await window. Keep any pending images that appeared after
+        // the snapshot and just clear the transient warning.
+        if snapshotCount > 0 {
+            visionWarning = nil
+        }
     }
 
     private func startStreaming(

@@ -118,6 +118,7 @@
 		ED50EBFCC3F26D8C0912AB70 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14951210F8F3234E8EE9ACF8 /* OnboardingView.swift */; };
 		F0833C8DD27AA2BC75CAC5A8 /* DownloadDiagnosticsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60B5ACA1B08BF000F7CAA057 /* DownloadDiagnosticsTests.swift */; };
 		F308DB4C6A26B32606DFBBDF /* ConversationListViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7AEBED57984673F2549AD67F /* ConversationListViewModel.swift */; };
+		F34C516309A5479AC761B546 /* Batch02PendingImagesRaceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 343BE92C91DF993888B6E321 /* Batch02PendingImagesRaceTests.swift */; };
 		F3FC74980D5CDCA533C7B896 /* MemoryDiagnosticWorkload.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7D23A8928B6ADDC443C1B88 /* MemoryDiagnosticWorkload.swift */; };
 		F658EA3D3854307BD6E47797 /* ImportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCABFA8916018FB9B17A6CA3 /* ImportView.swift */; };
 		F8CA62762C22A5CD9E09B2F8 /* PairedArtifactCoordinationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F19CDC2A27AA8D87C05842D /* PairedArtifactCoordinationTests.swift */; };
@@ -161,6 +162,7 @@
 		2D4D5F9E57ADBB8C89FB27FC /* RAMDiagnosticTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RAMDiagnosticTests.swift; sourceTree = "<group>"; };
 		2F19CDC2A27AA8D87C05842D /* PairedArtifactCoordinationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairedArtifactCoordinationTests.swift; sourceTree = "<group>"; };
 		32A1B26312450DA02CEE7FAB /* AIModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIModel.swift; sourceTree = "<group>"; };
+		343BE92C91DF993888B6E321 /* Batch02PendingImagesRaceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Batch02PendingImagesRaceTests.swift; sourceTree = "<group>"; };
 		387DC457818126F788BDBB8A /* ModelDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelDetailView.swift; sourceTree = "<group>"; };
 		406F483B047FB94538D31E52 /* ZiroEdge.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = ZiroEdge.entitlements; sourceTree = "<group>"; };
 		434D051FE9534370ABBBDDB5 /* ImportStoragePreflightTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportStoragePreflightTests.swift; sourceTree = "<group>"; };
@@ -419,6 +421,7 @@
 			isa = PBXGroup;
 			children = (
 				8B200FFD16CAEE03D809DBBA /* AppRuntimeTests.swift */,
+				343BE92C91DF993888B6E321 /* Batch02PendingImagesRaceTests.swift */,
 				B1DD2E57188D48275A834354 /* BoundedVerificationTests.swift */,
 				CDA3D7504BF8CD7CDA9BE445 /* ChatUXTests.swift */,
 				816C6B541E5012339E31CAB1 /* ConversationHistoryEligibilityTests.swift */,
@@ -636,6 +639,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				80E347B69410E8E556F84E20 /* AppRuntimeTests.swift in Sources */,
+				F34C516309A5479AC761B546 /* Batch02PendingImagesRaceTests.swift in Sources */,
 				2CA9459765DE0FD509952BA5 /* BoundedVerificationTests.swift in Sources */,
 				9E55E4716493115AFEB5D119 /* ChatUXTests.swift in Sources */,
 				89FDF43AFCC905D098565544 /* ConversationHistoryEligibilityTests.swift in Sources */,
