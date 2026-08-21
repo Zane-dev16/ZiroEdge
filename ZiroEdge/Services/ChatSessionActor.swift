@@ -154,13 +154,16 @@ actor ChatSessionActor {
                 context: context,
                 inferenceService: inferenceService
             )
-            try await pumpTokens(
+            let completedNaturally = try await pumpTokens(
                 stream,
                 messageID: messageID,
                 generationID: generationID,
                 persistence: persistence,
                 onToken: context.onToken
             )
+            // Cancellation/invalidation exits the pump early; the canceller
+            // owns finalization (exactly-once). Only a natural end may complete.
+            guard completedNaturally else { return }
             await finalizeStream(
                 messageID: messageID,
                 generationID: generationID,
@@ -208,11 +211,11 @@ actor ChatSessionActor {
         generationID: UUID,
         persistence: any PersistenceProviding,
         onToken: @Sendable @escaping (String) -> Void
-    ) async throws {
+    ) async throws -> Bool {
         var tokenBatch = ""
         var lastBatchTime = Date()
         for try await token in stream {
-            guard !Task.isCancelled, await isCurrent(generationID) else { return }
+            guard !Task.isCancelled, await isCurrent(generationID) else { return false }
             let buffering = await persistence.bufferTokens(messageID: messageID, tokens: token)
             if case .failure(let error) = buffering { throw error }
             tokenBatch += token
@@ -227,10 +230,11 @@ actor ChatSessionActor {
             }
         }
 
-        guard !Task.isCancelled, await isCurrent(generationID) else { return }
+        guard !Task.isCancelled, await isCurrent(generationID) else { return false }
         if !tokenBatch.isEmpty {
             await MainActor.run { onToken(tokenBatch) }
         }
+        return true
     }
 
     private static func isBatchFlushDue(batchCount: Int, lastBatchTime: Date, now: Date) -> Bool {
