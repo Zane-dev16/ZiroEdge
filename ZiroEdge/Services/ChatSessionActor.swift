@@ -101,6 +101,10 @@ actor ChatSessionActor {
             return
         }
 
+        // Preempt any holder of the engine (e.g. title generation) so this
+        // chat decode never overlaps another decode loop on the same context.
+        await inferenceService.ensureIdleForNewChat()
+
         let generationID = UUID()
         activeGenerationID = generationID
         isStreaming = true

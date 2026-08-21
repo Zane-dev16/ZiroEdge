@@ -33,6 +33,16 @@ protocol InferenceServiceProtocol: Sendable {
     ) async throws -> AsyncThrowingStream<String, Error>
 
     func cancelCurrentStream() async
+
+    /// Ensures no generation holds the engine before a new chat decode starts.
+    /// Chat preempts the current holder (cancels it and waits for release).
+    func ensureIdleForNewChat() async
+}
+
+extension InferenceServiceProtocol {
+    /// Default no-op so test doubles that don't model cross-generation
+    /// arbitration compile unchanged.
+    func ensureIdleForNewChat() async {}
 }
 
 // MARK: - Inference Service
@@ -86,6 +96,11 @@ actor InferenceService: InferenceServiceProtocol {
 
     /// Pending stream cancellation — awaited before starting more engine work.
     private var pendingCancellation: Task<Void, Never>?
+
+    /// Single-slot mutex over the llama.cpp context. Concurrent decode loops on
+    /// one engine are undefined behavior; every chat/vision stream acquisition
+    /// is serialized here.
+    private let generationGate = GenerationGate()
 
     private let loadSafetyStore: LoadSafetyStore
 
@@ -311,30 +326,31 @@ extension InferenceService {
         )
 
         let prefillStarted = ContinuousClock.now
-        let stream: AsyncThrowingStream<String, Error>
-        switch config.promptPath {
-        case .chatTemplate:
-            stream = try await eng.streamChatCompletion(
-                messages: chatTemplateMessages(messages: messages, systemPrompt: systemPrompt),
-                addBos: config.addBos,
-                stopStrings: config.stopStrings,
-                sampling: engineSampling
-            )
-        case .gemma:
-            stream = try await eng.streamCompletion(
-                prompt: Self.formatGemmaPrompt(messages: messages, systemPrompt: systemPrompt),
-                addBos: config.addBos,
-                parseSpecial: true,
-                stopStrings: config.stopStrings,
-                sampling: engineSampling
-            )
-        case .raw:
-            stream = try await eng.streamCompletion(
-                prompt: formatRawPrompt(messages: messages, systemPrompt: systemPrompt),
-                addBos: config.addBos,
-                stopStrings: config.stopStrings,
-                sampling: engineSampling
-            )
+        let stream = try await gatedGenerationStream {
+            switch config.promptPath {
+            case .chatTemplate:
+                return try await eng.streamChatCompletion(
+                    messages: chatTemplateMessages(messages: messages, systemPrompt: systemPrompt),
+                    addBos: config.addBos,
+                    stopStrings: config.stopStrings,
+                    sampling: engineSampling
+                )
+            case .gemma:
+                return try await eng.streamCompletion(
+                    prompt: Self.formatGemmaPrompt(messages: messages, systemPrompt: systemPrompt),
+                    addBos: config.addBos,
+                    parseSpecial: true,
+                    stopStrings: config.stopStrings,
+                    sampling: engineSampling
+                )
+            case .raw:
+                return try await eng.streamCompletion(
+                    prompt: formatRawPrompt(messages: messages, systemPrompt: systemPrompt),
+                    addBos: config.addBos,
+                    stopStrings: config.stopStrings,
+                    sampling: engineSampling
+                )
+            }
         }
         return instrumentGenerationPeak(
             stream,
@@ -380,42 +396,90 @@ extension InferenceService {
         )
 
         let imageEvaluationStarted = ContinuousClock.now
-        let stream: AsyncThrowingStream<String, Error>
-        switch config.promptPath {
-        case .chatTemplate:
-            stream = try await eng.streamVisionChatCompletion(
-                messages: templateMessages,
-                images: images,
-                addBos: config.addBos,
-                stopStrings: config.stopStrings,
-                sampling: engineSampling
-            )
-        case .gemma:
-            stream = try await eng.streamVisionCompletion(
-                prompt: Self.formatGemmaPrompt(
-                    messages: messages,
-                    systemPrompt: systemPrompt,
-                    imageMarkers: imageMarkers
-                ),
-                images: images,
-                addBos: config.addBos,
-                stopStrings: config.stopStrings,
-                sampling: engineSampling
-            )
-        case .raw:
-            stream = try await eng.streamVisionCompletion(
-                prompt: formatRawPrompt(messages: messages, systemPrompt: systemPrompt),
-                images: images,
-                addBos: config.addBos,
-                stopStrings: config.stopStrings,
-                sampling: engineSampling
-            )
+        let stream = try await gatedGenerationStream {
+            switch config.promptPath {
+            case .chatTemplate:
+                return try await eng.streamVisionChatCompletion(
+                    messages: templateMessages,
+                    images: images,
+                    addBos: config.addBos,
+                    stopStrings: config.stopStrings,
+                    sampling: engineSampling
+                )
+            case .gemma:
+                return try await eng.streamVisionCompletion(
+                    prompt: Self.formatGemmaPrompt(
+                        messages: messages,
+                        systemPrompt: systemPrompt,
+                        imageMarkers: imageMarkers
+                    ),
+                    images: images,
+                    addBos: config.addBos,
+                    stopStrings: config.stopStrings,
+                    sampling: engineSampling
+                )
+            case .raw:
+                return try await eng.streamVisionCompletion(
+                    prompt: formatRawPrompt(messages: messages, systemPrompt: systemPrompt),
+                    images: images,
+                    addBos: config.addBos,
+                    stopStrings: config.stopStrings,
+                    sampling: engineSampling
+                )
+            }
         }
         return instrumentGenerationPeak(
             stream,
             firstEvaluationCheckpoint: .firstImageEval,
             evaluationStarted: imageEvaluationStarted
         )
+    }
+
+    /// Serializes engine-stream creation through the generation gate. Throws
+    /// `generationBusy` when another generation already holds the engine.
+    private func gatedGenerationStream(
+        _ build: () async throws -> AsyncThrowingStream<String, Error>
+    ) async throws -> AsyncThrowingStream<String, Error> {
+        guard await generationGate.acquire() else {
+            throw InferenceError.generationBusy
+        }
+        guard let holderID = await generationGate.heldBy() else {
+            // Unreachable after a successful acquire; fail closed rather than
+            // pumping an untracked stream.
+            throw InferenceError.generationBusy
+        }
+        do {
+            return try gateWrapped(await build(), holderID: holderID)
+        } catch {
+            // Engine-stream creation failed; never leak the held slot.
+            await generationGate.release(holderID)
+            throw error
+        }
+    }
+
+    /// Pumps `inner` into the returned stream and releases the gate once the
+    /// inner stream finishes, throws, or is terminated. Release is idempotent,
+    /// so termination racing natural completion is safe.
+    private func gateWrapped(
+        _ inner: AsyncThrowingStream<String, Error>,
+        holderID: UUID
+    ) -> AsyncThrowingStream<String, Error> {
+        let gate = generationGate
+        return AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    for try await token in inner { continuation.yield(token) }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+                await gate.release(holderID)
+            }
+            continuation.onTermination = { _ in
+                task.cancel()
+                Task { await gate.release(holderID) }
+            }
+        }
     }
 
     private func instrumentGenerationPeak(
@@ -545,6 +609,16 @@ extension InferenceService {
 
     // MARK: - Cancellation
 
+    /// Chat preemption policy: before a new chat decode starts, cancel any
+    /// holder (title generation, a stale reply) and wait for it to release the
+    /// engine. The engine's cancellation flag stops its decode loop at the next
+    /// token boundary, so this settles quickly.
+    func ensureIdleForNewChat() async {
+        await generationGate.cancelAndAwaitRelease { [weak self] in
+            await self?.cancelCurrentStream()
+        }
+    }
+
     func cancelCurrentStream() async {
         if let pendingCancellation {
             await pendingCancellation.value
@@ -659,6 +733,7 @@ enum InferenceError: Error, LocalizedError, Equatable {
     case modelFileNotFound(path: String)
     case mmprojFileNotFound(path: String)
     case visionNotSupported
+    case generationBusy
     case nativeFailure(kind: NativeFailureKind, diagnostic: String)
 
     var sanitizedDiagnostic: String {
@@ -667,6 +742,7 @@ enum InferenceError: Error, LocalizedError, Equatable {
         case .modelFileNotFound: return "model-artifact-missing"
         case .mmprojFileNotFound: return "projector-artifact-missing"
         case .visionNotSupported: return "vision-profile-disabled"
+        case .generationBusy: return "generation-busy"
         case .nativeFailure(let kind, let diagnostic): return "\(kind.rawValue): \(diagnostic)"
         }
     }
@@ -691,6 +767,8 @@ enum InferenceError: Error, LocalizedError, Equatable {
             return "The vision projector artifact is missing."
         case .visionNotSupported:
             return "This runtime profile does not support vision."
+        case .generationBusy:
+            return "A local generation is already running. Please wait or cancel it first."
         case .nativeFailure(let kind, _):
             return "Local inference failed during \(kind.rawValue)."
         }

@@ -311,7 +311,7 @@ final class ModelLifecycleManager: ObservableObject {
             case .suspectedJetsam: return "Load safety state could not be committed. Loading remains blocked."
             case .inference: return "The local inference engine could not load this model."
             }
-        case .modelNotLoaded, .visionNotSupported:
+        case .modelNotLoaded, .visionNotSupported, .generationBusy:
             return error.localizedDescription
         }
     }
