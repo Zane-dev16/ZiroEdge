@@ -120,33 +120,60 @@ struct MessageBubble: View {
 // MARK: - Streaming Cursor
 
 /// Renders the cursor in the same attributed string so it follows the final character.
+/// BATCH-04: debounced off-main markdown rendering to avoid O(n²) per-token re-parse on main thread.
 private struct StreamingText: View {
     let content: String
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var rendered: AttributedString = AttributedString()
 
     var body: some View {
         Group {
             if reduceMotion {
-                renderedText(cursorVisible: true)
+                Text(renderedWithCursor(visible: true))
             } else {
                 TimelineView(.periodic(from: .now, by: 0.6)) { context in
-                    renderedText(
-                        cursorVisible: Int(context.date.timeIntervalSinceReferenceDate / 0.6).isMultiple(of: 2)
-                    )
+                    Text(renderedWithCursor(visible: Int(context.date.timeIntervalSinceReferenceDate / 0.6).isMultiple(of: 2)))
                 }
             }
         }
         .font(.body)
         .textSelection(.enabled)
+        .task(id: content) {
+            // Debounce 80ms then render off-main
+            try? await Task.sleep(nanoseconds: 80_000_000)
+            guard !Task.isCancelled else { return }
+            let snapshot = content
+            let result = await Task.detached(priority: .userInitiated) {
+                MarkdownRenderer.render(snapshot)
+            }.value
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                if snapshot == content {
+                    rendered = result
+                }
+            }
+        }
+        .onAppear {
+            if content.isEmpty == false {
+                // Kick initial render without debounce for first paint
+                rendered = MarkdownRenderer.render(content)
+            }
+        }
+        .onChange(of: content) { _, newValue in
+            // Immediate fast-path for tiny first chunk to avoid empty flash
+            if rendered == AttributedString() && newValue.isEmpty == false {
+                rendered = MarkdownRenderer.render(newValue)
+            }
+        }
     }
 
-    private func renderedText(cursorVisible: Bool) -> Text {
-        var attributed = MarkdownRenderer.render(content)
+    private func renderedWithCursor(visible: Bool) -> AttributedString {
+        var attributed = rendered
         var cursor = AttributedString("|")
         cursor.font = .body
-        cursor.foregroundColor = cursorVisible ? Color.accentColor : Color.clear
+        cursor.foregroundColor = visible ? Color.accentColor : Color.clear
         attributed.append(cursor)
-        return Text(attributed)
+        return attributed
     }
 }
 

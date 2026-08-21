@@ -14,10 +14,28 @@ import SwiftUI
 /// This is a dedicated service — NOT inline view parsing.
 struct MarkdownRenderer {
 
+    // BATCH-04: debounced rendering observability — counts actual parse invocations
+    private static let lock = NSLock()
+    private static var _renderCount = 0
+    static var renderHook: (@Sendable () -> Void)?
+    static var renderCount: Int {
+        lock.lock(); defer { lock.unlock() }
+        return _renderCount
+    }
+    static func resetRenderCount() {
+        lock.lock(); _renderCount = 0; lock.unlock()
+    }
+    static func getRenderCount() -> Int { renderCount }
+
     // MARK: - Public API
 
     /// Render markdown string to AttributedString for display in SwiftUI Text.
     static func render(_ markdown: String) -> AttributedString {
+        lock.lock()
+        _renderCount += 1
+        let hook = renderHook
+        lock.unlock()
+        hook?()
         var result = AttributedString()
 
         // Split into lines for block-level processing.

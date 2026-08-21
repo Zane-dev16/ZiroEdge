@@ -94,6 +94,13 @@ final class ChatViewModel: ObservableObject {
     private(set) var activeConversationID: UUID?
     private var loadGeneration: UInt64 = 0
 
+    // BATCH-04: buffered streaming — avoids O(n) copy per token and debounces Published churn
+    private var streamingChunks: [String] = []
+    private var streamingFlushTask: Task<Void, Never>?
+    private var lastStreamingFlushMs: UInt64 = 0
+    private let streamingFlushIntervalMs: UInt64 = 80
+    private let streamingChunkThreshold = 20
+
     // MARK: - UserDefaults Keys
 
     enum DefaultsKeys {
@@ -283,6 +290,7 @@ final class ChatViewModel: ObservableObject {
         activeConversationID = nil
         messages = []
         streamingText = ""
+        resetStreamingBuffer()
         tokenCount = 0
         isLoadingConversation = false
         isStartupError = false
@@ -443,6 +451,7 @@ extension ChatViewModel {
         }
 
         isStreaming = true; streamingText = ""; errorMessage = nil; visionWarning = nil
+        resetStreamingBuffer()
         let generationID = UUID()
         activeGenerationID = generationID
 
@@ -472,13 +481,14 @@ extension ChatViewModel {
         let onToken: @Sendable (String) -> Void = { [weak self] token in
             Task { @MainActor [weak self] in
                 guard let self, self.activeGenerationID == generationID else { return }
-                self.streamingText += token
-                self.tokenCount += 1
+                self.appendStreamingToken(token, generationID: generationID)
             }
         }
         let onComplete: @Sendable () -> Void = { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self, self.activeGenerationID == generationID else { return }
+                self.streamingFlushTask?.cancel()
+                self.flushStreamingChunks()
                 self.activeGenerationID = nil
                 self.isStreaming = false
                 let trimmed = self.streamingText.trimmingCharacters(in: .newlines)
@@ -486,6 +496,7 @@ extension ChatViewModel {
                     self.messages.append(ChatMessagePayload(role: .assistant, content: trimmed))
                 }
                 self.streamingText = ""
+                self.resetStreamingBuffer()
                 await self.loadConversation(conversationID)
                 if isFirstExchange && !firstUserMessage.isEmpty {
                     await self.generateTitleIfNeeded(
@@ -497,10 +508,15 @@ extension ChatViewModel {
         let onError: @Sendable (Error) -> Void = { [weak self] error in
             Task { @MainActor [weak self] in
                 guard let self, self.activeGenerationID == generationID else { return }
+                self.streamingFlushTask?.cancel()
+                self.flushStreamingChunks()
                 self.activeGenerationID = nil
                 self.isStreaming = false
                 self.hasPersistenceRecovery = await self.sessionActor.recoveryHandle != nil
-                if !self.hasPersistenceRecovery { self.streamingText = "" }
+                if !self.hasPersistenceRecovery {
+                    self.streamingText = ""
+                    self.resetStreamingBuffer()
+                }
                 self.errorMessage = error.localizedDescription; self.showError = true
                 UINotificationFeedbackGenerator().notificationOccurred(.error)
                 if !self.hasPersistenceRecovery { await self.loadConversation(conversationID) }
@@ -531,11 +547,14 @@ extension ChatViewModel {
 
     func cancelStream() async {
         activeGenerationID = nil
+        streamingFlushTask?.cancel()
+        flushStreamingChunks()
         await sessionActor.cancel()
         isStreaming = false
         hasPersistenceRecovery = await sessionActor.recoveryHandle != nil
         if !hasPersistenceRecovery {
             streamingText = ""
+            resetStreamingBuffer()
             if let conversationID = activeConversationID { await loadConversation(conversationID) }
         }
     }
@@ -545,6 +564,7 @@ extension ChatViewModel {
         case .success:
             hasPersistenceRecovery = false
             streamingText = ""
+            resetStreamingBuffer()
             errorMessage = nil
             showError = false
             if let activeConversationID { await loadConversation(activeConversationID) }
@@ -577,6 +597,7 @@ extension ChatViewModel {
         case .success:
             hasPersistenceRecovery = false
             streamingText = ""
+            resetStreamingBuffer()
             recoveryExportURL = nil
             if let activeConversationID { await loadConversation(activeConversationID) }
         case .failure(let failure):
@@ -685,6 +706,51 @@ extension ChatViewModel {
 
     func copyMessage(_ message: ChatMessagePayload) {
         UIPasteboard.general.string = message.content
+    }
+
+    // MARK: - BATCH-04 Buffered Streaming Helpers
+
+    private func currentTimeMs() -> UInt64 {
+        UInt64(Date().timeIntervalSince1970 * 1000)
+    }
+
+    private func flushStreamingChunks() {
+        guard !streamingChunks.isEmpty else { return }
+        let chunk = streamingChunks.joined()
+        streamingChunks.removeAll(keepingCapacity: true)
+        if streamingText.isEmpty {
+            streamingText = chunk
+        } else {
+            streamingText.append(chunk)
+        }
+        lastStreamingFlushMs = currentTimeMs()
+    }
+
+    private func appendStreamingToken(_ token: String, generationID: UUID) {
+        guard activeGenerationID == generationID else { return }
+        streamingChunks.append(token)
+        tokenCount += 1
+        let now = currentTimeMs()
+        let elapsed = now - lastStreamingFlushMs
+        let shouldFlush = streamingChunks.count >= streamingChunkThreshold || elapsed >= streamingFlushIntervalMs
+        if shouldFlush {
+            streamingFlushTask?.cancel()
+            flushStreamingChunks()
+        } else {
+            streamingFlushTask?.cancel()
+            streamingFlushTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 80_000_000)
+                guard let self, self.activeGenerationID == generationID else { return }
+                self.flushStreamingChunks()
+            }
+        }
+    }
+
+    private func resetStreamingBuffer() {
+        streamingFlushTask?.cancel()
+        streamingFlushTask = nil
+        streamingChunks.removeAll(keepingCapacity: true)
+        lastStreamingFlushMs = currentTimeMs()
     }
 
 }

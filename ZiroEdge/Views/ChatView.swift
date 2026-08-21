@@ -12,6 +12,9 @@ struct ChatView: View {
     @State private var canPasteImage = UIPasteboard.general.hasImages
     @State private var showSystemPromptEditor = false
     @State private var systemPromptDraft = ""
+    // BATCH-04: throttle scrollToBottom to avoid stacked withAnimation per token
+    @State private var lastScrollTime: Date = .distantPast
+    @State private var pendingScrollTask: Task<Void, Never>?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -110,11 +113,8 @@ struct ChatView: View {
             .scrollDismissesKeyboard(.interactively)
             .onTapGesture { isInputFocused = false }
             .onPreferenceChange(ScrollOffsetKey.self) { maxY in
-                if reduceMotion {
-                    hasScrolledUp = maxY < 0
-                } else {
-                    withAnimation(.snappy(duration: 0.2)) { hasScrolledUp = maxY < 0 }
-                }
+                // BATCH-04: avoid withAnimation per scroll-offset frame
+                hasScrolledUp = maxY < 0
             }
             .overlay(alignment: .bottom) {
                 if hasScrolledUp {
@@ -124,13 +124,13 @@ struct ChatView: View {
                 }
             }
             .animation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.8), value: hasScrolledUp)
-            .onChange(of: viewModel.messages.count) { _, _ in scrollToBottom(proxy) }
+            .onChange(of: viewModel.messages.count) { _, _ in throttledScrollToBottom(proxy) }
             .onChange(of: viewModel.streamingText) { _, _ in
                 guard !hasScrolledUp else { return }
-                scrollToBottom(proxy)
+                throttledScrollToBottom(proxy)
             }
             .onChange(of: viewModel.isStreaming) { _, streaming in
-                if streaming { scrollToBottom(proxy) }
+                if streaming { throttledScrollToBottom(proxy) }
             }
         }
     }
@@ -427,6 +427,23 @@ private extension ChatView {
         }
         if reduceMotion { scroll() } else { withAnimation(.easeOut(duration: 0.22), scroll) }
         hasScrolledUp = false
+    }
+
+    // BATCH-04: debounced scroll — at most one animated scroll per 250ms, coalesces bursts
+    private func throttledScrollToBottom(_ proxy: ScrollViewProxy) {
+        let now = Date()
+        if now.timeIntervalSince(lastScrollTime) > 0.25 {
+            scrollToBottom(proxy)
+            lastScrollTime = now
+        } else {
+            pendingScrollTask?.cancel()
+            pendingScrollTask = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                guard !Task.isCancelled else { return }
+                scrollToBottom(proxy)
+                lastScrollTime = Date()
+            }
+        }
     }
 
     private func refreshPasteboardState() { canPasteImage = UIPasteboard.general.hasImages }
