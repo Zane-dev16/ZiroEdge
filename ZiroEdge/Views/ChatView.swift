@@ -294,14 +294,16 @@ struct ChatView: View {
             .onChange(of: selectedPhotos) { _, items in
                 Task {
                     for item in items {
-                        if let data = try? await item.loadTransferable(type: Data.self) { viewModel.addImage(data) }
+                        if let data = try? await item.loadTransferable(type: Data.self) { await viewModel.addImage(data) }
                     }
                     selectedPhotos.removeAll()
                 }
             }
 
             Button {
-                if viewModel.pasteImage() { refreshPasteboardState() }
+                Task {
+                    if await viewModel.pasteImage() { refreshPasteboardState() }
+                }
             } label: {
                 Image(systemName: "doc.on.clipboard").font(.title3).frame(width: 32, height: 40)
             }

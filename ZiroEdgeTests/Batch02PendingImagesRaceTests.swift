@@ -172,7 +172,7 @@ final class Batch02PendingImagesRaceTests: XCTestCase {
         // Deterministically inject batch2 between the two awaits (insert and
         // streaming) via the DEBUG hook. This is the lost-update race.
         viewModel.testHookBetweenAwaits = { [weak viewModel] in
-            viewModel?.addImage(batch2)
+            await viewModel?.addImage(batch2)
         }
         await viewModel.sendMessage()
         viewModel.testHookBetweenAwaits = nil

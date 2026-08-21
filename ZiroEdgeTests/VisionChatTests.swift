@@ -60,37 +60,37 @@ final class VisionChatTests: XCTestCase {
     // MARK: - Image Attachment Tests
 
     /// Adding an image appends to pendingImages.
-    func testAddImageAppendsToPendingImages() throws {
+    func testAddImageAppendsToPendingImages() async throws {
         let viewModel = makeViewModel()
         XCTAssertTrue(viewModel.pendingImages.isEmpty)
 
         let data1 = makeImageData(byte: 0x01)
-        viewModel.addImage(data1)
+        await viewModel.addImage(data1)
 
         XCTAssertEqual(viewModel.pendingImages.count, 1)
         XCTAssertEqual(viewModel.pendingImages.first, data1)
     }
 
     /// Adding multiple images accumulates.
-    func testAddMultipleImages() throws {
+    func testAddMultipleImages() async throws {
         let viewModel = makeViewModel()
         let data1 = makeImageData(byte: 0x01)
         let data2 = makeImageData(byte: 0x02)
         let data3 = makeImageData(byte: 0x03)
 
-        viewModel.addImage(data1)
-        viewModel.addImage(data2)
-        viewModel.addImage(data3)
+        await viewModel.addImage(data1)
+        await viewModel.addImage(data2)
+        await viewModel.addImage(data3)
 
         XCTAssertEqual(viewModel.pendingImages.count, 3)
     }
 
     /// Adding an image clears the vision warning.
-    func testAddImageClearsVisionWarning() throws {
+    func testAddImageClearsVisionWarning() async throws {
         let viewModel = makeViewModel()
         viewModel.visionWarning = "Some warning"
 
-        viewModel.addImage(makeImageData())
+        await viewModel.addImage(makeImageData())
 
         XCTAssertNil(viewModel.visionWarning)
     }
@@ -98,12 +98,12 @@ final class VisionChatTests: XCTestCase {
     // MARK: - Image Removal Tests
 
     /// Removing at valid index removes the correct image.
-    func testRemoveImageAtIndex() throws {
+    func testRemoveImageAtIndex() async throws {
         let viewModel = makeViewModel()
         let data1 = makeImageData(byte: 0x01)
         let data2 = makeImageData(byte: 0x02)
-        viewModel.addImage(data1)
-        viewModel.addImage(data2)
+        await viewModel.addImage(data1)
+        await viewModel.addImage(data2)
 
         viewModel.removeImage(at: 0)
 
@@ -112,9 +112,9 @@ final class VisionChatTests: XCTestCase {
     }
 
     /// Removing at out-of-bounds index is a no-op.
-    func testRemoveImageOutOfBounds() throws {
+    func testRemoveImageOutOfBounds() async throws {
         let viewModel = makeViewModel()
-        viewModel.addImage(makeImageData())
+        await viewModel.addImage(makeImageData())
 
         viewModel.removeImage(at: 5) // Should not crash
 
@@ -122,9 +122,9 @@ final class VisionChatTests: XCTestCase {
     }
 
     /// Removing last image leaves empty array.
-    func testRemoveLastImage() throws {
+    func testRemoveLastImage() async throws {
         let viewModel = makeViewModel()
-        viewModel.addImage(makeImageData())
+        await viewModel.addImage(makeImageData())
 
         viewModel.removeImage(at: 0)
 
@@ -134,11 +134,11 @@ final class VisionChatTests: XCTestCase {
     // MARK: - Clear Images Tests
 
     /// clearImages removes all pending images.
-    func testClearImagesRemovesAll() throws {
+    func testClearImagesRemovesAll() async throws {
         let viewModel = makeViewModel()
-        viewModel.addImage(makeImageData(byte: 0x01))
-        viewModel.addImage(makeImageData(byte: 0x02))
-        viewModel.addImage(makeImageData(byte: 0x03))
+        await viewModel.addImage(makeImageData(byte: 0x01))
+        await viewModel.addImage(makeImageData(byte: 0x02))
+        await viewModel.addImage(makeImageData(byte: 0x03))
 
         viewModel.clearImages()
 
@@ -194,7 +194,7 @@ final class VisionChatTests: XCTestCase {
         provider.readyModelIDs = [ModelRegistry.llama32_3B.id]
         let viewModel = makeViewModel(provider: provider)
         viewModel.selectedModel = ModelRegistry.llama32_3B
-        viewModel.addImage(makeImageData())
+        await viewModel.addImage(makeImageData())
 
         await viewModel.sendMessage()
 
@@ -228,12 +228,12 @@ final class VisionChatTests: XCTestCase {
     }
 
     /// pasteImage returns false when clipboard has no images.
-    func testPasteImageReturnsFalseWhenClipboardEmpty() throws {
+    func testPasteImageReturnsFalseWhenClipboardEmpty() async throws {
         let viewModel = makeViewModel()
         // Clear clipboard first.
         UIPasteboard.general.items = []
 
-        let result = viewModel.pasteImage()
+        let result = await viewModel.pasteImage()
 
         XCTAssertFalse(result)
         XCTAssertTrue(viewModel.pendingImages.isEmpty)
