@@ -2,7 +2,7 @@
 // ZiroEdge — BATCH-07 verifyAndPromoteOffMain branch hardening
 //
 // Pins the uncovered branches of DownloadManager.verifyAndPromoteOffMain
-// (ZiroEdge/Services/DownloadManager+VerificationStorage.swift):
+// (ZiroEdge/Services/DownloadManager+Promotion.swift):
 //
 // 1. SHA-256 mismatch after hashing → .failed(.sha256Mismatch), staging and durable
 //    metadata discarded, activeTasks scrubbed, terminal state published via the
