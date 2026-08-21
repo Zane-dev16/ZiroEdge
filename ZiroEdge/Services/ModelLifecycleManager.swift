@@ -507,14 +507,14 @@ enum ModelManagerService {
         let basePath = baseModelPath(for: model)
         if let attrs = try? fm.attributesOfItem(atPath: basePath.path),
            let size = attrs[.size] as? Int64 {
-            total += size
+            total = SaturatedArithmetic.add(total, size)
         }
 
         if model.requiresMMProj {
             let mmprojPath = mmprojModelPath(for: model)
             if let attrs = try? fm.attributesOfItem(atPath: mmprojPath.path),
                let size = attrs[.size] as? Int64 {
-                total += size
+                total = SaturatedArithmetic.add(total, size)
             }
         }
 
@@ -523,7 +523,7 @@ enum ModelManagerService {
 
     /// Formatted disk usage for a specific model.
     static func formattedDiskUsage(for model: AIModel) -> String {
-        ByteCountFormatter.string(fromByteCount: diskUsage(for: model), countStyle: .file)
+        StorageByteFormatter.string(fromByteCount: diskUsage(for: model))
     }
 
     /// Total disk usage of all downloaded models in bytes.
@@ -536,7 +536,7 @@ enum ModelManagerService {
         var total: Int64 = 0
         for case let fileURL as URL in enumerator {
             if let size = try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize {
-                total += Int64(size)
+                total = SaturatedArithmetic.add(total, Int64(size))
             }
         }
         return total
@@ -544,7 +544,7 @@ enum ModelManagerService {
 
     /// Formatted total disk usage string.
     static func formattedDiskUsage() -> String {
-        ByteCountFormatter.string(fromByteCount: totalDiskUsage(), countStyle: .file)
+        StorageByteFormatter.string(fromByteCount: totalDiskUsage())
     }
 
     /// Verify SHA-256 of a downloaded file.

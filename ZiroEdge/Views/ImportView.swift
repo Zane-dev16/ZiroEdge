@@ -153,7 +153,7 @@ struct ImportView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Label("Base Model", systemImage: "cpu").font(.caption).foregroundStyle(.secondary)
                         Text(pair.base.filename).font(.subheadline)
-                        Text("\(pair.base.quantization) · \(ByteCountFormatter.string(fromByteCount: pair.base.size, countStyle: .file))")
+                        Text("\(pair.base.quantization) · \(StorageByteFormatter.string(fromByteCount: pair.base.size))")
                             .font(.caption).foregroundStyle(.secondary)
                         Text("SHA-256 \(pair.base.sha256.prefix(12))…").font(.caption2).foregroundStyle(.tertiary)
                     }
@@ -164,7 +164,7 @@ struct ImportView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Label("Vision Projector", systemImage: "eye").font(.caption).foregroundStyle(.secondary)
                         Text(pair.projector.filename).font(.subheadline)
-                        Text("\(pair.projector.quantization) · \(ByteCountFormatter.string(fromByteCount: pair.projector.size, countStyle: .file))")
+                        Text("\(pair.projector.quantization) · \(StorageByteFormatter.string(fromByteCount: pair.projector.size))")
                             .font(.caption).foregroundStyle(.secondary)
                         Text("SHA-256 \(pair.projector.sha256.prefix(12))…").font(.caption2).foregroundStyle(.tertiary)
                     }
@@ -236,14 +236,14 @@ struct ImportView: View {
         let storage = viewModel.storagePreflight
         let ram = viewModel.ramAssessment
         return Section("Device Preflight") {
-            LabeledContent("Download storage", value: ByteCountFormatter.string(fromByteCount: storage.requiredBytes, countStyle: .file))
-            LabeledContent("Safety margin", value: ByteCountFormatter.string(fromByteCount: storage.safetyMarginBytes, countStyle: .file))
-            LabeledContent("Available storage", value: ByteCountFormatter.string(fromByteCount: storage.availableBytes, countStyle: .file))
+            LabeledContent("Download storage", value: StorageByteFormatter.string(fromByteCount: storage.requiredBytes))
+            LabeledContent("Safety margin", value: StorageByteFormatter.string(fromByteCount: storage.safetyMarginBytes))
+            LabeledContent("Available storage", value: StorageByteFormatter.string(fromByteCount: storage.availableBytes))
             if !storage.canProceed {
                 Label("Not enough storage. No download can start.", systemImage: "internaldrive.fill.badge.xmark").foregroundStyle(.red)
             }
-            LabeledContent("Estimated RAM", value: ByteCountFormatter.string(fromByteCount: Int64(clamping: ram.estimatedBytes), countStyle: .memory))
-            LabeledContent("Device RAM", value: ByteCountFormatter.string(fromByteCount: Int64(clamping: ram.physicalBytes), countStyle: .memory))
+            LabeledContent("Estimated RAM", value: StorageByteFormatter.string(fromByteCount: Int64(clamping: ram.estimatedBytes), countStyle: .memory))
+            LabeledContent("Device RAM", value: StorageByteFormatter.string(fromByteCount: Int64(clamping: ram.physicalBytes), countStyle: .memory))
         }
     }
 }

@@ -188,10 +188,9 @@ final class DownloadManager: NSObject, ObservableObject {
     // BATCH-05: cached storage breakdown — invalidated only on completion/promotion/quarantine/removal, computed off-main
     @Published var cachedStorageBreakdown: ManagedStorageBreakdown = ManagedStorageBreakdown(installedBytes: 0, stagingBytes: 0, resumeBytes: 0, quarantineBytes: 0)
     var storageBreakdownTask: Task<Void, Never>?
-    var _storageBreakdownComputeCount: Int = 0
-    var storageBreakdownComputeCount: Int { _storageBreakdownComputeCount }
+    var storageBreakdownComputeCount: Int = 0
     var lastStorageBreakdownWasOffMain: Bool?
-    func resetStorageBreakdownComputeCountForTests() { _storageBreakdownComputeCount = 0; lastStorageBreakdownWasOffMain = nil }
+    func resetStorageBreakdownComputeCountForTests() { storageBreakdownComputeCount = 0; lastStorageBreakdownWasOffMain = nil }
     nonisolated(unsafe) var stuckTimer: Timer?
     nonisolated(unsafe) var protectedDataObserver: NSObjectProtocol?
     nonisolated(unsafe) var storageObserver: NSObjectProtocol?
@@ -223,7 +222,7 @@ final class DownloadManager: NSObject, ObservableObject {
         }
         // BATCH-05: seed cache synchronously once at startup to avoid initial 0 flash; subsequent refreshes are off-main and coalesced
         cachedStorageBreakdown = managedStorageBreakdown()
-        _storageBreakdownComputeCount = 1
+        storageBreakdownComputeCount = 1
         lastStorageBreakdownWasOffMain = false
         reconcileBackgroundTasks()
         protectedDataObserver = NotificationCenter.default.addObserver(
@@ -374,17 +373,7 @@ extension DownloadManager {
         return overflow ? .max : withMargin
     }
     func formattedAvailableSpace() -> String {
-        let bytes = max(availableDiskSpace, 0)
-        let units: [(threshold: Int64, suffix: String)] = [
-            (1_000_000_000, "GB"),
-            (1_000_000, "MB"),
-            (1_000, "KB")
-        ]
-        guard let unit = units.first(where: { bytes >= $0.threshold }) else {
-            return "\(bytes) bytes"
-        }
-        let value = Double(bytes) / Double(unit.threshold)
-        return String(format: "%.1f %@", value, unit.suffix)
+        StorageByteFormatter.string(fromByteCount: availableDiskSpace)
     }
     func startDownload(
         for model: AIModel,

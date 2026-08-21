@@ -97,7 +97,7 @@ struct ImportedModelSettingsView: View {
     private var estimatedMemoryRow: some View {
         LabeledContent(
             "Estimated RAM",
-            value: ByteCountFormatter.string(
+            value: StorageByteFormatter.string(
                 fromByteCount: Int64(clamping: estimatedMemory),
                 countStyle: .memory
             )
@@ -292,11 +292,11 @@ struct ImportedModelSettingsView: View {
     }
 
     private func formattedFileBytes(_ bytes: Int64) -> String {
-        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+        StorageByteFormatter.string(fromByteCount: bytes)
     }
 
     private func formattedMemoryBytes(_ bytes: UInt64) -> String {
-        ByteCountFormatter.string(fromByteCount: Int64(clamping: bytes), countStyle: .memory)
+        StorageByteFormatter.string(fromByteCount: Int64(clamping: bytes), countStyle: .memory)
     }
 
     private func stageUpdate(_ review: HFRepositoryReview) throws {

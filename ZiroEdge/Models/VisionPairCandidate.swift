@@ -66,7 +66,7 @@ struct VisionPairCandidate: Identifiable, Hashable, Sendable {
 
     /// Human-readable combined size.
     var formattedCombinedSize: String {
-        ByteCountFormatter.string(fromByteCount: combinedSizeBytes, countStyle: .file)
+        StorageByteFormatter.string(fromByteCount: combinedSizeBytes)
     }
 
     /// Explanation of why this confidence level was assigned.

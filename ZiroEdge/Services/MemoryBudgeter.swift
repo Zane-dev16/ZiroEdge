@@ -37,7 +37,7 @@ struct MemoryLoadDecision: Equatable, Sendable {
     var formattedAppMemoryHeadroom: String { Self.format(bytes: processAvailableBytes) }
 
     static func format(bytes: UInt64) -> String {
-        ByteCountFormatter.string(fromByteCount: Int64(clamping: bytes), countStyle: .memory)
+        StorageByteFormatter.string(fromByteCount: Int64(clamping: bytes), countStyle: .memory)
     }
 
     var logSummary: String {

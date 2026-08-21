@@ -53,7 +53,7 @@ struct VariantRow: View {
                     Text(artifact.architecture)
                         .font(.caption)
                         .foregroundStyle(.tertiary)
-                    Text(ByteCountFormatter.string(fromByteCount: artifact.size, countStyle: .file))
+                    Text(StorageByteFormatter.string(fromByteCount: artifact.size))
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                 }

@@ -587,11 +587,11 @@ extension DownloadManager {
         var totalManagedBytes: Int64 { installedBytes + stagingBytes + resumeBytes + quarantineBytes }
 
         var formattedTotal: String {
-            ByteCountFormatter.string(fromByteCount: totalManagedBytes, countStyle: .file)
+            StorageByteFormatter.string(fromByteCount: totalManagedBytes)
         }
 
         var formattedInstalled: String {
-            ByteCountFormatter.string(fromByteCount: installedBytes, countStyle: .file)
+            StorageByteFormatter.string(fromByteCount: installedBytes)
         }
     }
 
@@ -661,7 +661,7 @@ extension DownloadManager {
             guard !Task.isCancelled else { return }
             // Back on MainActor (self is MainActor-isolated)
             self.cachedStorageBreakdown = breakdown
-            self._storageBreakdownComputeCount += 1
+            self.storageBreakdownComputeCount += 1
             self.lastStorageBreakdownWasOffMain = true
         }
     }
@@ -670,7 +670,7 @@ extension DownloadManager {
     func refreshStorageBreakdownForTests() {
         let breakdown = managedStorageBreakdown()
         cachedStorageBreakdown = breakdown
-        _storageBreakdownComputeCount += 1
+        storageBreakdownComputeCount += 1
         lastStorageBreakdownWasOffMain = false
     }
 
@@ -709,7 +709,7 @@ extension DownloadManager {
             )
         }.value
         cachedStorageBreakdown = breakdown
-        _storageBreakdownComputeCount += 1
+        storageBreakdownComputeCount += 1
         lastStorageBreakdownWasOffMain = true
     }
 
@@ -720,8 +720,8 @@ extension DownloadManager {
     ) -> String {
         let required = requiredDownloadBytes(for: model, includeOptionalProjector: includeOptionalProjector)
         let available = availableDiskSpace
-        let formattedRequired = ByteCountFormatter.string(fromByteCount: max(required, 0), countStyle: .file)
-        let formattedAvailable = ByteCountFormatter.string(fromByteCount: max(available, 0), countStyle: .file)
+        let formattedRequired = StorageByteFormatter.string(fromByteCount: required)
+        let formattedAvailable = StorageByteFormatter.string(fromByteCount: available)
         return "Not enough disk space: \(formattedRequired) needed, but only \(formattedAvailable) is available."
     }
 }

@@ -126,7 +126,7 @@ struct AIModel: Identifiable, Hashable, Sendable {
 
     /// Human-readable file size (e.g. "2.1 GB").
     var formattedSize: String {
-        ByteCountFormatter.string(fromByteCount: totalFileSizeBytes, countStyle: .file)
+        StorageByteFormatter.string(fromByteCount: totalFileSizeBytes)
     }
 
     /// A useful fail-closed reason when this catalog row cannot be verified.

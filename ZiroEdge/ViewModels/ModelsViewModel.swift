@@ -114,22 +114,11 @@ final class ModelsViewModel: ObservableObject {
     }
 
     /// Disk usage for a specific model.
+    /// BATCH-06: delegates to ModelManagerService so every screen renders the
+    /// same bytes identically (single source of truth for storage strings).
     func diskUsage(for model: AIModel) -> String {
         guard isDownloaded(model) else { return "" }
-        var total: Int64 = 0
-        let basePath = ModelManagerService.baseModelPath(for: model)
-        if let attrs = try? FileManager.default.attributesOfItem(atPath: basePath.path),
-           let size = attrs[.size] as? Int64 {
-            total = SaturatedArithmetic.add(total, size)
-        }
-        if model.requiresMMProj {
-            let mmprojPath = ModelManagerService.mmprojModelPath(for: model)
-            if let attrs = try? FileManager.default.attributesOfItem(atPath: mmprojPath.path),
-               let size = attrs[.size] as? Int64 {
-                total = SaturatedArithmetic.add(total, size)
-            }
-        }
-        return ByteCountFormatter.string(fromByteCount: total, countStyle: .file)
+        return ModelManagerService.formattedDiskUsage(for: model)
     }
 
     /// Initiate a capability-specific download with one consolidated risk review.
@@ -158,7 +147,7 @@ final class ModelsViewModel: ObservableObject {
                 for: model,
                 includeOptionalProjector: pendingDownloadIncludesVision
             )
-            concerns.append("You are using cellular data for a \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)) download.")
+            concerns.append("You are using cellular data for a \(StorageByteFormatter.string(fromByteCount: bytes)) download.")
         }
         if !downloadManager.hasSufficientStorage(
             for: model,

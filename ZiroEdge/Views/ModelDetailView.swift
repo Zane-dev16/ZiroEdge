@@ -197,7 +197,7 @@ struct ModelDetailView: View {
                         viewModel.initiateDownload(for: model, includeOptionalProjector: true)
                     } label: {
                         Label(
-                            "Add Image Processing · \(ByteCountFormatter.string(fromByteCount: model.mmprojFileSizeBytes ?? 0, countStyle: .file))",
+                            "Add Image Processing · \(StorageByteFormatter.string(fromByteCount: model.mmprojFileSizeBytes ?? 0))",
                             systemImage: "photo.badge.plus"
                         )
                     }
@@ -247,7 +247,7 @@ struct ModelDetailView: View {
                 viewModel.initiateDownload(for: model, includeOptionalProjector: false)
             } label: {
                 Label(
-                    "Text Only · \(ByteCountFormatter.string(fromByteCount: model.baseFileSizeBytes, countStyle: .file))",
+                    "Text Only · \(StorageByteFormatter.string(fromByteCount: model.baseFileSizeBytes))",
                     systemImage: "text.bubble"
                 )
                 .frame(maxWidth: .infinity)

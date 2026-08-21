@@ -86,7 +86,7 @@ struct StoreResetConfirmationView: View {
 
     private var copiedSize: String {
         let bytes = artifact.manifest.reduce(Int64(0)) { $0 + $1.byteCount }
-        return ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+        return StorageByteFormatter.string(fromByteCount: bytes)
     }
 
     var body: some View {
