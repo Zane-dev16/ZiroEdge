@@ -37,6 +37,11 @@ struct VisionPairResolver: Sendable {
         ("Q4_K_S", "Q4_K_S", .medium),
         ("Q5_K_M", "Q5_K_M", .medium),
         ("Q6_K", "Q6_K", .medium),
+        // Full-precision tiers (format matches ImportedModel.quantization's uppercase tokens):
+        // f16/bf16 mix symmetrically between base and projector at medium confidence.
+        ("BF16", "BF16", .medium),
+        ("BF16", "F16", .medium),
+        ("F16", "BF16", .medium),
     ]
 
     // MARK: - Public API
@@ -168,7 +173,8 @@ struct VisionPairResolver: Sendable {
         return baseMetadata != nil && baseMetadata == projectorMetadata
     }
 
-    private func filenameIdentity(_ filename: String) -> String? {
+    /// Internal for testing: derives the deterministic family identity from a filename.
+    func filenameIdentity(_ filename: String) -> String? {
         let quantizations = [
             "q2-k", "q3-k-s", "q3-k-m", "q3-k-l", "q4-0", "q4-k-s",
             "q4-k-m", "q5-0", "q5-k-s", "q5-k-m", "q6-k", "q8-0", "f16", "bf16"
@@ -176,7 +182,8 @@ struct VisionPairResolver: Sendable {
         var value = filename.lowercased()
             .replacingOccurrences(of: ".gguf", with: "")
             .replacingOccurrences(of: "mmproj", with: "")
-        for quantization in quantizations {
+        // Longest-first replacement: stripping "f16" from "bf16" would leave a stray "b".
+        for quantization in quantizations.sorted(by: { $0.count > $1.count }) {
             value = value.replacingOccurrences(of: quantization, with: "")
             value = value.replacingOccurrences(of: quantization.replacingOccurrences(of: "-", with: "_"), with: "")
         }

@@ -136,6 +136,38 @@ final class VisionImportTests: XCTestCase {
         }
     }
 
+    func testFilenameIdentityStripsBF16QuantizationWithoutStrayCharacters() {
+        let resolver = VisionPairResolver()
+
+        // "bf16" must be stripped atomically; replacing "f16" first leaves a stray "b".
+        XCTAssertNil(resolver.filenameIdentity("model-bf16.gguf"))
+        XCTAssertEqual(resolver.filenameIdentity("gemma-bf16.gguf"), "gemma")
+        XCTAssertEqual(resolver.filenameIdentity("mmproj-gemma-f16.gguf"), "gemma")
+    }
+
+    func testBF16BaseWithF16ProjectorScoresAtLeastMediumViaFilenameIdentity() throws {
+        // No metadata modelName: pairing evidence must come from filenames alone.
+        let base = makeArtifact("siglip-bf16.gguf", role: .base, architecture: "gemma", quantization: "BF16", modelName: nil)
+        let projector = makeArtifact("mmproj-siglip-f16.gguf", role: .projector, architecture: "clip", quantization: "F16", modelName: nil)
+        let review = makeReview(artifacts: [base, projector])
+
+        let pairs = VisionPairResolver().resolvePairs(from: review)
+        XCTAssertEqual(pairs.count, 1)
+        // VisionPairConfidence orders high < medium < low, so "at least medium" is "not low".
+        XCTAssertNotEqual(try XCTUnwrap(pairs.first).confidence, .low)
+    }
+
+    func testF16BaseWithBF16ProjectorScoresAtLeastMediumViaFilenameIdentity() throws {
+        let base = makeArtifact("siglip-f16.gguf", role: .base, architecture: "gemma", quantization: "F16", modelName: nil)
+        let projector = makeArtifact("mmproj-siglip-bf16.gguf", role: .projector, architecture: "clip", quantization: "BF16", modelName: nil)
+        let review = makeReview(artifacts: [base, projector])
+
+        let pairs = VisionPairResolver().resolvePairs(from: review)
+        XCTAssertEqual(pairs.count, 1)
+        // VisionPairConfidence orders high < medium < low, so "at least medium" is "not low".
+        XCTAssertNotEqual(try XCTUnwrap(pairs.first).confidence, .low)
+    }
+
     // MARK: - Vision Pair Candidate Properties
 
     func testVisionPairCandidateCombinedSizeSaturates() {
@@ -348,16 +380,18 @@ final class VisionImportTests: XCTestCase {
         digest: String = String(repeating: "a", count: 64),
         role: HFArtifact.Role = .base,
         architecture: String = "llama",
-        size: Int64 = 16
+        size: Int64 = 16,
+        quantization: String? = nil,
+        modelName: String? = "Fixture"
     ) -> HFArtifact {
         HFArtifact(
             filename: filename,
             size: size,
             sha256: digest,
-            quantization: filename.uppercased().contains("Q8") ? "Q8_0" : filename.uppercased().contains("F16") ? "F16" : "Q4_K_M",
+            quantization: quantization ?? (filename.uppercased().contains("Q8") ? "Q8_0" : filename.uppercased().contains("F16") ? "F16" : "Q4_K_M"),
             architecture: architecture,
             role: role,
-            metadata: HFGGUFMetadata(architecture: architecture, contextLength: 2048, chatTemplate: "fixture", modelName: "Fixture")
+            metadata: HFGGUFMetadata(architecture: architecture, contextLength: 2048, chatTemplate: "fixture", modelName: modelName)
         )
     }
 
