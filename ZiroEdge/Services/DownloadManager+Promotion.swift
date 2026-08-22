@@ -129,9 +129,6 @@ extension DownloadManager {
             )
             return failVerification(task, error: validationFailure, discardStaging: true)
         }
-        if injectPromotionFailureForTesting {
-            return failVerification(task, error: .fileCorrupted, discardStaging: true)
-        }
         do {
             DownloadDiagnosticRecorder.shared.record(
                 event: .promotionAttempt,
