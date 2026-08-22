@@ -533,9 +533,13 @@ extension PersistenceController {
             }
             return flushBuffer(messageID: messageID)
         }
-        // BATCH-04: per-token pending tail (bounded ≤20 entries) for crash durability without O(n) full copy
-        if recoveryPendingURL != nil {
-            try? persistPendingTokens()
+        // BATCH-04: per-token pending tail (bounded ≤20 entries) for crash durability without O(n) full copy.
+        // A failed tail write must surface (mirroring the flush branch above): swallowing it would
+        // report success while those bytes are not yet durable in the journal or the store.
+        do {
+            try persistPendingTokens()
+        } catch {
+            return .failure(.map(error, operation: .journalWrite))
         }
         return .success(())
     }
@@ -801,14 +805,27 @@ extension PersistenceController {
                 pendingTokensBuffer = pending
                 bufferFlushCount[journal.messageID] = pending.count
             } else {
-                // Pending would overflow; keep journal as is and preserve pending buffer for inspection
-                pendingTokensBuffer = pending
-                bufferFlushCount[journal.messageID] = pending.count
+                // Pending exceeds what the restored journal may hold, so it can never be merged back
+                // without breaking the buffering cap. Preserve it durably for inspection instead:
+                // any terminal replay (finalize / recoverIncompleteStreams) clears pendingTokensBuffer
+                // and deletes the live pending file, which would silently destroy the only copy.
+                preserveOverflowPendingTokens()
+                pendingTokensBuffer = []
             }
         } else {
             pendingTokensBuffer = []
         }
         return .success(())
+    }
+
+    /// Rename an overflowing pending-tail file so its bytes stay inspectable after
+    /// recovery's terminal clear removes the live pending state.
+    private func preserveOverflowPendingTokens() {
+        guard let pendingURL = recoveryPendingURL,
+              FileManager.default.fileExists(atPath: pendingURL.path) else { return }
+        logger.warning("Preserving oversized pending token tail for inspection")
+        let preserved = pendingURL.appendingPathExtension("overflow-\(Int(Date().timeIntervalSince1970))")
+        try? FileManager.default.moveItem(at: pendingURL, to: preserved)
     }
 
     /// Rename a corrupt recovery journal so it is preserved for diagnostics

@@ -18,6 +18,7 @@ enum PersistenceFailureCategory: String, Sendable, Codable {
     case corruptData
     case insufficientStorage
     case saveFailed
+    case journalWriteFailed
     case fetchFailed
     case exportFailed
     case quarantineFailed
@@ -40,6 +41,7 @@ struct PersistenceFailure: Error, LocalizedError, Sendable, Equatable, Codable {
         case .corruptData: return "Local history contains data that cannot be read safely."
         case .insufficientStorage: return "There is not enough available storage to save this change."
         case .saveFailed: return "The change could not be saved. Your previous data is unchanged."
+        case .journalWriteFailed: return "A streaming checkpoint could not be written. Nothing was lost; try again shortly."
         case .fetchFailed: return "Local history is temporarily unavailable."
         case .exportFailed: return "Recovery data could not be exported."
         case .quarantineFailed: return "Local history could not be copied for recovery. Nothing was deleted."
@@ -67,7 +69,8 @@ struct PersistenceFailure: Error, LocalizedError, Sendable, Equatable, Codable {
             case .export: category = .exportFailed
             case .quarantine: category = .quarantineFailed
             case .destroyStore: category = .destructionFailed
-            case .journalWrite, .journalRemove, .journalRestore: category = .journalCorrupt
+            case .journalWrite: category = .journalWriteFailed
+            case .journalRemove, .journalRestore: category = .journalCorrupt
             }
         }
         return PersistenceFailure(category: category, operation: operation, domain: nsError.domain, code: nsError.code)
