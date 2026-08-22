@@ -39,7 +39,7 @@ Result: the stream yields `["Hi", "<", "end", "_", "of", "_", "turn"]` — the u
 
 ### What needs to change
 
-The fix should happen in `streamCompletion()` in the engine (`/Users/irellzane/Work/ziroedge/Packages/swift-llama-cpp/Sources/SwiftLlama/LlamaEngine.swift`), NOT in the UI layer, because this is a general inference issue (affects all models with multi-token stop strings).
+The fix should happen in `streamCompletion()` in the engine (`/Users/irellzane/Work/ziro-edge/app/Packages/swift-llama-cpp/Sources/SwiftLlama/LlamaEngine.swift`), NOT in the UI layer, because this is a general inference issue (affects all models with multi-token stop strings).
 
 **Approach A — Post-generation strip (simplest):**
 After the generation loop exits (whether by EOS, stop string, or maxTokens), compute the clean text by stripping any trailing stop string from `generatedText`, then yield the stripped portion.
@@ -97,7 +97,7 @@ if !shouldBuffer {
 
 **Recommendation:** Start with Approach A for simplicity. The engine's stop check already prevents yielding after a stop match. We just need to strip the trailing stop from what was already yielded.
 
-**File to modify:** `/Users/irellzane/Work/ziroedge/Packages/swift-llama-cpp/Sources/SwiftLlama/LlamaEngine.swift`
+**File to modify:** `/Users/irellzane/Work/ziro-edge/app/Packages/swift-llama-cpp/Sources/SwiftLlama/LlamaEngine.swift`
 
 **Also apply the same fix to:** `streamVisionCompletion()` (same pattern, line ~285+)
 
@@ -142,8 +142,8 @@ When the user backs out of a conversation without sending a message, delete it. 
 **Recommendation:** Start with Option B (launch cleanup) as the quick fix, then implement Option A (defer save) as the proper long-term solution.
 
 **Files to modify:**
-- `/Users/irellzane/Work/ziroedge/ZiroEdge/Persistence/PersistenceController.swift` — add purgeEmptyConversations
-- `/Users/irellzane/Work/ziroedge/ZiroEdge/ZiroEdgeApp.swift` — call purgeEmptyConversations in .task
+- `/Users/irellzane/Work/ziro-edge/app/ZiroEdge/Persistence/PersistenceController.swift` — add purgeEmptyConversations
+- `/Users/irellzane/Work/ziro-edge/app/ZiroEdge/ZiroEdgeApp.swift` — call purgeEmptyConversations in .task
 
 ---
 
