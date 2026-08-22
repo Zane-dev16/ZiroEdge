@@ -84,11 +84,6 @@ final class ModelLifecycleManager: ObservableObject {
     private var safetyEpoch: UInt64 = 0
     private var loadInProgress = false
 
-    // MARK: - Download Status (injected from ModelManagerService)
-
-    /// Tracks download state per model ID. Populated by ModelManagerService.
-    @Published var downloadStatuses: [String: ModelDownloadStatus] = [:]
-
     // MARK: - Initialization
 
     init(
