@@ -98,6 +98,7 @@ final class ChatViewModel: ObservableObject {
 
     // BATCH-04: buffered streaming — avoids O(n) copy per token and debounces Published churn
     private var streamingChunks: [String] = []
+    private var streamedCharacterCount = 0
     private var streamingFlushTask: Task<Void, Never>?
     private var lastStreamingFlushMs: UInt64 = 0
     private let streamingFlushIntervalMs: UInt64 = 80
@@ -294,6 +295,7 @@ final class ChatViewModel: ObservableObject {
         streamingText = ""
         resetStreamingBuffer()
         tokenCount = 0
+        streamedCharacterCount = 0
         isLoadingConversation = false
         isStartupError = false
         truncationWarning = nil
@@ -704,6 +706,7 @@ extension ChatViewModel {
     /// Reset the token count (called on new conversation or model switch).
     func resetTokenCount() {
         tokenCount = 0
+        streamedCharacterCount = 0
     }
 
     // MARK: - Message Actions
@@ -730,10 +733,17 @@ extension ChatViewModel {
         lastStreamingFlushMs = currentTimeMs()
     }
 
+    /// ~4 characters per generated token is the standard heuristic for LLM output.
+    nonisolated static func estimatedTokens(characterCount: Int) -> Int {
+        guard characterCount > 0 else { return 0 }
+        return max(1, characterCount / 4)
+    }
+
     private func appendStreamingToken(_ token: String, generationID: UUID) {
         guard activeGenerationID == generationID else { return }
         streamingChunks.append(token)
-        tokenCount += 1
+        streamedCharacterCount += token.count
+        tokenCount = Self.estimatedTokens(characterCount: streamedCharacterCount)
         let now = currentTimeMs()
         let elapsed = now - lastStreamingFlushMs
         let shouldFlush = streamingChunks.count >= streamingChunkThreshold || elapsed >= streamingFlushIntervalMs
@@ -755,6 +765,7 @@ extension ChatViewModel {
         streamingFlushTask = nil
         streamingChunks.removeAll(keepingCapacity: true)
         lastStreamingFlushMs = currentTimeMs()
+        streamedCharacterCount = 0
     }
 
 }
