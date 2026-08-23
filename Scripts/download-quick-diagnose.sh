@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # ZiroEdge Download Quick Diagnostic
-# Launches the app with --uitesting-download, captures download logs from
+# Launches the app with --download-diagnostic, captures download logs from
 # stdout for 90 seconds, then analyzes the output.
 #
 # Usage:
@@ -40,7 +40,7 @@ xcrun devicectl device process terminate --device "$DEVICE_UDID" com.zanish-labs
 sleep 1
 
 # Launch with download flag and capture stdout
-echo ">> Launching with --uitesting-download (capturing logs for 90s)..."
+echo ">> Launching with --download-diagnostic (capturing logs for 90s)..."
 LOG_FILE="$OUTPUT_DIR/download.log"
 
 xcrun devicectl device process launch \
@@ -48,7 +48,7 @@ xcrun devicectl device process launch \
 	--console \
 	--terminate-existing \
 	com.zanish-labs.ziroedge \
-	--uitesting-download \
+	--download-diagnostic \
 	>"$LOG_FILE" 2>&1 &
 LAUNCH_PID=$!
 
@@ -115,7 +115,7 @@ for line in lines:
 # Root cause
 if not findings["download_started"]:
     rc = "download_never_started"
-    diag = "The download was never triggered. Check if --uitesting-download is working."
+    diag = "The download was never triggered. Check if --download-diagnostic is working."
 elif findings["completed"]:
     rc = "download_completed"
     diag = "Download completed successfully!"
