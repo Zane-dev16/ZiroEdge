@@ -119,7 +119,14 @@ struct ZiroEdgeApp: App {
             .task {
                 // Unit-test hosts execute the app entry point; avoid racing test-owned fixtures.
                 guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
-                ModelMigrationService.migrateIfNeeded()
+                let migrationResult = ModelMigrationService.migrateIfNeeded()
+                if case .migrated = migrationResult {
+                    // DownloadManager snapshotted downloadStatuses during init,
+                    // before migration moved legacy files into managed storage;
+                    // without this refresh migrated models read as Not
+                    // Downloaded for the whole session.
+                    services.downloadManager.updateStatusesFromDisk()
+                }
                 ModelManagerService.ensureModelsDirectory()
                 await services.conversationListViewModel.loadConversations()
                 if CommandLine.arguments.contains("--uitesting") {
