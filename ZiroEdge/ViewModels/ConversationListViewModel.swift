@@ -84,29 +84,6 @@ final class ConversationListViewModel: ObservableObject {
         }
     }
 
-    /// Delete conversations at specific index set (for swipe-to-delete).
-    func deleteConversations(at offsets: IndexSet) async {
-        let idsToDelete = offsets.compactMap { index in
-            conversations.indices.contains(index) ? conversations[index].id : nil
-        }
-        for id in idsToDelete {
-            if case .failure(let failure) = await persistence.deleteConversation(id: id) {
-                errorMessage = failure.localizedDescription
-                return
-            }
-        }
-        if selectedConversationID.map(idsToDelete.contains) == true { selectedConversationID = nil }
-        await loadConversations()
-    }
-
-    // MARK: - Rename
-
-    /// Begin editing a conversation title.
-    func beginRename(_ conversation: ConversationPayload) {
-        editingTitle = conversation.title
-        isEditingTitle = true
-    }
-
     /// Commit the title rename.
     func commitRename(_ conversationID: UUID) async {
         let newTitle = editingTitle.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -122,13 +99,6 @@ final class ConversationListViewModel: ObservableObject {
             errorMessage = failure.localizedDescription
         }
     }
-
-    /// Cancel the rename.
-    func cancelRename() {
-        isEditingTitle = false
-        editingTitle = ""
-    }
-
     // MARK: - Selection
 
     /// Select a conversation.
@@ -137,12 +107,6 @@ final class ConversationListViewModel: ObservableObject {
     }
 
     // MARK: - Helpers
-
-    /// The currently selected conversation object.
-    var selectedConversation: ConversationPayload? {
-        guard let id = selectedConversationID else { return nil }
-        return conversations.first { $0.id == id }
-    }
 
     /// Formatted date for display in the sidebar.
     static func formattedDate(_ date: Date?) -> String {

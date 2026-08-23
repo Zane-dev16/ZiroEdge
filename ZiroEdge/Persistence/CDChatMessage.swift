@@ -38,12 +38,6 @@ extension CDChatMessage {
         guard let role else { return nil }
         return MessageRole(rawValue: role)
     }
-
-    /// Whether this message has an image attachment.
-    var hasImage: Bool {
-        imageData != nil && (imageData?.isEmpty == false)
-    }
-
     /// Create a new message in a conversation.
     @discardableResult
     static func create(
@@ -67,13 +61,6 @@ extension CDChatMessage {
         conversation.addToMessages(message)
         conversation.updatedAt = Date()
         return message
-    }
-
-    /// Append tokens to this message's content (used during streaming).
-    /// Does NOT save — caller must flush via PersistenceController.
-    func appendTokens(_ tokens: String) {
-        let current = content ?? ""
-        content = current + tokens
     }
 }
 

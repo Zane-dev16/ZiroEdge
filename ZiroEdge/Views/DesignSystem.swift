@@ -6,9 +6,6 @@ enum ZiroTheme {
     static let elevatedBackground = Color(uiColor: .secondarySystemBackground)
     static let inputBackground = Color(uiColor: .tertiarySystemBackground)
     static let subtleBorder = Color.primary.opacity(0.08)
-    static let errorBackground = Color.red.opacity(0.10)
-    static let warningBackground = Color.orange.opacity(0.11)
-    static let infoBackground = Color.accentColor.opacity(0.10)
     static let accentForeground = Color("AccentForeground")
 
     enum Spacing {

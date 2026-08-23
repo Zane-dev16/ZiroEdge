@@ -332,11 +332,6 @@ final class ModelsViewModel: ObservableObject {
         ModelRegistry.unavailableModelReason(for: modelID)
     }
 
-    func resolveConversationModel(_ modelID: String) -> AIModel? {
-        guard ModelRegistry.selectableModels.contains(where: { $0.id == modelID }) else { return nil }
-        return ModelRegistry.model(for: modelID)
-    }
-
     func updateImportedConfiguration(
         for model: AIModel,
         contextLength: Int,

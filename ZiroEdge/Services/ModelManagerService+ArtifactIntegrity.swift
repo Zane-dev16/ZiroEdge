@@ -48,12 +48,6 @@ extension ModelManagerService {
         sha256CacheLock.unlock()
     }
 
-    static func clearSHA256Cache() {
-        sha256CacheLock.lock()
-        sha256CacheStore.removeAll()
-        sha256CacheLock.unlock()
-    }
-
     private static func cachedHashIfValid(for fileURL: URL, size: Int64, mtime: Date) -> String? {
         sha256CacheLock.lock()
         defer { sha256CacheLock.unlock() }

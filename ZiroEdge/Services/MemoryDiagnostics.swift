@@ -165,14 +165,6 @@ final class MemoryDiagnosticRecorder: @unchecked Sendable {
 #endif
     }
 
-    var calibrationLoadEnabled: Bool {
-#if DEBUG
-        Self.allowsCalibrationLoad(arguments: CommandLine.arguments, isDebugBuild: true)
-#else
-        false
-#endif
-    }
-
     var controlledWorkloadEnabled: Bool {
 #if DEBUG
         Self.allowsControlledWorkload(arguments: CommandLine.arguments, isDebugBuild: true)

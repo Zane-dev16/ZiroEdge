@@ -56,12 +56,6 @@ final class ImportViewModel: ObservableObject {
 
     // MARK: - Vision Pair Resolution
 
-    /// All compatible vision pairs for the current review, ranked by confidence.
-    var pairCandidates: [VisionPairCandidate] {
-        guard let review else { return [] }
-        return pairResolver.resolvePairs(from: review)
-    }
-
     /// The suggested (highest-confidence) vision pair for the currently selected base.
     var suggestedPair: VisionPairCandidate? {
         guard let review, let selectedBase else { return nil }
