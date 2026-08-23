@@ -68,7 +68,52 @@ extension DownloadManager {
                 }
             }
         }
+        reclaimed += reclaimOrphanedInstalledArtifacts()
         if reclaimed > 0 { scheduleStorageBreakdownRefresh() }
+        return reclaimed
+    }
+
+    /// Removes stranded artifacts from the installed directory: an interrupted
+    /// imported-update promotion commits the registry swap before deleting
+    /// replaced files, and a crash in between strands multi-GB artifacts that
+    /// no other reclamation path scans. Only unreferenced .gguf /
+    /// .promotion-backup files older than a grace period are removed so
+    /// in-flight promotions are never raced.
+    private func reclaimOrphanedInstalledArtifacts() -> Int64 {
+        var reclaimed: Int64 = 0
+        func canonicalPath(_ url: URL) -> String {
+            url.resolvingSymlinksInPath().standardizedFileURL.path
+        }
+        var referencedInstalled = Set<String>()
+        var seenModelIDs = Set<String>()
+        for model in ModelRegistry.transferModels + ModelRegistry.calibrationModels {
+            guard seenModelIDs.insert(model.id).inserted else { continue }
+            referencedInstalled.insert(canonicalPath(DownloadTask(model: model, artifact: .base).destinationURL))
+            if model.requiresMMProj {
+                referencedInstalled.insert(canonicalPath(DownloadTask(model: model, artifact: .mmproj).destinationURL))
+            }
+        }
+        guard let installedEnumerator = fileManager.enumerator(
+            at: ModelManagerService.modelsDirectory,
+            includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey, .contentModificationDateKey]
+        ) else { return 0 }
+        let orphanGraceInterval: TimeInterval = 24 * 60 * 60
+        for case let fileURL as URL in installedEnumerator {
+            guard (try? fileURL.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
+            let fileName = fileURL.lastPathComponent
+            guard fileName.hasSuffix(".gguf") || fileName.hasSuffix(".promotion-backup") else { continue }
+            guard !referencedInstalled.contains(canonicalPath(fileURL)) else { continue }
+            let modified = (try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? Date()
+            guard Date().timeIntervalSince(modified) > orphanGraceInterval else { continue }
+            let size = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+            do {
+                try fileManager.removeItem(at: fileURL)
+                reclaimed += Int64(size)
+                logger.info("Reclaimed orphaned installed file: \(fileName, privacy: .public) (\(size) bytes)")
+            } catch {
+                logger.warning("Failed to reclaim orphaned installed file: \(fileName, privacy: .public)")
+            }
+        }
         return reclaimed
     }
 
