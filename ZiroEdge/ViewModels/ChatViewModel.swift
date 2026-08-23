@@ -62,6 +62,9 @@ final class ChatViewModel: ObservableObject {
 
     /// Identity of the generation allowed to mutate streaming UI.
     private var activeGenerationID: UUID?
+    /// Conversation the live generation is writing into; lets conversation
+    /// switches detect and cancel a stream that belongs elsewhere.
+    private(set) var streamedConversationID: UUID?
 
     // MARK: - Model Selection
 
@@ -230,6 +233,11 @@ final class ChatViewModel: ObservableObject {
     }
 
     func loadConversation(_ conversationID: UUID) async {
+        // Switching conversations must not leave a live generation writing into
+        // the wrong transcript or yanking navigation back on completion.
+        if isStreaming, let streamed = streamedConversationID, streamed != conversationID {
+            await cancelStream()
+        }
         let previousConversationID = activeConversationID
         loadGeneration += 1
         let myGeneration = loadGeneration
@@ -289,6 +297,12 @@ final class ChatViewModel: ObservableObject {
 
     /// Clear transient transcript state when the selected conversation disappears.
     func clearActiveConversation() {
+        // Detach any live generation before wiping state so stale token and
+        // completion callbacks cannot write into cleared buffers; the actor
+        // cancel finishes asynchronously without touching UI identity here.
+        let wasStreaming = isStreaming
+        activeGenerationID = nil
+        streamedConversationID = nil
         loadGeneration += 1
         activeConversationID = nil
         messages = []
@@ -301,6 +315,9 @@ final class ChatViewModel: ObservableObject {
         truncationWarning = nil
         activeConversationSystemPrompt = nil
         unavailableConversationModelID = nil
+        if wasStreaming {
+            Task { await self.cancelStream() }
+        }
     }
 
     /// Single-flight startup covering model readiness, persistence creation,
@@ -460,6 +477,7 @@ extension ChatViewModel {
         resetStreamingBuffer()
         let generationID = UUID()
         activeGenerationID = generationID
+        streamedConversationID = conversationID
 
 #if DEBUG
         await testHookBetweenAwaits?()
@@ -497,6 +515,7 @@ extension ChatViewModel {
                 self.flushStreamingChunks()
                 self.activeGenerationID = nil
                 self.isStreaming = false
+                self.streamedConversationID = nil
                 let trimmed = self.streamingText.trimmingCharacters(in: .newlines)
                 if !trimmed.isEmpty {
                     self.messages.append(ChatMessagePayload(role: .assistant, content: trimmed))
@@ -518,6 +537,7 @@ extension ChatViewModel {
                 self.flushStreamingChunks()
                 self.activeGenerationID = nil
                 self.isStreaming = false
+                self.streamedConversationID = nil
                 self.hasPersistenceRecovery = await self.sessionActor.recoveryHandle != nil
                 if !self.hasPersistenceRecovery {
                     self.streamingText = ""
@@ -553,6 +573,7 @@ extension ChatViewModel {
 
     func cancelStream() async {
         activeGenerationID = nil
+        streamedConversationID = nil
         streamingFlushTask?.cancel()
         flushStreamingChunks()
         await sessionActor.cancel()

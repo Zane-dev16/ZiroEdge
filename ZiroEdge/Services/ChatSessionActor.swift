@@ -7,6 +7,11 @@ import Foundation
 import os
 
 actor ChatSessionActor {
+    /// Monotonic counter bumped by every cancellation request. start()
+    /// snapshots it before its suspension window; if it moved, a stop (or a
+    /// superseding start) landed while no generation identity existed yet and
+    /// the about-to-spawn task must be aborted instead of running as a ghost.
+    private var cancellationEpoch = 0
 
     private enum StreamKind {
         case text
@@ -96,6 +101,11 @@ actor ChatSessionActor {
         onError: @Sendable @escaping (Error) -> Void
     ) async {
         await cancelInternal()
+        // Snapshot AFTER start()'s own cleanup-cancel: that bump is ours and
+        // must not abort this start. Only an external stop or superseding
+        // start landing inside the suspension window below moves the counter
+        // from here, and that is exactly what we must detect.
+        let epochAtStart = cancellationEpoch
         guard recoveryHandle == nil else {
             await MainActor.run { onError(PersistenceFailure.recoveryBufferFull) }
             return
@@ -104,6 +114,11 @@ actor ChatSessionActor {
         // Preempt any holder of the engine (e.g. title generation) so this
         // chat decode never overlaps another decode loop on the same context.
         await inferenceService.ensureIdleForNewChat()
+
+        // A stop pressed while we were suspended (or an overlapping start)
+        // bumped the epoch without leaving a generation identity behind, so
+        // cancelInternal saw nothing to cancel. Abort here rather than spawn.
+        guard cancellationEpoch == epochAtStart else { return }
 
         let generationID = UUID()
         activeGenerationID = generationID
@@ -321,6 +336,10 @@ actor ChatSessionActor {
     }
 
     private func cancelInternal() async {
+        // Record the cancellation intent even when nothing is committed yet:
+        // start() may be suspended before its identity commit, and this bump
+        // is what makes it abort instead of resurrecting the generation.
+        cancellationEpoch += 1
         guard activeGenerationID != nil || currentStream != nil || activeMessageID != nil else { return }
 
         // Invalidate first so stale callbacks/tasks cannot mutate a newer generation.
