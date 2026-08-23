@@ -133,7 +133,9 @@ extension ModelManagerService {
             return ["Invalid or missing GGUF header magic"]
         case .invalidMetadata:
             return ["Catalog SHA-256 metadata is invalid"]
-        case .readFailure, .hashMismatch:
+        case .readFailure:
+            return ["Artifact could not be read (possible I/O error)"]
+        case .hashMismatch:
             return ["SHA-256 does not match catalog metadata"]
         case .cancelled:
             // Unreachable: cancellation is disabled for this pass.

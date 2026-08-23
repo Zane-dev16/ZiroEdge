@@ -288,9 +288,10 @@ extension ModelManagerService {
                 issues.append(.missingGGUFHeader)
                 return false
             case .readFailure:
-                // Legacy behavior: an unreadable file aborts the whole sweep
-                // immediately with a SHA-256 issue for this artifact.
-                issues.append(.sha256Mismatch)
+                // An unreadable file is an I/O problem, not proof of content
+                // corruption. Abort the sweep conservatively, but do not claim
+                // a SHA-256 mismatch that would route healthy files to repair.
+                issues.append(.unknown("artifact could not be read"))
                 return true
             case .hashMismatch:
                 issues.append(.sha256Mismatch)
