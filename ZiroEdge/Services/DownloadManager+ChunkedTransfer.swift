@@ -145,14 +145,28 @@ extension DownloadManager {
         guard activeTasks[key] === task else { return }
         closeChunkFile(for: task)
         task.chunkTask = nil
-        task.state = .failed(error: .networkError)
+        // Classify by cause: local filesystem failures (disk full, permissions)
+        // are not network problems — reporting them as such sends users into
+        // pointless retries.
+        let downloadError: DownloadError
+        if let cocoa = error as? CocoaError, cocoa.isFileError {
+            switch cocoa.code {
+            case .fileWriteOutOfSpace:
+                downloadError = .diskSpaceInsufficient
+            default:
+                downloadError = .fileCorrupted
+            }
+        } else {
+            downloadError = .networkError
+        }
+        task.state = .failed(error: downloadError)
         persistDurableState(for: task, failed: true)
         DownloadDiagnosticRecorder.shared.record(
             event: .chunkFailed,
             correlationID: DownloadDiagnosticRecorder.transferCorrelationID(modelID: task.model.id, artifact: task.artifact.label),
             modelID: task.model.id,
             artifact: task.artifact.label,
-            failureCategory: .network,
+            failureCategory: DownloadFailureCategory.from(downloadError),
             failureSummary: error.localizedDescription
         )
         updateStatus(model: task.model)

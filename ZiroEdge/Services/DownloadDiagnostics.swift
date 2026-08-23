@@ -35,6 +35,7 @@ enum DownloadDiagnosticEvent: String, Codable, Sendable {
     case promotionSuccess    = "promotion_success"
     case promotionFailed     = "promotion_failed"
     case durableStateWritten = "durable_state_written"
+    case durableStateWriteFailed = "durable_state_write_failed"
     case durableStateCleared = "durable_state_cleared"
     case stuckWatchdogFired  = "stuck_watchdog_fired"
     case cdnRedirect         = "cdn_redirect"
@@ -67,6 +68,8 @@ enum DownloadFailureCategory: String, Codable, Sendable {
             return .network
         case .invalidCatalogMetadata:
             return .catalog
+        case .promotionFailed:
+            return .storage
         case .cancelled:
             return .cancelled
         case .unknown:

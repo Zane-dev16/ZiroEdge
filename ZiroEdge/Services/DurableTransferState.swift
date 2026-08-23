@@ -96,9 +96,17 @@ extension DownloadManager {
             failed: failed
         )
         guard let data = try? JSONEncoder().encode(snapshot) else { return }
-        try? data.write(to: task.metadataURL, options: .atomic)
+        let writeSucceeded: Bool
+        do {
+            try data.write(to: task.metadataURL, options: .atomic)
+            writeSucceeded = true
+        } catch {
+            // Crash-recovery metadata may now be absent/stale; say so instead of
+            // recording a write that never landed.
+            writeSucceeded = false
+        }
         DownloadDiagnosticRecorder.shared.record(
-            event: .durableStateWritten,
+            event: writeSucceeded ? .durableStateWritten : .durableStateWriteFailed,
             correlationID: DownloadDiagnosticRecorder.transferCorrelationID(
                 modelID: task.model.id,
                 artifact: task.artifact == .base ? "base" : "mmproj"

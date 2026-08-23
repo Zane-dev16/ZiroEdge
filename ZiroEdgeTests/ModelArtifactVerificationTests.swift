@@ -134,8 +134,8 @@ final class ModelArtifactVerificationTests: XCTestCase {
         manager.injectAvailableDiskSpaceForTesting = 1_000_000_000
         let result = manager.verifyAndPromote(task: task)
 
-        guard case .failure(.fileCorrupted) = result else {
-            return XCTFail("Injected promotion failure should be reported as file corruption, got: \(result)")
+        guard case .failure(.promotionFailed) = result else {
+            return XCTFail("Injected promotion failure should be reported as promotionFailed, got: \(result)")
         }
         if case .failed = task.state {
             // State publication: task state must be .failed after failure.
@@ -486,7 +486,7 @@ extension ModelArtifactVerificationTests {
                        "Staging artifact must be cleaned on validation failure")
     }
 
-    func testStagingCleanedAfterPromotionFailure() throws {
+    func testStagingPreservedAfterPromotionFailure() throws {
         let bytes = validGGUFData(length: 16)
         let model = makeRuntimeModel(
             id: "staging-cleanup-promo-\(UUID().uuidString.lowercased())",
@@ -507,11 +507,16 @@ extension ModelArtifactVerificationTests {
         manager.injectAvailableDiskSpaceForTesting = 1_000_000_000
         let result = manager.verifyAndPromote(task: task)
 
-        guard case .failure = result else {
-            return XCTFail("Injected promotion failure must be surfaced")
+        guard case .failure(.promotionFailed) = result else {
+            return XCTFail("Injected promotion failure must be surfaced as promotionFailed")
         }
-        XCTAssertFalse(FileManager.default.fileExists(atPath: task.stagingURL.path),
-                       "Staging artifact must be cleaned on promotion failure")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: task.stagingURL.path),
+                      "Staging artifact must survive a transient promotion failure: " +
+                      "the bytes already passed SHA-256 and must not be redownloaded " +
+                      "because installation hit a filesystem error")
+        // Durable metadata must still advertise resumable staging.
+        XCTAssertTrue(FileManager.default.fileExists(atPath: task.metadataURL.path),
+                      "Durable snapshot must persist so relaunch recovery can re-promote")
     }
 
     // MARK: - State Publication
@@ -770,11 +775,11 @@ extension ModelArtifactVerificationTests {
         manager.injectAvailableDiskSpaceForTesting = 1_000_000_000
         let result = manager.verifyAndPromote(task: task)
 
-        guard case .failure(.fileCorrupted) = result else {
-            return XCTFail("Injected promotion failure must report .fileCorrupted, got \(result)")
+        guard case .failure(.promotionFailed) = result else {
+            return XCTFail("Injected promotion failure must report .promotionFailed, got \(result)")
         }
-        XCTAssertFalse(FileManager.default.fileExists(atPath: task.stagingURL.path),
-                       "Terminal promotion failure must clean staging")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: task.stagingURL.path),
+                      "Verified staging survives a transient promotion failure")
         // Installed artifact must be unchanged.
         XCTAssertEqual(try Data(contentsOf: task.destinationURL), bytes)
     }

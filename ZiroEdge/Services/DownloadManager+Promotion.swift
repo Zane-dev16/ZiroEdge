@@ -167,16 +167,20 @@ extension DownloadManager {
             scheduleStorageBreakdownRefresh()
             return .success(())
         } catch {
+            // A promotion failure is a transient storage problem, not proof of
+            // corrupted content: the staged bytes already passed SHA-256.
+            // Preserve staging and durable metadata so retry/re-launch recovery
+            // can re-promote instead of destroying multi-GB verified bytes.
             DownloadDiagnosticRecorder.shared.record(
                 event: .promotionFailed,
                 correlationID: correlationID,
                 modelID: task.model.id,
                 artifact: task.artifact.label,
                 state: "failed",
-                failureCategory: .verification,
-                failureSummary: "atomic promotion failed"
+                failureCategory: .storage,
+                failureSummary: "atomic promotion failed: \(error.localizedDescription)"
             )
-            return failVerification(task, error: .fileCorrupted, discardStaging: true)
+            return failVerification(task, error: .promotionFailed(underlying: error.localizedDescription), discardStaging: false)
         }
     }
 
@@ -186,9 +190,15 @@ extension DownloadManager {
         discardStaging: Bool
     ) -> Result<Void, DownloadError> {
         task.state = .failed(error: error)
-        if error == .diskSpaceInsufficient {
+        switch error {
+        case .diskSpaceInsufficient:
+            // Keep durable metadata so the user can resume once space frees up.
             persistDurableState(for: task, failed: true)
-        } else {
+        case .promotionFailed:
+            // Verified staging survives; advertise it as resumable so a retry
+            // (or next-launch restore) can re-promote without redownloading.
+            persistDurableState(for: task, failed: false)
+        default:
             removeDurableState(for: task, discardStaging: discardStaging)
         }
         scheduleStorageBreakdownRefresh()

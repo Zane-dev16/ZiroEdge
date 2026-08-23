@@ -68,6 +68,9 @@ enum DownloadError: Sendable, Error, Hashable {
     case invalidCatalogMetadata
     case cancelled
     case unknown
+    /// Verified bytes could not be moved into the installed directory
+    /// (transient filesystem failure). Staging is preserved for retry.
+    case promotionFailed(underlying: String)
 
     // Transport-layer validation failures (DownloadTransportValidator).
     case contentRejected(reason: String)
@@ -93,6 +96,8 @@ enum DownloadError: Sendable, Error, Hashable {
             return "Download was cancelled"
         case .unknown:
             return "An unknown error occurred"
+        case .promotionFailed(let underlying):
+            return "Could not install downloaded files: \(underlying)"
         case .contentRejected(let reason):
             return "Content rejected: \(reason)"
         case .authorizationRequired(let statusCode):
@@ -193,16 +198,16 @@ struct ModelDownloadStatus: Sendable, Hashable {
         switch baseState {
         case .downloaded: results.append(.baseDownloaded)
         case .failed(let error): results.append(.baseFailed(error))
-        case .downloading(let p), .resuming(let p): results.append(.baseDownloading(progress: p))
-        case .paused(let p), .pausing(let p): results.append(.basePaused(progress: p))
+        case .downloading(let progress), .resuming(let progress): results.append(.baseDownloading(progress: progress))
+        case .paused(let progress), .pausing(let progress): results.append(.basePaused(progress: progress))
         default: break
         }
         if let mmproj = mmprojState {
             switch mmproj {
             case .downloaded: results.append(.projectorDownloaded)
             case .failed(let error): results.append(.projectorFailed(error))
-            case .downloading(let p), .resuming(let p): results.append(.projectorDownloading(progress: p))
-            case .paused(let p), .pausing(let p): results.append(.projectorPaused(progress: p))
+            case .downloading(let progress), .resuming(let progress): results.append(.projectorDownloading(progress: progress))
+            case .paused(let progress), .pausing(let progress): results.append(.projectorPaused(progress: progress))
             default: break
             }
         }
