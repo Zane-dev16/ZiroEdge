@@ -109,7 +109,7 @@ extension DownloadManager: URLSessionDownloadDelegate, URLSessionDataDelegate {
                 response: response,
                 bodyURL: location,
                 expectedBytes: task.expectedBytes,
-                expectedOffset: 0
+                expectedOffset: task.transferStartOffset
             ) {
                 let shouldFallback: Bool
                 switch failure {

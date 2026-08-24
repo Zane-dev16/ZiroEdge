@@ -72,8 +72,9 @@ final class TransportValidationTests: XCTestCase {
     func testValid206RangePasses() {
         let offset: Int64 = 100
         let total: Int64 = 200
-        let rangeLength = total - offset
-        let body = validGGUF(count: Int(rangeLength))
+        // Resumed transfers must deliver the COMPLETE artifact (URLSession
+        // stitches the prefix), so the body spans the full expected size.
+        let body = validGGUF(count: Int(total))
         let bodyURL = writeTemp(body, name: "valid-range.gguf")
         defer { removeTemp(bodyURL) }
 
@@ -83,7 +84,7 @@ final class TransportValidationTests: XCTestCase {
                 "Content-Range": "bytes \(offset)-\(total - 1)/\(total)",
                 "Content-Type": "application/octet-stream"
             ],
-            contentLength: rangeLength
+            contentLength: total - offset
         )
 
         XCTAssertNil(DownloadTransportValidator.failure(
@@ -116,8 +117,10 @@ final class TransportValidationTests: XCTestCase {
 
     // MARK: - Ignored Range fixtures
 
-    /// Server returns 200 instead of 206 when a range was requested (ignored range).
-    func testIgnoredRangeWhen200InsteadOf206Fails() {
+    /// Server returns 200 (range ignored) with the complete body while
+    /// resuming: acceptable, because the full artifact arrived and the SHA-256
+    /// gate enforces integrity afterwards.
+    func testIgnoredRange200WithCompleteBodyPasses() {
         let offset: Int64 = 64
         let total: Int64 = 256
         let body = validGGUF(count: Int(total))
@@ -126,14 +129,62 @@ final class TransportValidationTests: XCTestCase {
 
         let response = http200(contentLength: total)
 
-        let failure = DownloadTransportValidator.failure(
+        XCTAssertNil(DownloadTransportValidator.failure(
             response: response, bodyURL: bodyURL,
             expectedBytes: total, expectedOffset: offset
+        ))
+    }
+
+    /// A resumed transfer whose server-side start differs from the client's
+    /// estimate is acceptable when the COMPLETE stitched body arrives.
+    func testResumed206WithUnknownStartAndFullBodyPasses() {
+        let estimatedOffset: Int64 = 60_456_788
+        let actualStart: Int64 = 60_400_000
+        let total: Int64 = 105_454_432
+        let body = validGGUF(count: Int(total))
+        let bodyURL = writeTemp(body, name: "resumed-stitched.gguf")
+        defer { removeTemp(bodyURL) }
+
+        let response = httpResponse(
+            code: 206,
+            headers: [
+                "Content-Range": "bytes \(actualStart)-\(total - 1)/\(total)",
+                "Content-Type": "application/octet-stream"
+            ],
+            contentLength: total - actualStart
         )
-        XCTAssertNotNil(failure, "200 response when offset > 0 must fail")
-        guard case .rangeMismatch = failure else {
+
+        XCTAssertNil(DownloadTransportValidator.failure(
+            response: response, bodyURL: bodyURL,
+            expectedBytes: total, expectedOffset: estimatedOffset
+        ))
+    }
+
+    /// A fresh transfer must still start at byte zero.
+    func testFreshTransfer206NonZeroStartStillFails() {
+        let total: Int64 = 256
+        let body = validGGUF(count: Int(total))
+        let bodyURL = writeTemp(body, name: "fresh-nonzero-start.gguf")
+        defer { removeTemp(bodyURL) }
+
+        let response = httpResponse(
+            code: 206,
+            headers: [
+                "Content-Range": "bytes 64-\(total - 1)/\(total)",
+                "Content-Type": "application/octet-stream"
+            ],
+            contentLength: total - 64
+        )
+
+        let failure = DownloadTransportValidator.failure(
+            response: response, bodyURL: bodyURL,
+            expectedBytes: total, expectedOffset: 0
+        )
+        guard case .rangeMismatch(let exp, let act) = failure else {
             return XCTFail("Expected rangeMismatch, got \(failure!)")
         }
+        XCTAssertEqual(exp, 0)
+        XCTAssertEqual(act, 64)
     }
 
     /// A well-formed 206 starting at zero is a valid ranged response.
@@ -160,11 +211,12 @@ final class TransportValidationTests: XCTestCase {
 
     // MARK: - Invalid Range fixtures
 
-    /// Content-Range start offset does not match expected offset.
+    /// A remainder-only body cannot be assembled on this path (it owns no
+    /// partial file): it is rejected as a size mismatch.
     func testRangeStartMismatchFails() {
         let offset: Int64 = 100
         let total: Int64 = 200
-        let body = validGGUF(count: Int(total - 50))  // body starts from 50
+        let body = validGGUF(count: Int(total - 50))  // remainder-only body
         let bodyURL = writeTemp(body, name: "start-mismatch.gguf")
         defer { removeTemp(bodyURL) }
 
@@ -182,11 +234,11 @@ final class TransportValidationTests: XCTestCase {
             expectedBytes: total, expectedOffset: offset
         )
         XCTAssertNotNil(failure)
-        guard case .rangeMismatch(let exp, let act) = failure else {
-            return XCTFail("Expected rangeMismatch, got \(failure!)")
+        guard case .sizeMismatch(let expected, let actual) = failure else {
+            return XCTFail("Expected sizeMismatch for unassemblable remainder body, got \(failure!)")
         }
-        XCTAssertEqual(exp, offset)
-        XCTAssertEqual(act, 50)
+        XCTAssertEqual(expected, total)
+        XCTAssertEqual(actual, total - 50)
     }
 
     /// Content-Range total does not match expected bytes.

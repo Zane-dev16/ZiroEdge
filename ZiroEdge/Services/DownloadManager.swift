@@ -803,7 +803,13 @@ extension DownloadManager {
         if let resumeData = try? Data(contentsOf: task.resumeDataURL) {
             task.resumeData = resumeData
             task.task = self.getSession().downloadTask(withResumeData: resumeData)
+            // Best-effort resume point from cumulative progress. The exact
+            // server-side start is unknowable from opaque resume data, so
+            // transport validation only requires a COMPLETE body here and the
+            // artifact SHA-256 gate enforces integrity afterwards.
+            task.transferStartOffset = Int64((task.progress * Double(task.expectedBytes)).rounded())
         } else {
+            task.transferStartOffset = 0
             task.task = self.getSession().downloadTask(with: downloadURL)
         }
         task.state = .downloading(progress: 0.0)

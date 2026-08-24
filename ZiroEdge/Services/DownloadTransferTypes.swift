@@ -12,6 +12,10 @@ final class DownloadTask {
     var chunkTask: URLSessionDataTask?
     var resolutionTask: URLSessionDataTask?
     var resumeData: Data?
+    /// Byte offset the CURRENT URLSessionDownloadTask starts from: zero for
+    /// fresh transfers, the estimated received count when created from resume
+    /// data. Lets transport validation distinguish fresh vs resumed flows.
+    var transferStartOffset: Int64 = 0
     var progress: Double = 0.0
     var state: DownloadState = .notDownloaded
     var isChunked = false

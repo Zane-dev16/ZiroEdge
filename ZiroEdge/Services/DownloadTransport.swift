@@ -48,7 +48,11 @@ enum DownloadTransportValidator {
             ) else {
                 return .rangeMismatch(expectedOffset: expectedOffset, actualOffset: nil)
             }
-            guard contentRange.start == expectedOffset else {
+            // Fresh transfers must start at zero. Resumed transfers tolerate
+            // any server-side resume point: the exact offset is unknowable
+            // from opaque URLSession resume data, and artifact integrity is
+            // enforced by the SHA-256 gate after assembly.
+            if expectedOffset == 0, contentRange.start != 0 {
                 return .rangeMismatch(
                     expectedOffset: expectedOffset,
                     actualOffset: contentRange.start
@@ -70,9 +74,13 @@ enum DownloadTransportValidator {
                     actualOffset: contentRange.start
                 )
             }
-            expectedBodyBytes = rangeLength
+            // This path owns no partial file: a resumed transfer must deliver
+            // the COMPLETE artifact (URLSession stitches the prefix), so the
+            // body below is always validated against the full expected size.
         } else if expectedOffset > 0 {
-            return .rangeMismatch(expectedOffset: expectedOffset, actualOffset: nil)
+            // Server ignored the Range request and resent everything:
+            // acceptable as long as the complete body arrives, which the size
+            // check below enforces against expectedBytes.
         }
 
         guard let actualBytes = fileSize(at: bodyURL) else {
