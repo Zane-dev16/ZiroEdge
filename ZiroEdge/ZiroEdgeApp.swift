@@ -145,6 +145,12 @@ struct ZiroEdgeApp: App {
                         await services.chatViewModel.sendMessage()
                     }
                 }
+
+                // E2E: drive the FULL HuggingFace import flow headlessly.
+                // Mirrors --uitesting-sendtest style; skipped under XCTest hosts.
+                if CommandLine.arguments.contains("--e2e-hf-import") {
+                    _ = HFImportE2ERunner.run(services: services, arguments: CommandLine.arguments)
+                }
 #endif
             }
         case .failed(let failure):

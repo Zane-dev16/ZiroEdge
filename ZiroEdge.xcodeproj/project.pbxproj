@@ -47,6 +47,7 @@
 		3A8725DD5249D23F4A2CF381 /* StoreRecoveryCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = CECBD18FA01270DC950DF238 /* StoreRecoveryCoordinator.swift */; };
 		3AF49EDEE1F2E195EFAD49AC /* DownloadTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2CE64A73CA2034D155FEED4E /* DownloadTransport.swift */; };
 		3B626BE6B04D3B8C9CA2BA33 /* StorageFormattingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13B0B7279744C17DA80B481F /* StorageFormattingTests.swift */; };
+		40A69F8954D519CCAC3A08E1 /* HFImportE2ERunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E234EB7E9E6D519DAE3FA1D /* HFImportE2ERunner.swift */; };
 		41189EC4466ABA0C922BD275 /* ImportedModelUpdateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79474B0B968194FA2C0CC9E5 /* ImportedModelUpdateTests.swift */; };
 		440F7439971AAA8FB6656BA9 /* SettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED2E070DA570B0177707CC77 /* SettingsTests.swift */; };
 		46C14E3D453B2E54ED9B3733 /* OfflineAvailabilityGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54E6FF39109A4FBD92979287 /* OfflineAvailabilityGuard.swift */; };
@@ -184,6 +185,7 @@
 		161D5CDD092CE900F86A4FBB /* swift-llama-cpp */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "swift-llama-cpp"; path = "Packages/swift-llama-cpp"; sourceTree = SOURCE_ROOT; };
 		1631E6F3835369F5427EC553 /* TestModelFixtures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestModelFixtures.swift; sourceTree = "<group>"; };
 		1AC257595A1BC8F3E4053A39 /* DownloadTransferTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadTransferTypes.swift; sourceTree = "<group>"; };
+		1E234EB7E9E6D519DAE3FA1D /* HFImportE2ERunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HFImportE2ERunner.swift; sourceTree = "<group>"; };
 		1ED1E37B8460DE61D71DE77E /* DownloadManager+ArtifactLifecycle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DownloadManager+ArtifactLifecycle.swift"; sourceTree = "<group>"; };
 		236A2AA96610397D2CDDD6D3 /* DownloadManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadManager.swift; sourceTree = "<group>"; };
 		262A76C9592C6D8819EBA905 /* TitleGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TitleGenerator.swift; sourceTree = "<group>"; };
@@ -339,6 +341,7 @@
 		05234D03621C92115B58CD0E /* ZiroEdge */ = {
 			isa = PBXGroup;
 			children = (
+				DFC6825A23D87E08B2DD83C4 /* Debug */,
 				FD2CD8E9A6637F51D093A5A0 /* Models */,
 				63895AFB2B3C5FE56FE50798 /* Persistence */,
 				D1BB1DF0C9CC39954A24580E /* Resources */,
@@ -555,6 +558,14 @@
 				E804CE9CD5E2D9033BD63AA4 /* THIRD_PARTY_NOTICES.md */,
 			);
 			path = Resources;
+			sourceTree = "<group>";
+		};
+		DFC6825A23D87E08B2DD83C4 /* Debug */ = {
+			isa = PBXGroup;
+			children = (
+				1E234EB7E9E6D519DAE3FA1D /* HFImportE2ERunner.swift */,
+			);
+			path = Debug;
 			sourceTree = "<group>";
 		};
 		ED908A9AC4E696516EE34BA4 /* Products */ = {
@@ -820,6 +831,7 @@
 				3AF49EDEE1F2E195EFAD49AC /* DownloadTransport.swift in Sources */,
 				CD2E2C1554EF8A5745230EF4 /* DurableTransferState.swift in Sources */,
 				74EBBF572E3BAA18AD14619C /* GenerationGate.swift in Sources */,
+				40A69F8954D519CCAC3A08E1 /* HFImportE2ERunner.swift in Sources */,
 				F658EA3D3854307BD6E47797 /* ImportView.swift in Sources */,
 				E68C63A51776D3BBA373B88C /* ImportViewModel.swift in Sources */,
 				5B5073268AC536EC899DA8A5 /* ImportedModel.swift in Sources */,
