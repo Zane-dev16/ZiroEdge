@@ -213,14 +213,40 @@ final class StaleResumeRecoveryTests: XCTestCase {
         }
     }
 
-    func testTransportValidatorFlagsRangeMismatchForMissing206() throws {
+    func testTransportValidatorAcceptsComplete200DuringResume() throws {
         let bytes = validGGUF(length: 32)
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("transport-range-\(UUID().uuidString).gguf")
         defer { try? FileManager.default.removeItem(at: url) }
         try bytes.write(to: url)
 
-        // Server returns 200 for a ranged request — invalid.
+        // Server ignores the Range request and resends everything while
+        // resuming: acceptable, because the complete artifact arrived and the
+        // SHA-256 gate enforces integrity afterwards.
+        let response = HTTPURLResponse(
+            url: URL(string: "https://signed.cdn.example.com/model.gguf")!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: nil
+        )
+
+        XCTAssertNil(DownloadTransportValidator.failure(
+            response: response,
+            bodyURL: url,
+            expectedBytes: Int64(bytes.count),
+            expectedOffset: 1024
+        ))
+    }
+
+    func testTransportValidatorRejectsIncomplete200DuringResume() throws {
+        let bytes = validGGUF(length: 32)
+        let partial = bytes.prefix(16)
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("transport-partial-\(UUID().uuidString).gguf")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try partial.write(to: url)
+
+        // A truncated 200 body during resume cannot be assembled on this path.
         let response = HTTPURLResponse(
             url: URL(string: "https://signed.cdn.example.com/model.gguf")!,
             statusCode: 200,
@@ -234,9 +260,8 @@ final class StaleResumeRecoveryTests: XCTestCase {
             expectedBytes: Int64(bytes.count),
             expectedOffset: 1024
         )
-
-        guard case .rangeMismatch = failure else {
-            return XCTFail("Expected rangeMismatch when offset>0 but response is 200")
+        guard case .sizeMismatch = failure else {
+            return XCTFail("Expected sizeMismatch for incomplete 200 body during resume, got \(String(describing: failure))")
         }
     }
 

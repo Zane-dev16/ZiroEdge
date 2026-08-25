@@ -615,10 +615,14 @@ final class OfflineModelsPageTests: XCTestCase {
     }
 
     func testModelsPageShowsCatalogWhileRuntimeEligibilityRemainsExplicit() {
-        XCTAssertEqual(modelsViewModel.allModels, ModelRegistry.allModels)
-        XCTAssertFalse(modelsViewModel.allModels.isEmpty)
-        XCTAssertTrue(modelsViewModel.allModels.contains { $0.runtimeEligibility == .unavailable })
-        XCTAssertTrue(modelsViewModel.allModels.contains { $0.runtimeEligibility == .validated })
+        // The page lists catalog rows plus any user-imported variants; assert
+        // the curated subset and its eligibility mix rather than global
+        // equality, which would break under a container holding real imports.
+        let curated = Set(ModelRegistry.allModels)
+        XCTAssertFalse(curated.isEmpty)
+        XCTAssertTrue(curated.isSubset(of: Set(modelsViewModel.allModels)))
+        XCTAssertTrue(curated.contains { $0.runtimeEligibility == .unavailable })
+        XCTAssertTrue(curated.contains { $0.runtimeEligibility == .validated })
     }
 
     func testDownloadedFixtureDetectedOffline() throws {
@@ -644,10 +648,17 @@ final class OfflineModelsPageTests: XCTestCase {
     }
 
     func testNoModelsDownloadedShowsEmptyState() {
-        // When no models are downloaded, hasInstalledModels should be false.
+        // When no curated models are downloaded, the catalog side of the page
+        // shows its empty state. The shared test-host container may hold real
+        // user-imported artifacts (e.g. from an --e2e-hf-import run), so the
+        // assertion is scoped to curated catalog entries; imported entries
+        // legitimately make installedModels non-empty.
         downloadManager.updateStatusesFromDisk()
-        XCTAssertFalse(modelsViewModel.hasInstalledModels)
-        XCTAssertTrue(modelsViewModel.installedModels.isEmpty)
+        let curatedInstalled = ModelRegistry.allModels.filter {
+            downloadManager.status(for: $0).isReady
+        }
+        XCTAssertTrue(curatedInstalled.isEmpty)
+        XCTAssertTrue(modelsViewModel.installedModels.allSatisfy { $0.isImported })
     }
 }
 
