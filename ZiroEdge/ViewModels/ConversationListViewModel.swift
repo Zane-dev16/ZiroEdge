@@ -16,7 +16,6 @@ final class ConversationListViewModel: ObservableObject {
     @Published var conversations: [ConversationPayload] = []
     @Published private(set) var isLoading = false
     @Published var selectedConversationID: UUID?
-    @Published var isEditingTitle: Bool = false
     @Published var editingTitle: String = ""
     @Published var errorMessage: String?
 
@@ -87,13 +86,9 @@ final class ConversationListViewModel: ObservableObject {
     /// Commit the title rename.
     func commitRename(_ conversationID: UUID) async {
         let newTitle = editingTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !newTitle.isEmpty else {
-            isEditingTitle = false
-            return
-        }
+        guard !newTitle.isEmpty else { return }
         switch await persistence.updateConversationTitle(id: conversationID, title: newTitle) {
         case .success:
-            isEditingTitle = false
             await loadConversations()
         case .failure(let failure):
             errorMessage = failure.localizedDescription
