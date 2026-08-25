@@ -18,6 +18,7 @@
 
 #if DEBUG
 import Foundation
+import UIKit
 
 @MainActor
 enum HFImportE2ERunner {
@@ -105,16 +106,22 @@ enum HFImportE2ERunner {
         }
 
         // ---- Step 4: register (or reuse) the imported record ------------------
+        // Vision repos carry companion projector artifacts; pick the smallest
+        // so the import exercises the full pairing path when one exists.
+        let projector = review.projectorArtifacts.min(by: { $0.size < $1.size })
+        if let projector {
+            emit("SELECTED mmproj=\(projector.filename) bytes=\(projector.size) arch=\(projector.architecture)", step: 4)
+        }
         let store = ImportedModelStore.shared
         let record: ImportedModelRecord
         if let duplicate = store.record(repositoryID: review.repositoryID,
                                         revision: review.revision,
                                         baseFilename: selected.filename,
-                                        projectorFilename: nil) {
+                                        projectorFilename: projector?.filename) {
             emit("DEDUP existing modelID=\(duplicate.model.id)", step: 4)
             record = duplicate
         } else {
-            let fresh = ImportedModelFactory.makeRecord(review: review, base: selected)
+            let fresh = ImportedModelFactory.makeRecord(review: review, base: selected, projector: projector)
             do {
                 record = try store.upsert(fresh)
             } catch {
@@ -136,7 +143,8 @@ enum HFImportE2ERunner {
             try await waitForTerminalStatus(services: services, model: record.model, timeoutSeconds: parsed.downloadTimeout)
         }
 
-        try await runtimeHalf(services: services, record: record, prompt: parsed.prompt, stepBase: 5)
+        try await runtimeHalf(services: services, record: record, prompt: parsed.prompt,
+                              promptWasExplicit: parsed.promptExplicit, stepBase: 5)
     }
 
     private static func waitForTerminalStatus(services: RuntimeServices,
@@ -175,6 +183,7 @@ enum HFImportE2ERunner {
     private static func runtimeHalf(services: RuntimeServices,
                                     record: ImportedModelRecord,
                                     prompt: String,
+                                    promptWasExplicit: Bool,
                                     stepBase: Int) async throws {
         let model = record.model
         let baseStep = stepBase + 1
@@ -206,16 +215,31 @@ enum HFImportE2ERunner {
         // Conversation.
         guard let conversationID = await services.conversationListViewModel.createConversation(
             modelID: model.id,
-            title: "HF Import E2E"
+            title: record.modelType == .vision ? "HF Import Vision E2E" : "HF Import E2E"
         ) else {
             throw E2EFailure(step: baseStep + 3, reason: "createConversation returned nil: \(services.conversationListViewModel.errorMessage ?? "no error surfaced")")
         }
         emit("CONVERSATION id=\(conversationID.uuidString)", step: baseStep + 3)
         await services.chatViewModel.loadConversation(conversationID)
 
-        // One chat turn through the production send path.
-        services.chatViewModel.inputText = prompt
-        emit("SEND prompt=\"\(prompt)\"", step: baseStep + 4)
+        // One chat turn through the production send path. Vision models get a
+        // generated attachment so the mmproj-backed stream is exercised too.
+        var effectivePrompt = prompt
+        if record.modelType == .vision {
+            if let imageError = await attachGeneratedImage(services: services) {
+                throw E2EFailure(step: baseStep + 4, reason: "image attachment failed: \(imageError)")
+            }
+            emit("IMAGE attached bytes=\(services.chatViewModel.pendingImages.first?.count ?? 0)", step: baseStep + 4)
+            if !promptWasExplicit {
+                effectivePrompt = "Describe this image."
+            }
+        }
+        guard let imageData = services.chatViewModel.pendingImages.first,
+              UIImage(data: imageData) != nil || record.modelType != .vision else {
+            throw E2EFailure(step: baseStep + 4, reason: "pending image failed to decode")
+        }
+        services.chatViewModel.inputText = effectivePrompt
+        emit("SEND prompt=\"\(effectivePrompt)\" images=\(services.chatViewModel.pendingImages.count)", step: baseStep + 4)
         let sendStartedAt = Date()
         await services.chatViewModel.sendMessage()
 
@@ -262,6 +286,7 @@ enum HFImportE2ERunner {
         var repo = "bartowski/SmolLM2-135M-Instruct-GGUF"
         var file: String?
         var prompt = "Reply with exactly OK."
+        var promptExplicit = false
         var downloadTimeout = 900
     }
 
@@ -305,7 +330,11 @@ enum HFImportE2ERunner {
             switch arguments[index] {
             case "--e2e-repo": parsed.repo = value(after: "--e2e-repo") ?? parsed.repo
             case "--e2e-file": parsed.file = value(after: "--e2e-file") ?? parsed.file
-            case "--e2e-prompt": parsed.prompt = value(after: "--e2e-prompt") ?? parsed.prompt
+            case "--e2e-prompt":
+                if let explicit = value(after: "--e2e-prompt") {
+                    parsed.prompt = explicit
+                    parsed.promptExplicit = true
+                }
             case "--e2e-download-timeout":
                 parsed.downloadTimeout = Int(value(after: "--e2e-download-timeout") ?? "") ?? parsed.downloadTimeout
             default:
@@ -314,6 +343,25 @@ enum HFImportE2ERunner {
             index += 1
         }
         return parsed
+    }
+
+    /// Generates a small solid-color PNG in-process and attaches it through
+    /// the production addImage seam. Returns a failure reason on rejection.
+    private static func attachGeneratedImage(services: RuntimeServices) async -> String? {
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 64, height: 64), format: format)
+        let image = renderer.image { context in
+            UIColor.systemRed.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 64, height: 64))
+            UIColor.white.setFill()
+            context.fill(CGRect(x: 16, y: 16, width: 32, height: 32))
+        }
+        guard let png = image.pngData(), !png.isEmpty else {
+            return "PNG encoding produced no data"
+        }
+        await services.chatViewModel.addImage(png)
+        return services.chatViewModel.pendingImages.isEmpty ? "attachment did not register" : nil
     }
 
     // MARK: - Logging
