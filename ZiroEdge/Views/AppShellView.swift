@@ -91,6 +91,16 @@ struct AppShellView: View {
             } else {
                 // Selection always wins over any routed page: return to chat.
                 detailRoutes.removeAll()
+                // Plan §B.4 routes conversation loading through this handler,
+                // so selection writes that bypass the sidebar row's tap
+                // gesture (full-keyboard/VoiceOver List(selection:) tag
+                // activation, programmatic writes) still load the transcript.
+                // loadGeneration dedupes this against the tap closure's own
+                // load; the guard keeps already-active selections (draft
+                // materialization, sendtest bootstrap) single-load.
+                if let selection, selection != chatViewModel.activeConversationID {
+                    Task { await chatViewModel.loadConversation(selection) }
+                }
             }
         }
         .onChange(of: chatViewModel.needsModelRedirect) { _, needsRedirect in
@@ -292,8 +302,14 @@ struct AppShellView: View {
         }
     }
 
+    /// Sidebar row tap. Routed pages are popped unconditionally (mirroring
+    /// handleNewConversation and the onChange nil branch): re-tapping the
+    /// already-active conversation never fires onChange(of:
+    /// selectedConversationID), yet selection must still win over a pushed
+    /// Models/Settings page (plan §A.4/§7).
     private func selectConversation(_ id: UUID) {
         conversationListViewModel.selectConversation(id)
+        detailRoutes.removeAll()
         showSidebarDrawer = false
         Task { await chatViewModel.loadConversation(id) }
     }

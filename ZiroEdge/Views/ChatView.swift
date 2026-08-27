@@ -252,12 +252,25 @@ extension ChatView {
     }
 
     var emptyState: some View {
-        ZiroHero(
-            symbol: "bubble.left.and.bubble.right",
-            title: "Start a conversation",
-            message: "Ask anything below. Your messages and the model's response stay on this device.",
-            tint: .accentColor
-        )
+        // A.2: with no models installed, the hero gains a direct CTA into the
+        // catalog (same shell route the header pill's Browse action uses).
+        VStack(spacing: ZiroTheme.Spacing.large) {
+            ZiroHero(
+                symbol: "bubble.left.and.bubble.right",
+                title: "Start a conversation",
+                message: "Ask anything below. Your messages and the model's response stay on this device.",
+                tint: .accentColor
+            )
+            if viewModel.availableModels.isEmpty {
+                Button {
+                    navigateToRoute(.models)
+                } label: {
+                    Label("Browse Models", systemImage: "arrow.down.circle")
+                }
+                .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier("browse-models-button")
+            }
+        }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, ZiroTheme.Spacing.xxLarge)
         .padding(.top, ZiroTheme.Spacing.heroTop)
@@ -354,7 +367,10 @@ extension ChatView {
             } label: {
                 Image(systemName: "text.badge.star")
             }
-            .disabled(viewModel.activeConversationID == nil || viewModel.isLoadingConversation)
+            // Draft chats have no row yet (activeConversationID == nil) but are
+            // real editing surfaces — keep instructions reachable there.
+            .disabled((viewModel.activeConversationID == nil && !viewModel.isDraftConversation)
+                      || viewModel.isLoadingConversation)
             .accessibilityLabel("Conversation instructions")
         }
     }

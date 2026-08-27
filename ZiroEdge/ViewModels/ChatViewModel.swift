@@ -345,12 +345,15 @@ final class ChatViewModel: ObservableObject {
             needsModelRedirect = true
             return nil
         }
+        // Commit any instructions staged on the draft (instructions editor
+        // before first send); fall back to the global default when untouched.
+        let stagedPrompt = activeConversationSystemPrompt
         let defaultPrompt = UserDefaults.standard.string(forKey: DefaultsKeys.defaultSystemPrompt)
         let result = await persistence.createConversationResult(
             id: UUID(),
             title: "New Conversation",
             modelID: model.id,
-            systemPrompt: defaultPrompt?.nilIfBlank
+            systemPrompt: stagedPrompt ?? defaultPrompt?.nilIfBlank
         )
         guard case .success(let id) = result else {
             if case .failure(let error) = result {
@@ -364,7 +367,7 @@ final class ChatViewModel: ObservableObject {
         // attach to this conversation even if the caller suspends immediately.
         isDraftConversation = false
         activeConversationID = id
-        activeConversationSystemPrompt = defaultPrompt?.nilIfBlank
+        activeConversationSystemPrompt = stagedPrompt ?? defaultPrompt?.nilIfBlank
         await conversationListViewModel?.loadConversations()
         conversationListViewModel?.selectedConversationID = id
         return id
@@ -485,12 +488,16 @@ final class ChatViewModel: ObservableObject {
         }
         guard lifecycleManager.activeModel?.id == model.id else { return failStartup(model) }
 
+        // Mirror materializeDraftForSend: preserve instructions staged on a
+        // draft (e.g. a retry after a failed first-send materialization) so
+        // the editor's contents survive; fall back to the global default.
+        let stagedPrompt = isDraftConversation ? activeConversationSystemPrompt : nil
         let defaultPrompt = UserDefaults.standard.string(forKey: DefaultsKeys.defaultSystemPrompt)
         let result = await persistence.createConversationResult(
             id: UUID(),
             title: "New Conversation",
             modelID: model.id,
-            systemPrompt: defaultPrompt?.nilIfBlank
+            systemPrompt: stagedPrompt ?? defaultPrompt?.nilIfBlank
         )
         guard case .success(let id) = result else {
             if case .failure(let error) = result {
@@ -792,8 +799,15 @@ extension ChatViewModel {
     }
 
     func updateSystemPrompt(_ prompt: String?) async -> Bool {
-        guard let activeConversationID else { return false }
         let normalized = prompt?.nilIfBlank
+        // Draft chats have no persistence row yet — stage the instructions in
+        // memory; `materializeDraftForSend` commits them with the row at first
+        // send. Storing nil ("Use Default") clears the override so the global
+        // default applies again.
+        guard let activeConversationID else {
+            activeConversationSystemPrompt = normalized
+            return true
+        }
         switch await persistence.updateConversationSystemPrompt(
             id: activeConversationID,
             systemPrompt: normalized
