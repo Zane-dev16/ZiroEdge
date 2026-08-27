@@ -98,7 +98,7 @@ struct ModelDetailView: View {
             if status.isRepairNeeded || ModelManagerService.isRepairNeeded(for: model) {
                 Label("This model needs repair. Downloading again will replace damaged files.", systemImage: "wrench.and.screwdriver")
                     .font(.subheadline)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(ZiroTheme.warningText)
             }
             if model.allowsTextOnlyCapability {
                 capabilityDownloadButtons
@@ -167,7 +167,7 @@ struct ModelDetailView: View {
     private func readyContent(_ status: ModelDownloadStatus) -> some View {
         VStack(alignment: .leading, spacing: ZiroTheme.Spacing.medium) {
             Label("Installed", systemImage: "checkmark.circle.fill")
-                .foregroundStyle(.green)
+                .foregroundStyle(ZiroTheme.positiveText)
             Text(status.isVisionReady ? "Text + Image Processing" : "Text Only")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -309,7 +309,7 @@ struct ModelDetailView: View {
                 case .baseDownloaded:
                     Label("Base model verified", systemImage: "checkmark.circle.fill")
                         .font(.caption)
-                        .foregroundStyle(.green)
+                        .foregroundStyle(ZiroTheme.positiveText)
                 case .baseFailed(let error):
                     Label("Base: \(error.localizedDescription)", systemImage: "xmark.circle.fill")
                         .font(.caption)
@@ -325,7 +325,7 @@ struct ModelDetailView: View {
                 case .projectorDownloaded:
                     Label("Projector verified", systemImage: "checkmark.circle.fill")
                         .font(.caption)
-                        .foregroundStyle(.green)
+                        .foregroundStyle(ZiroTheme.positiveText)
                 case .projectorFailed(let error):
                     Label("Projector: \(error.localizedDescription)", systemImage: "xmark.circle.fill")
                         .font(.caption)
@@ -360,7 +360,7 @@ struct ModelDetailView: View {
         if !viewModel.downloadManager.hasSufficientStorage(for: model) {
             Label("Low storage: \(available) available, \(required) required", systemImage: "exclamationmark.triangle")
                 .font(.caption)
-                .foregroundStyle(.orange)
+                .foregroundStyle(ZiroTheme.warningText)
         } else {
             Label("Storage: \(available) available", systemImage: "internaldrive")
                 .font(.caption)
@@ -465,7 +465,7 @@ private struct SafetyRuntimePage: View {
                         "Loading is disabled after repeated unclean attempts.",
                         systemImage: "exclamationmark.shield.fill"
                     )
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(ZiroTheme.warningText)
                     Button("Reset Load-Safety History") {
                         viewModel.resetLoadSafety(for: model)
                     }
@@ -670,6 +670,17 @@ private struct UpdateFlowSheet: View {
         checkFailed = false
         upToDate = false
         availableUpdate = nil
+        // Every check can resolve a different revision/artifact set (this is
+        // the only place availableUpdate is assigned, so resetting here also
+        // covers any revision change). The prior revision's license
+        // acceptance, vision-pair confirmation, and RAM-risk acknowledgment
+        // were given for that earlier artifact set; carrying them over would
+        // let canStageUpdate pass without the user reviewing the new license
+        // or risk (same leak class the wizard's inspect() reset fixed).
+        selectedBase = nil
+        updateLicenseConfirmed = false
+        updatePairConfirmed = false
+        updateRAMRiskAccepted = false
         statusMessage = nil
         do {
             switch try await coordinator.checkForUpdate(model: model) {
@@ -690,10 +701,10 @@ private struct UpdateFlowSheet: View {
         Section {
             if upToDate {
                 Label("This pinned revision is up to date.", systemImage: "checkmark.seal.fill")
-                    .foregroundStyle(.green)
+                    .foregroundStyle(ZiroTheme.positiveText)
             } else if checkFailed {
                 Label("Could not check for updates.", systemImage: "wifi.exclamationmark")
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(ZiroTheme.warningText)
             }
             Button("Check Again") {
                 Task { await runCheckIfIdle() }
@@ -771,7 +782,37 @@ private struct UpdateFlowSheet: View {
                 }
             }
             .disabled(!canStageUpdate(review: review))
+            // Gate explanation, mirroring the import wizard's
+            // ImportWizardContinueButton hint: five silent gates (variant,
+            // license, vision-pair confirmation, storage, RAM risk) would
+            // otherwise leave the disabled button unexplained.
+            if !canStageUpdate(review: review), let hint = stageGateHint(review: review) {
+                Text(hint)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
+    }
+
+    /// The first unmet staging gate, in the order canStageUpdate evaluates
+    /// them; nil when staging is allowed.
+    private func stageGateHint(review: HFRepositoryReview) -> String? {
+        guard let base = selectedBase else { return "Choose a base artifact to continue." }
+        if !updateLicenseConfirmed { return "Accept the license to continue." }
+        let projector = updateProjector(for: base, review: review)
+        if model.modelType == .vision {
+            if projector == nil { return "No unambiguous vision pair is available for this artifact — choose another." }
+            if !updatePairConfirmed { return "Confirm the vision pairing to continue." }
+        }
+        if !coordinator.storagePreflight(base: base, projector: projector).canProceed {
+            return "Free up storage — the download cannot start."
+        }
+        let ram = coordinator.ramAssessment(base: base, projector: projector)
+        if ram.classification == .risky, !updateRAMRiskAccepted {
+            return "Acknowledge the memory risk to continue."
+        }
+        return nil
     }
 
     @ViewBuilder

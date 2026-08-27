@@ -83,12 +83,12 @@ struct ChatHeaderPill: View {
             ProgressView().controlSize(.small)
         case .ready:
             Circle()
-                .fill(Color.green)
+                .fill(ZiroTheme.positiveText)
                 .frame(width: 7, height: 7)
         case .evicted, .failed:
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.caption2.weight(.semibold))
-                .foregroundStyle(Color.orange)
+                .foregroundStyle(ZiroTheme.warningText)
         case .needsDownload, .idle:
             Circle()
                 .fill(Color.secondary.opacity(0.5))
@@ -117,7 +117,8 @@ struct ChatHeaderPill: View {
     private var titleTint: Color {
         switch phase {
         case .ready: return Color.primary
-        case .failed, .evicted: return Color.orange
+        // Semantic status tokens: raw .orange fails 4.5:1 on light backgrounds.
+        case .failed, .evicted: return ZiroTheme.warningText
         case .needsDownload, .idle: return Color.secondary
         case .loading: return Color.primary
         }

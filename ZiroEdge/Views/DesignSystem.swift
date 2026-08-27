@@ -8,6 +8,27 @@ enum ZiroTheme {
     static let subtleBorder = Color.primary.opacity(0.08)
     static let accentForeground = Color("AccentForeground")
 
+    /// Status text for warning states (download needs repair, RAM risk,
+    /// vision pair incomplete, failed model pill). Raw `.orange` passes in
+    /// dark mode but sits far below the 4.5:1 WCAG AA contrast floor on
+    /// light backgrounds, so light mode uses this darkened variant
+    /// (#B25000, 5.2:1 on white); dark mode keeps the system orange.
+    /// Icon-only usages satisfy the 3:1 non-text floor too.
+    static let warningText = Color(uiColor: UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? .systemOrange
+            : UIColor(red: 0.698, green: 0.314, blue: 0, alpha: 1)
+    })
+
+    /// Status text for positive states (installed, vision pair confirmed,
+    /// RAM fits). Raw `.green` fails 4.5:1 in light mode; this darkened
+    /// variant (#1E7B34, 5.3:1 on white) keeps dark mode on system green.
+    static let positiveText = Color(uiColor: UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? .systemGreen
+            : UIColor(red: 0.118, green: 0.482, blue: 0.204, alpha: 1)
+    })
+
     enum Spacing {
         /// Tightest inset: two-line stack gutters and badge vertical padding.
         static let micro: CGFloat = 2

@@ -6,6 +6,29 @@
 // internal view state so nothing is duplicated.
 
 import SwiftUI
+import UIKit
+
+extension View {
+    /// VoiceOver support for transient banners: new banners are otherwise
+    /// silent — only model-load transitions announce (ChatModelLoading). Posts
+    /// a one-shot announcement when the banner first mounts so screen-reader
+    /// users hear it without hunting for it. Announcements are auditory, not
+    /// animated, so Reduce Motion does not apply.
+    func announcingOnAppear(_ message: String) -> some View {
+        modifier(BannerAnnouncementModifier(message: message))
+    }
+}
+
+private struct BannerAnnouncementModifier: ViewModifier {
+    let message: String
+
+    func body(content: Content) -> some View {
+        content.onAppear {
+            guard UIAccessibility.isVoiceOverRunning else { return }
+            UIAccessibility.post(notification: .announcement, argument: message)
+        }
+    }
+}
 
 // ChatSurfaceDetails.swift
 // ZiroEdge — Privacy-first local AI assistant
@@ -31,7 +54,7 @@ extension ChatView {
                 icon: "externaldrive.badge.exclamationmark",
                 title: "Response not saved yet",
                 message: "The response is safely retained while you choose what to do.",
-                tint: .orange
+                tint: ZiroTheme.warningText
             ) {
                 ViewThatFits(in: .horizontal) {
                     recoveryActions
@@ -39,6 +62,9 @@ extension ChatView {
                 }
             }
             .accessibilityIdentifier("persistenceRecoveryBanner")
+            .announcingOnAppear(
+                "Response not saved yet. The response is safely retained while you choose what to do."
+            )
         }
 
         if let missingID = viewModel.unavailableConversationModelID {
@@ -46,11 +72,14 @@ extension ChatView {
                 icon: "questionmark.folder.fill",
                 title: "Model unavailable",
                 message: "This conversation used \(missingID), which was removed. Explicitly choose another installed model to continue.",
-                tint: .orange
+                tint: ZiroTheme.warningText
             ) {
                 Button("Choose Model") { navigateToRoute(.models) }
             }
             .accessibilityIdentifier("unavailableConversationModelBanner")
+            .announcingOnAppear(
+                "Model unavailable. This conversation used \(missingID), which was removed. Choose another installed model to continue."
+            )
         }
 
         if viewModel.showError, let error = viewModel.errorMessage {
@@ -66,13 +95,13 @@ extension ChatView {
             }
         }
         if let warning = viewModel.truncationWarning {
-            dismissibleBanner(icon: "text.badge.minus", message: warning, tint: .orange) {
+            dismissibleBanner(icon: "text.badge.minus", message: warning, tint: ZiroTheme.warningText) {
                 viewModel.dismissTruncationWarning()
             }
         }
 
         if let warning = viewModel.visionWarning {
-            dismissibleBanner(icon: "photo.badge.exclamationmark", message: warning, tint: .orange) {
+            dismissibleBanner(icon: "photo.badge.exclamationmark", message: warning, tint: ZiroTheme.warningText) {
                 viewModel.visionWarning = nil
             }
         }
@@ -88,7 +117,7 @@ extension ChatView {
                 icon: "exclamationmark.octagon.fill",
                 title: "Couldn't load \(viewModel.selectedModel?.displayName ?? "model")",
                 message: message,
-                tint: .orange
+                tint: ZiroTheme.warningText
             ) {
                 Button("Retry") { viewModel.retryModelLoad() }
                     .accessibilityIdentifier("modelRetryButton")
@@ -99,7 +128,7 @@ extension ChatView {
                 icon: "memorychip",
                 title: "Model unloaded",
                 message: "\(viewModel.selectedModel?.displayName ?? "The model") was released to protect memory.",
-                tint: .orange
+                tint: ZiroTheme.warningText
             ) {
                 Button("Reload") { viewModel.retryModelLoad() }
                     .accessibilityIdentifier("modelRetryButton")
@@ -123,6 +152,7 @@ extension ChatView {
             }
         }
         .accessibilityIdentifier("errorBanner")
+        .announcingOnAppear(message)
     }
 
     func dismissibleBanner(
@@ -136,6 +166,7 @@ extension ChatView {
             Button("Dismiss", action: onDismiss)
         }
         .accessibilityIdentifier(identifier ?? "statusBanner")
+        .announcingOnAppear(message)
     }
 
 

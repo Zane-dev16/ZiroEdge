@@ -201,7 +201,7 @@ struct ModelsView: View {
         VStack(spacing: ZiroTheme.Spacing.small) {
             Image(systemName: "checkmark.seal.fill")
                 .font(.largeTitle)
-                .foregroundStyle(.green)
+                .foregroundStyle(ZiroTheme.positiveText)
                 .accessibilityHidden(true)
             Text("All curated models are installed")
                 .font(.headline)
@@ -298,7 +298,18 @@ private struct ModelRow: View {
         }
         .padding(.vertical, ZiroTheme.Spacing.xSmall)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(model.displayName), \(subtitle), \(model.formattedSize), \(status.statusAccessibilityLabel)")
+        .accessibilityLabel(rowAccessibilityLabel)
+    }
+
+    /// Combined row label. Repair-needed rows must not announce the generic
+    /// "available to download" — the visible orange Repair state is the row's
+    /// most important information, so it is spoken plus a pointer to the fix.
+    private var rowAccessibilityLabel: String {
+        var label = "\(model.displayName), \(subtitle), \(model.formattedSize), \(status.statusAccessibilityLabel(for: model))"
+        if status.presentsAsRepairNeeded(for: model) {
+            label += ". Open the model to repair its download."
+        }
+        return label
     }
 
     private var iconName: String {
@@ -318,15 +329,17 @@ private struct ModelRow: View {
             Text("PAIR INCOMPLETE")
                 .font(.caption2.weight(.bold))
                 .padding(.horizontal, ZiroTheme.Spacing.badge).padding(.vertical, ZiroTheme.Spacing.micro)
-                .foregroundStyle(.orange)
+                .foregroundStyle(ZiroTheme.warningText)
                 .background(Color.orange.opacity(0.1), in: Capsule())
         }
     }
 
     private var eligibilityTint: Color {
+        // Semantic status tokens: raw .green/.orange fail 4.5:1 on light
+        // backgrounds for caption-size text.
         switch model.runtimeEligibility {
-        case .validated: .green
-        case .experimental: .orange
+        case .validated: ZiroTheme.positiveText
+        case .experimental: ZiroTheme.warningText
         case .unavailable: .secondary
         }
     }
@@ -356,13 +369,13 @@ private struct ModelRow: View {
                 .accessibilityLabel("Download cancelled")
         case .downloaded:
             Image(systemName: "checkmark.circle.fill")
-                .foregroundStyle(.green)
+                .foregroundStyle(ZiroTheme.positiveText)
                 .accessibilityHidden(true)
         case .notDownloaded:
             if status.isRepairNeeded || ModelManagerService.isRepairNeeded(for: model) {
                 Text("Repair")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(ZiroTheme.warningText)
                     .accessibilityLabel("Repair \(model.displayName)")
             } else {
                 Image(systemName: "arrow.down.circle")
@@ -402,9 +415,20 @@ private struct DownloadProgressRing: View {
 }
 
 extension ModelDownloadStatus {
+    /// Whether this status should be presented as repair-needed (files on
+    /// disk failed validation, or a partial pair needs re-download). Shared
+    /// by the row indicator and its accessibility label so the two never
+    /// disagree.
+    func presentsAsRepairNeeded(for model: AIModel) -> Bool {
+        guard case .notDownloaded = displayState else { return false }
+        return isRepairNeeded || ModelManagerService.isRepairNeeded(for: model)
+    }
+
     /// Spoken status for a catalog row; preserved from the pre-redesign
-    /// catalog so VoiceOver and tests keep hearing the same phrases.
-    var statusAccessibilityLabel: String {
+    /// catalog so VoiceOver and tests keep hearing the same phrases. The
+    /// `.notDownloaded` case branches on repair state: repair-needed rows
+    /// announce "needs repair" instead of "available to download".
+    func statusAccessibilityLabel(for model: AIModel) -> String {
         switch displayState {
         case .downloading(let progress): return "downloading, \(Int(progress * 100)) percent complete"
         case .pausing(let progress): return "pausing, \(Int(progress * 100)) percent complete"
@@ -414,7 +438,8 @@ extension ModelDownloadStatus {
         case .failed: return "download failed"
         case .cancelled: return "download cancelled"
         case .downloaded: return "installed"
-        case .notDownloaded: return "available to download"
+        case .notDownloaded:
+            return presentsAsRepairNeeded(for: model) ? "needs repair" : "available to download"
         }
     }
 }

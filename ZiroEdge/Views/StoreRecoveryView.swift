@@ -17,7 +17,7 @@ struct StoreRecoveryView: View {
                     symbol: "externaldrive.badge.exclamationmark",
                     title: "Local history is unavailable",
                     message: failure.localizedDescription,
-                    tint: .orange
+                    tint: ZiroTheme.warningText
                 )
 
                 VStack(spacing: ZiroTheme.Spacing.medium) {
@@ -96,14 +96,14 @@ struct StoreResetConfirmationView: View {
                     symbol: "externaldrive.badge.checkmark",
                     title: "Recovery copy created",
                     message: "A verified \(copiedSize) copy is safe. Resetting will remove the unreadable original and create a fresh local history.",
-                    tint: .green
+                    tint: ZiroTheme.positiveText
                 )
 
                 ZiroStatusBanner(
                     icon: "checkmark.shield.fill",
                     title: "Your recovery copy is protected",
                     message: "\(artifact.manifest.count) local history file\(artifact.manifest.count == 1 ? "" : "s") copied and verified byte-for-byte.",
-                    tint: .green
+                    tint: ZiroTheme.positiveText
                 )
                 .frame(maxWidth: 520)
 

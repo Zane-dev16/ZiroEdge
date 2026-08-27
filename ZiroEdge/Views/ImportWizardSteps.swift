@@ -227,10 +227,10 @@ struct ConfigureStepView: View {
                     if pair.confidence != .high {
                         HStack(spacing: ZiroTheme.Spacing.small) {
                             Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.orange)
+                                .foregroundStyle(ZiroTheme.warningText)
                             Text("This pairing requires explicit confirmation before import.")
                                 .font(.caption)
-                                .foregroundStyle(.orange)
+                                .foregroundStyle(ZiroTheme.warningText)
                         }
                     }
 
@@ -248,7 +248,7 @@ struct ConfigureStepView: View {
                         .buttonStyle(.borderedProminent)
                     } else {
                         Label("Vision pair confirmed", systemImage: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
+                            .foregroundStyle(ZiroTheme.positiveText)
                     }
                 }
             } else if let error = viewModel.visionPairingError {
@@ -486,7 +486,7 @@ struct TransferStepView: View {
 
         case .downloaded:
             Label("Transfer complete", systemImage: "checkmark.circle.fill")
-                .foregroundStyle(.green)
+                .foregroundStyle(ZiroTheme.positiveText)
 
         case .failed(let error):
             VStack(alignment: .leading, spacing: ZiroTheme.Spacing.small) {
@@ -553,7 +553,7 @@ struct DoneStepView: View {
                 symbol: "checkmark.seal.fill",
                 title: "Already Imported",
                 message: "\(model.displayName) — this exact revision and artifact is already imported.",
-                tint: .green
+                tint: ZiroTheme.positiveText
             )
             Button(action: onClose) {
                 Label("Open in Library", systemImage: "books.vertical")
@@ -568,7 +568,7 @@ struct DoneStepView: View {
                 symbol: "checkmark.circle.fill",
                 title: "Import Complete",
                 message: "\(model.displayName) is downloaded and ready on this device.",
-                tint: .green
+                tint: ZiroTheme.positiveText
             )
             ZiroCard {
                 VStack(alignment: .leading, spacing: ZiroTheme.Spacing.small) {
@@ -629,11 +629,11 @@ struct RAMAssessmentCard: View {
             switch assessment.classification {
             case .likelyFits:
                 Label("Should run within this device's memory.", systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
+                    .foregroundStyle(ZiroTheme.positiveText)
             case .risky:
                 if let warning = assessment.warning {
                     Label(warning, systemImage: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(ZiroTheme.warningText)
                 }
                 Toggle("Download despite RAM risk", isOn: $riskAccepted)
             }
@@ -685,9 +685,11 @@ struct ConfidenceBadge: View {
     }
 
     private var tint: Color {
+        // Semantic status tokens: raw .green/.orange fail 4.5:1 on light
+        // backgrounds for badge text. .red stays system (not in finding scope).
         switch confidence {
-        case .high: .green
-        case .medium: .orange
+        case .high: ZiroTheme.positiveText
+        case .medium: ZiroTheme.warningText
         case .low: .red
         }
     }

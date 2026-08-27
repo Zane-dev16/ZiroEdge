@@ -78,13 +78,19 @@ struct MessageBubble: View {
                     .clipShape(RoundedRectangle(cornerRadius: ZiroTheme.Radius.bubble))
                 }
 
-                // Action buttons (assistant messages only).
+                // Action buttons (assistant messages only). The glyphs stay
+                // caption-size, but each button reserves a 44x44pt frame with
+                // a full-area contentShape — they are the only path to copy or
+                // branch a message, so the hit target must meet the 44pt
+                // minimum.
                 if message.role == .assistant && !isStreaming {
-                    HStack(spacing: ZiroTheme.Spacing.medium) {
+                    HStack(spacing: 0) {
                         Button(action: { onCopy?() }) {
                             Image(systemName: "doc.on.doc")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
+                                .frame(width: 44, height: 44)
+                                .contentShape(Rectangle())
                         }
                         .accessibilityLabel("Copy message")
 
@@ -92,10 +98,12 @@ struct MessageBubble: View {
                             Image(systemName: "arrow.branch")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
+                                .frame(width: 44, height: 44)
+                                .contentShape(Rectangle())
                         }
                         .accessibilityLabel("Branch from this message")
                     }
-                    .padding(.horizontal, ZiroTheme.Spacing.xSmall)
+                    .padding(.leading, ZiroTheme.Spacing.xSmall)
                 }
             }
 

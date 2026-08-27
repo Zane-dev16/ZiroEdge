@@ -55,7 +55,7 @@ struct ImportedModelSettingsView: View {
             if let savedMessage {
                 Text(savedMessage)
                     .font(.caption)
-                    .foregroundStyle(saveFailed ? .red : .green)
+                    .foregroundStyle(saveFailed ? .red : ZiroTheme.positiveText)
             }
             retryNativeLoadButton
             loadStatusRow
@@ -184,9 +184,9 @@ struct ImportedModelSettingsView: View {
     private var loadStatusColor: Color {
         guard let record = ImportedModelStore.shared.record(id: model.id) else { return .secondary }
         switch record.loadStatus {
-        case .loaded: return .green
+        case .loaded: return ZiroTheme.positiveText
         case .loadFailed: return .red
-        case .configurationChanged: return .orange
+        case .configurationChanged: return ZiroTheme.warningText
         case .neverLoaded: return .secondary
         }
     }

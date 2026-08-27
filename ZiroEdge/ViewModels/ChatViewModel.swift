@@ -45,6 +45,11 @@ final class ChatViewModel: ObservableObject {
     @Published var streamingText: String = ""
     @Published var isLoadingConversation = false
     @Published var isStartingConversation = false
+    /// Draft-path single-flight: guards `materializeDraftForSend` against
+    /// re-entry while a first send is suspended creating the conversation
+    /// row (`startNewConversation`'s guard covers only the legacy path).
+    /// Not published — no UI observes draft materialization directly.
+    private var isMaterializingDraft = false
     @Published var isStartupError = false
     @Published private(set) var activeConversationSystemPrompt: String?
     @Published private(set) var hasPersistenceRecovery = false
@@ -251,6 +256,29 @@ final class ChatViewModel: ObservableObject {
         let previousSelection = selectedModel
         selectedModel = model
 
+        // An automatic load may already be in flight — e.g. the appear-time
+        // deferred load racing a conversation opened from the drawer during
+        // the startup window. Two concurrent loadModel calls unload the
+        // shared engine, race currentState through both attempts, and can
+        // leave the selection and residency mismatched until a later
+        // interaction, so queue the switch until the in-flight attempt
+        // settles. Re-evaluated on every wake: the settling load (or another
+        // waiter) may have already loaded the requested model, which makes
+        // the switch below a no-op.
+        while lifecycleManager.activeModel?.id != model.id,
+              lifecycleManager.isLoadAttemptInFlight {
+            do {
+                try await Task.sleep(nanoseconds: 50_000_000)
+            } catch {
+                // Cancelled mid-wait: leave the in-flight attempt as the sole
+                // loader instead of starting a switch from a dead task, and
+                // restore the prior selection so the phase projection cannot
+                // park on a mismatched "loading" state nothing will resolve.
+                selectedModel = lifecycleManager.activeModel ?? previousSelection
+                return false
+            }
+        }
+
         if lifecycleManager.activeModel?.id != model.id {
             isSwitchingModel = true
             await lifecycleManager.switchToModel(model)
@@ -301,6 +329,18 @@ final class ChatViewModel: ObservableObject {
     /// Create the persistence row backing an in-memory draft at first send.
     /// Mirrors the failure mapping of `startNewConversation(model:)` exactly.
     private func materializeDraftForSend() async -> UUID? {
+        // Single-flight: inputText is only cleared by the caller after this
+        // returns, so a double-tap of Send (or Send + keyboard onSubmit) can
+        // re-enter while the first task is suspended inside
+        // createConversationResult. Without this guard both tasks create a
+        // conversation — duplicate "New Conversation" rows, an orphaned row
+        // holding only the user message — and the second send overwrites
+        // activeGenerationID so the first response is silently discarded.
+        // Mirrors the isStartingConversation guard on the legacy path.
+        guard !isMaterializingDraft else { return nil }
+        isMaterializingDraft = true
+        defer { isMaterializingDraft = false }
+
         guard let model = selectedModel else {
             needsModelRedirect = true
             return nil
