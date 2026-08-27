@@ -260,7 +260,7 @@ extension ChatView {
         )
         .frame(maxWidth: .infinity)
         .padding(.horizontal, ZiroTheme.Spacing.xxLarge)
-        .padding(.top, 96)
+        .padding(.top, ZiroTheme.Spacing.heroTop)
     }
 
     // MARK: Scrolling
@@ -269,7 +269,7 @@ extension ChatView {
         Button(action: action) {
             Image(systemName: "arrow.down")
                 .font(.body.weight(.bold))
-                .padding(12)
+                .padding(ZiroTheme.Spacing.medium)
                 .foregroundStyle(ZiroTheme.accentForeground)
                 .background(Color.accentColor, in: Circle())
                 .shadow(color: .black.opacity(0.18), radius: 6, y: 3)

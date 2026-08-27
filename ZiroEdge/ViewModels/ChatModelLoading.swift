@@ -9,6 +9,7 @@
 // `deferredLoadTask` members. Behavior matches the pre-extraction inline code.
 
 import Foundation
+import UIKit
 
 extension ChatViewModel {
 
@@ -17,6 +18,7 @@ extension ChatViewModel {
     /// Pure projection of lifecycle-manager state onto the observable phase.
     /// Driven by a Combine sink plus explicit calls at mutation points.
     func refreshModelLoadPhase() {
+        let previousPhase = modelLoadPhase
         switch lifecycleManager.currentState {
         case .loading:
             modelLoadPhase = .loading
@@ -40,6 +42,29 @@ extension ChatViewModel {
             } else {
                 modelLoadPhase = .loading
             }
+        }
+        announceModelLoadTransitionIfNeeded(from: previousPhase)
+    }
+
+    /// Post a VoiceOver announcement when the model becomes resident or the
+    /// load fails: both transitions silently flip composer availability, and
+    /// a failure is otherwise only discoverable by browsing to the retry
+    /// banner. Posting is transition-gated because this projection runs at
+    /// many mutation points — level-triggered announcements would spam.
+    /// Reduce Motion does not apply here (announcements are auditory, not
+    /// animated), so nothing is gated on it.
+    private func announceModelLoadTransitionIfNeeded(from previousPhase: ModelLoadPhase) {
+        guard modelLoadPhase != previousPhase else { return }
+        switch modelLoadPhase {
+        case .ready:
+            UIAccessibility.post(
+                notification: .announcement,
+                argument: "\(selectedModel?.displayName ?? "Model") is ready."
+            )
+        case .failed(let message):
+            UIAccessibility.post(notification: .announcement, argument: message)
+        default:
+            break
         }
     }
 

@@ -159,7 +159,7 @@ struct SourceStepView: View {
                         .font(.title2)
                         .foregroundStyle(Color.accentColor)
                         .accessibilityHidden(true)
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: ZiroTheme.Spacing.micro) {
                         Text("Hugging Face Repository")
                             .font(.headline)
                         Text("Public GGUF repositories, pinned to an immutable revision.")
@@ -180,14 +180,14 @@ struct SourceStepView: View {
                         .font(.title2)
                         .foregroundStyle(.secondary)
                         .accessibilityHidden(true)
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: ZiroTheme.Spacing.micro) {
                         HStack(spacing: ZiroTheme.Spacing.xSmall) {
                             Text("Local GGUF File")
                                 .font(.headline)
                             Text("Coming soon")
                                 .font(.caption2.weight(.semibold))
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
+                                .padding(.horizontal, ZiroTheme.Spacing.badge)
+                                .padding(.vertical, ZiroTheme.Spacing.micro)
                                 .background(Color.secondary.opacity(0.12), in: Capsule())
                         }
                         Text("Import a model file stored on this device.")

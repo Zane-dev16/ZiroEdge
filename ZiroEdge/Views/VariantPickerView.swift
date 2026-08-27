@@ -73,9 +73,16 @@ struct VariantRow: View {
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundStyle(Color.accentColor)
                     .font(.title3)
+                    .accessibilityHidden(true)
             }
         }
         .padding(.vertical, ZiroTheme.Spacing.xSmall)
+        // One reachable element per variant with button + selected traits, so
+        // VoiceOver announces the current GGUF choice for this mandatory
+        // step instead of scattering its texts. The visual checkmark is
+        // hidden because the .isSelected trait already speaks "selected".
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
     }
 }
 
@@ -86,8 +93,8 @@ struct QuantizationBadge: View {
     var body: some View {
         Text(label)
             .font(.caption2.weight(.semibold))
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
+            .padding(.horizontal, ZiroTheme.Spacing.badge)
+            .padding(.vertical, ZiroTheme.Spacing.micro)
             .foregroundStyle(qualityTint)
             .background(qualityTint.opacity(0.12), in: Capsule())
     }

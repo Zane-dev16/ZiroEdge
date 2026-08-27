@@ -72,12 +72,16 @@ struct ImportedModelSettingsView: View {
             Text("Temperature: \(temperature, specifier: "%.1f")")
                 .font(.subheadline)
             Slider(value: $temperature, in: 0...2, step: 0.1)
+                .accessibilityLabel("Temperature")
+                .accessibilityValue("\(temperature, specifier: "%.1f")")
         }
 
         VStack(alignment: .leading, spacing: ZiroTheme.Spacing.xSmall) {
             Text("Top-P: \(topP, specifier: "%.2f")")
                 .font(.subheadline)
             Slider(value: $topP, in: 0...1, step: 0.05)
+                .accessibilityLabel("Top-P")
+                .accessibilityValue("\(topP, specifier: "%.2f")")
         }
 
         Stepper("Max Tokens: \(maxTokens)", value: $maxTokens, in: 64...4096, step: 64)
@@ -88,6 +92,8 @@ struct ImportedModelSettingsView: View {
             Text("Repeat Penalty: \(repeatPenalty, specifier: "%.2f")")
                 .font(.subheadline)
             Slider(value: $repeatPenalty, in: 0...2, step: 0.05)
+                .accessibilityLabel("Repeat Penalty")
+                .accessibilityValue("\(repeatPenalty, specifier: "%.2f")")
         }
     }
 

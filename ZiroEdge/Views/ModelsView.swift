@@ -138,7 +138,7 @@ struct ModelsView: View {
                         .foregroundStyle(Color.accentColor)
                         .frame(width: 30)
                         .accessibilityHidden(true)
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: ZiroTheme.Spacing.micro) {
                         Text("Import from Hugging Face")
                             .font(.headline)
                             .foregroundStyle(Color.accentColor)
@@ -311,13 +311,13 @@ private struct ModelRow: View {
         if status.isVisionReady {
             Text("VISION")
                 .font(.caption2.weight(.bold))
-                .padding(.horizontal, 6).padding(.vertical, 2)
+                .padding(.horizontal, ZiroTheme.Spacing.badge).padding(.vertical, ZiroTheme.Spacing.micro)
                 .foregroundStyle(.purple)
                 .background(Color.purple.opacity(0.1), in: Capsule())
         } else if model.modelType == .vision {
             Text("PAIR INCOMPLETE")
                 .font(.caption2.weight(.bold))
-                .padding(.horizontal, 6).padding(.vertical, 2)
+                .padding(.horizontal, ZiroTheme.Spacing.badge).padding(.vertical, ZiroTheme.Spacing.micro)
                 .foregroundStyle(.orange)
                 .background(Color.orange.opacity(0.1), in: Capsule())
         }

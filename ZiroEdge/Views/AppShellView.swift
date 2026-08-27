@@ -83,7 +83,10 @@ struct AppShellView: View {
         .onChange(of: conversationListViewModel.selectedConversationID) { _, selection in
             if selection == nil {
                 // Deselection (New Conversation, deleting the open chat) always
-                // lands on an unsaved draft chat.
+                // lands on an unsaved draft chat. The draft is the base layer
+                // (plan §A.2/§A.4), so any routed Models/Settings page is
+                // popped too — selection always wins over routed pages.
+                detailRoutes.removeAll()
                 chatViewModel.beginNewDraft()
             } else {
                 // Selection always wins over any routed page: return to chat.
@@ -108,6 +111,17 @@ struct AppShellView: View {
                 // without this refresh migrated models read as Not
                 // Downloaded for the whole session.
                 downloadManager.updateStatusesFromDisk()
+                // The chat surface's appear-time deferred kick ran before this
+                // task (child onAppear precedes the ancestor task), so on
+                // legacy installs it saw no managed artifacts yet and parked
+                // the chat on .needsDownload. Migration has just made models
+                // available — re-kick the idempotent deferred loader so the
+                // chat converges with a fresh install. Flag choreographies
+                // drive their own loads below and are left alone.
+                if !CommandLine.arguments.contains("--uitesting"),
+                   !CommandLine.arguments.contains("--e2e-hf-import") {
+                    chatViewModel.startDeferredModelLoadIfNeeded()
+                }
             }
             ModelManagerService.ensureModelsDirectory()
             await conversationListViewModel.loadConversations()
@@ -115,16 +129,30 @@ struct AppShellView: View {
                 await lifecycleManager.autoLoadFirstModel()
             }
 #if DEBUG
-            if CommandLine.arguments.contains("--uitesting-sendtest"),
-               let model = lifecycleManager.activeModel {
-                await chatViewModel.selectModel(model)
-                if let id = await conversationListViewModel.createConversation(
-                    modelID: model.id,
-                    title: "UITest Send Test"
-                ) {
-                    await chatViewModel.loadConversation(id)
-                    chatViewModel.inputText = "Reply with exactly OK."
-                    await chatViewModel.sendMessage()
+            if CommandLine.arguments.contains("--uitesting-sendtest") {
+                // The deferred autoload kicked from ChatView.onAppear may have
+                // claimed the load before this task ran (child onAppear
+                // precedes the ancestor task), which turns the --uitesting
+                // autoLoad above into a guarded no-op while the model is
+                // still loading. Await residency — bounded, with an early
+                // exit on terminal failure — before reading activeModel so
+                // this bootstrap is order-independent. A device with no
+                // usable model times out here and the hook simply stays
+                // skipped, matching the pre-overhaul failure mode.
+                for _ in 0..<480 where lifecycleManager.activeModel == nil {
+                    if lifecycleManager.currentState == .loadFailed { break }
+                    try? await Task.sleep(for: .milliseconds(250))
+                }
+                if let model = lifecycleManager.activeModel {
+                    await chatViewModel.selectModel(model)
+                    if let id = await conversationListViewModel.createConversation(
+                        modelID: model.id,
+                        title: "UITest Send Test"
+                    ) {
+                        await chatViewModel.loadConversation(id)
+                        chatViewModel.inputText = "Reply with exactly OK."
+                        await chatViewModel.sendMessage()
+                    }
                 }
             }
 
@@ -250,10 +278,18 @@ struct AppShellView: View {
         ModelRegistry.model(for: id) ?? modelsViewModel.importedModels.first { $0.id == id }
     }
 
-    /// Dismiss the drawer first so pushes land over the chat root.
+    /// Dismiss the drawer first so pushes land over the chat root. A route
+    /// already on the stack pops back to its existing page instead of pushing
+    /// a duplicate: the iPad sidebar is persistent, so its Models/Settings
+    /// rows stay tappable while that page is open (the "Choose Another Model"
+    /// alert actions reach here through the same path).
     private func openShellRoute(_ route: ShellRoute) {
         showSidebarDrawer = false
-        detailRoutes.append(route)
+        if let existingIndex = detailRoutes.firstIndex(of: route) {
+            detailRoutes.removeSubrange(detailRoutes.index(after: existingIndex)...)
+        } else {
+            detailRoutes.append(route)
+        }
     }
 
     private func selectConversation(_ id: UUID) {
@@ -264,9 +300,12 @@ struct AppShellView: View {
 
     /// New Conversation shows an unsaved draft immediately; model loading is
     /// already handled by the deferred loader (or persists untouched when
-    /// loaded/failed states exist).
+    /// loaded/failed states exist). The draft is the base layer (plan
+    /// §A.2/§A.4), so routed pages are popped just like the onChange nil
+    /// branch — the draft chat surface must be the visible one.
     private func handleNewConversation() {
         showSidebarDrawer = false
+        detailRoutes.removeAll()
         chatViewModel.beginNewDraft()
     }
 

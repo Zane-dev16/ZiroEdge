@@ -167,12 +167,12 @@ struct ConversationRow: View {
     let conversation: ConversationPayload
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: ZiroTheme.Spacing.xSmall) {
             Text(conversation.title)
                 .font(.body)
                 .lineLimit(1)
 
-            HStack(spacing: 8) {
+            HStack(spacing: ZiroTheme.Spacing.small) {
                 Text("\(conversation.messageCount) messages")
                     .font(.caption)
                     .foregroundStyle(.secondary)

@@ -405,7 +405,7 @@ struct TransferStepView: View {
                             Image(systemName: "arrow.down.circle.fill")
                                 .font(.title2)
                                 .foregroundStyle(Color.accentColor)
-                            VStack(alignment: .leading, spacing: 2) {
+                            VStack(alignment: .leading, spacing: ZiroTheme.Spacing.micro) {
                                 Text(model.displayName)
                                     .font(.headline)
                                 Text(model.formattedSize)
@@ -447,7 +447,7 @@ struct TransferStepView: View {
         case .pausing(let progress):
             HStack(spacing: ZiroTheme.Spacing.small) {
                 ProgressView()
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: ZiroTheme.Spacing.micro) {
                     Text("Saving resume data…")
                     Text("\(Int(progress * 100))% complete")
                         .font(.caption)
@@ -458,7 +458,7 @@ struct TransferStepView: View {
         case .resuming(let progress):
             HStack(spacing: ZiroTheme.Spacing.small) {
                 ProgressView()
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: ZiroTheme.Spacing.micro) {
                     Text("Resuming…")
                     Text("\(Int(progress * 100))% complete")
                         .font(.caption)
@@ -670,7 +670,7 @@ struct ConfidenceBadge: View {
         .padding(.horizontal, ZiroTheme.Spacing.small)
         .padding(.vertical, ZiroTheme.Spacing.xSmall)
         .background(
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: ZiroTheme.Radius.badge)
                 .fill(tint.opacity(fillOpacity))
         )
         .foregroundStyle(tint)

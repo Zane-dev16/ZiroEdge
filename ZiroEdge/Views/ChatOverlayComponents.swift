@@ -12,7 +12,9 @@ import SwiftUI
 /// Toolbar identity control showing the chat's selected model name plus an
 /// animated busy indicator while loading (respects Reduce Motion). Absorbs
 /// the former input-bar model-picker menu; tap-to-change leads to the picker
-/// and catalog routes per master plan §B.3.
+/// and catalog routes per master plan §B.3. Loading state is carried by the
+/// pill's own spinner/title and the composer status badge — the pill is a
+/// single VoiceOver element whose label names the state.
 struct ChatHeaderPill: View {
     let phase: ModelLoadPhase
     let modelName: String?
@@ -22,14 +24,7 @@ struct ChatHeaderPill: View {
     let onRetryLoad: () -> Void
 
     var body: some View {
-        VStack(spacing: 1) {
-            menu
-            if phase == .loading {
-                Text("Loading model")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-        }
+        menu
     }
 
     private var menu: some View {
@@ -62,7 +57,7 @@ struct ChatHeaderPill: View {
         }
         .disabled(phase == .loading)
         .accessibilityLabel(accessibilityText)
-        .accessibilityHint("Choose the local model for this conversation")
+        .accessibilityHint(phase == .loading ? "" : "Choose the local model for this conversation")
     }
 
     private var pillLabel: some View {
@@ -77,7 +72,7 @@ struct ChatHeaderPill: View {
                 .foregroundStyle(.secondary)
         }
         .padding(.horizontal, ZiroTheme.Spacing.medium)
-        .padding(.vertical, 5)
+        .padding(.vertical, ZiroTheme.Spacing.xSmall)
         .background(ZiroTheme.inputBackground, in: Capsule())
     }
 
@@ -150,9 +145,24 @@ struct ChatHeaderPill: View {
     }
 
     /// Matches the historical picker-label family used by UI test helpers
-    /// (`readModelPickerLabel`, `selectChatModel`).
+    /// (`readModelPickerLabel`, `selectChatModel`). State folds into the label
+    /// ("Chat model, X, loading" / "…, failed to load" / "…, unloaded, reload
+    /// available") so VoiceOver hears it from the pill itself — the orange
+    /// warning indicator and phase are otherwise invisible after the one-shot
+    /// transition announcement, and revisiting the pill would read like a
+    /// normal ready state.
     private var accessibilityText: String {
-        "Chat model, \(pillTitle)"
+        let name = modelName ?? "Model"
+        switch phase {
+        case .loading:
+            return "Chat model, \(name), loading"
+        case .failed:
+            return "Chat model, \(name), failed to load"
+        case .evicted:
+            return "Chat model, \(name), unloaded, reload available"
+        case .ready, .idle, .needsDownload:
+            return "Chat model, \(pillTitle)"
+        }
     }
 }
 
@@ -225,7 +235,7 @@ struct ThinkingIndicator: View {
                 .foregroundStyle(.secondary)
                 .frame(width: 96, alignment: .leading)
                 .padding(.horizontal, ZiroTheme.Spacing.large)
-                .padding(.vertical, 10)
+                .padding(.vertical, ZiroTheme.Spacing.medium)
                 .background(ZiroTheme.elevatedBackground)
                 .clipShape(RoundedRectangle(cornerRadius: ZiroTheme.Radius.bubble))
             Spacer()

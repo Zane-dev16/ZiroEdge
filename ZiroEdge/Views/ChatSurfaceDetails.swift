@@ -158,7 +158,7 @@ extension ChatView {
                     .accessibilityIdentifier("chatInput")
                     .accessibilityHint("Enter a message for the local model")
                     .padding(.horizontal, ZiroTheme.Spacing.large)
-                    .padding(.vertical, 11)
+                    .padding(.vertical, ZiroTheme.Spacing.medium)
                     .background(ZiroTheme.inputBackground)
                     .clipShape(RoundedRectangle(cornerRadius: ZiroTheme.Radius.card))
                     .overlay {
@@ -192,38 +192,21 @@ extension ChatView {
         .padding(.horizontal, ZiroTheme.Spacing.large)
     }
 
+    /// Composer status row. The header pill is the single authoritative
+    /// loading indicator (spinner + "Name…" title), and `.failed`/`.evicted`
+    /// already render the modelRetryRow banner directly above this row —
+    /// repeating those states here showed the same message on screen twice.
+    /// This row only speaks when nothing else carries the state: token usage
+    /// while ready and the download nudge.
     @ViewBuilder
     var composerStatusBadge: some View {
         if chatReady {
             tokenCountBadge
-        } else if !hintMessage.isEmpty {
-            HStack(spacing: ZiroTheme.Spacing.xSmall) {
-                if viewModel.modelLoadPhase == .loading {
-                    ProgressView().controlSize(.small)
-                }
-                Text(hintMessage)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            .accessibilityElement(children: .combine)
-        }
-    }
-
-    var hintMessage: String {
-        switch viewModel.modelLoadPhase {
-        case .idle:
-            return ""
-        case .needsDownload:
-            return "Download a model to start chatting"
-        case .loading:
-            return "Loading \(viewModel.selectedModel?.displayName ?? "model")…"
-        case .ready:
-            return ""
-        case .evicted:
-            return "\(viewModel.selectedModel?.displayName ?? "The model") was unloaded"
-        case .failed:
-            return "Couldn't load \(viewModel.selectedModel?.displayName ?? "the model")"
+        } else if viewModel.modelLoadPhase == .needsDownload {
+            Text("Download a model to start chatting")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
         }
     }
 

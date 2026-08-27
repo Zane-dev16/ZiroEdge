@@ -170,6 +170,13 @@ final class ImportViewModel: ObservableObject {
         existingModel = nil
         importingModel = nil
         visionPairConfirmed = false
+        // A new inspection may resolve to a different repository/revision than
+        // the one the user last saw. The license acceptance and RAM-risk
+        // acknowledgment were given for that earlier artifact set; carrying
+        // them over would let the Configure/Review gates pass without the
+        // user ever reviewing the new license or risk (wizard state leak).
+        licenseConfirmed = false
+        ramRiskAccepted = false
         do {
             let result = try await inspector.inspect(repositoryInput)
             review = result

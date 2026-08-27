@@ -9,15 +9,23 @@ enum ZiroTheme {
     static let accentForeground = Color("AccentForeground")
 
     enum Spacing {
+        /// Tightest inset: two-line stack gutters and badge vertical padding.
+        static let micro: CGFloat = 2
         static let xSmall: CGFloat = 4
         static let small: CGFloat = 8
         static let medium: CGFloat = 12
         static let large: CGFloat = 16
         static let xLarge: CGFloat = 24
         static let xxLarge: CGFloat = 40
+        /// Capsule badge/chip horizontal inset.
+        static let badge: CGFloat = 6
+        /// Empty-state hero top inset.
+        static let heroTop: CGFloat = 96
     }
 
     enum Radius {
+        /// Badge/chip background corners.
+        static let badge: CGFloat = 6
         static let control: CGFloat = 14
         static let card: CGFloat = 20
         static let bubble: CGFloat = 18
