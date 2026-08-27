@@ -56,7 +56,7 @@ struct LicenseView: View {
                         .textSelection(.enabled)
                 } else {
                     Label("The bundled notice could not be loaded.", systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(.red)
+                        .foregroundStyle(ZiroTheme.warningText)
                 }
             }
         }

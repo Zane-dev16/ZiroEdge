@@ -235,7 +235,19 @@ extension ChatView {
                 throttledScrollToBottom(proxy)
             }
             .onChange(of: viewModel.isStreaming) { _, streaming in
-                if streaming { throttledScrollToBottom(proxy) }
+                if streaming {
+                    throttledScrollToBottom(proxy)
+                } else {
+                    // Completion cue (r5): the streaming bubble is created
+                    // with isStreaming constantly true and torn down the
+                    // moment this flips false, so it can never announce its
+                    // own finish — post the announcement from this choke
+                    // point instead.
+                    UIAccessibility.post(
+                        notification: .announcement,
+                        argument: "Assistant response complete"
+                    )
+                }
             }
         }
     }

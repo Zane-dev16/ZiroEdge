@@ -29,6 +29,25 @@ enum ZiroTheme {
             : UIColor(red: 0.118, green: 0.482, blue: 0.204, alpha: 1)
     })
 
+    /// Status text for informational/blue accents (onboarding eyebrows).
+    /// Raw `.blue` reads ≈4.0:1 on white — below the 4.5:1 AA floor for
+    /// caption text; this darkened variant (#0062CC, 5.8:1 on white) keeps
+    /// dark mode on system blue.
+    static let infoText = Color(uiColor: UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? .systemBlue
+            : UIColor(red: 0, green: 0.384, blue: 0.8, alpha: 1)
+    })
+
+    /// Status text for purple accents (onboarding eyebrows). Raw `.purple`
+    /// reads ≈4.1:1 on white — below the 4.5:1 AA floor; this darkened
+    /// variant (#8236B8, 6.6:1 on white) keeps dark mode on system purple.
+    static let accentPurpleText = Color(uiColor: UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? .systemPurple
+            : UIColor(red: 0.510, green: 0.212, blue: 0.722, alpha: 1)
+    })
+
     enum Spacing {
         /// Tightest inset: two-line stack gutters and badge vertical padding.
         static let micro: CGFloat = 2

@@ -114,7 +114,11 @@ struct SourceStepView: View {
                 sourceChoice
                 inputCard
                 if case .failed(let message) = viewModel.phase {
+                    // r4 MEDIUM: inspection failure was visual-only; announce
+                    // it when the card mounts (Retry button already carries a
+                    // visible, labeled title).
                     failureCard(message)
+                        .announcingOnAppear("Import rejected. \(message) Retry inspection.")
                 }
                 privacyNotice
             }
@@ -233,7 +237,8 @@ struct SourceStepView: View {
             VStack(alignment: .leading, spacing: ZiroTheme.Spacing.small) {
                 Label("Import Rejected", systemImage: "exclamationmark.triangle.fill")
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.red)
+                    // Contrast token: raw .red sits ~3.6:1 on light cards.
+                    .foregroundStyle(ZiroTheme.warningText)
                 Text(message)
                     .font(.footnote)
                     .foregroundStyle(.secondary)

@@ -132,10 +132,10 @@ struct ModelDetailView: View {
             VStack(alignment: .leading, spacing: ZiroTheme.Spacing.small) {
                 HStack {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.red)
+                        .foregroundStyle(ZiroTheme.warningText)
                     Text("Failed: \(error.localizedDescription)")
                         .font(.caption)
-                        .foregroundStyle(.red)
+                        .foregroundStyle(ZiroTheme.warningText)
                 }
                 partialOutcomeSummary(for: status)
                 HStack(spacing: ZiroTheme.Spacing.medium) {
@@ -313,7 +313,7 @@ struct ModelDetailView: View {
                 case .baseFailed(let error):
                     Label("Base: \(error.localizedDescription)", systemImage: "xmark.circle.fill")
                         .font(.caption)
-                        .foregroundStyle(.red)
+                        .foregroundStyle(ZiroTheme.warningText)
                 case .baseDownloading(let progress):
                     Label("Base downloading (\(Int(progress * 100))%)", systemImage: "arrow.down.circle")
                         .font(.caption)
@@ -329,7 +329,7 @@ struct ModelDetailView: View {
                 case .projectorFailed(let error):
                     Label("Projector: \(error.localizedDescription)", systemImage: "xmark.circle.fill")
                         .font(.caption)
-                        .foregroundStyle(.red)
+                        .foregroundStyle(ZiroTheme.warningText)
                 case .projectorDownloading(let progress):
                     Label("Projector downloading (\(Int(progress * 100))%)", systemImage: "arrow.down.circle")
                         .font(.caption)
@@ -622,6 +622,7 @@ private struct UpdateFlowSheet: View {
     @State private var updateLicenseConfirmed = false
     @State private var updatePairConfirmed = false
     @State private var updateRAMRiskAccepted = false
+    @State private var showsCancelStagedConfirmation = false
 
     var body: some View {
         NavigationStack {
@@ -825,7 +826,7 @@ private struct UpdateFlowSheet: View {
             } else {
                 Label("No unambiguous high-confidence projector pair is available.", systemImage: "eye.slash")
                     .font(.caption)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(ZiroTheme.warningText)
             }
         }
     }
@@ -848,9 +849,24 @@ private struct UpdateFlowSheet: View {
                 }
             }
 
+            // r4 MEDIUM: discarding deletes staged download data (a later
+            // update re-downloads it), so the destructive action confirms
+            // first — mirroring ModelsView's cancel-download dialog.
             Button("Cancel Staged Update", role: .destructive) {
-                coordinator.discardStagedUpdate(modelID: model.id)
-                statusMessage = "The staged update was discarded. The installed revision is unchanged."
+                showsCancelStagedConfirmation = true
+            }
+            .confirmationDialog(
+                "Discard Staged Update",
+                isPresented: $showsCancelStagedConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Discard Staged Update", role: .destructive) {
+                    coordinator.discardStagedUpdate(modelID: model.id)
+                    statusMessage = "The staged update was discarded. The installed revision is unchanged."
+                }
+                Button("Keep Staged Update", role: .cancel) {}
+            } message: {
+                Text("Discarding removes the staged download data. The installed revision stays unchanged; checking for the update again would re-download it.")
             }
         }
     }

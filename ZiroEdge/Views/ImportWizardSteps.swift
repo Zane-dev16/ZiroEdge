@@ -110,6 +110,10 @@ struct ImportWizardContinueButton: View {
             }
             .buttonStyle(ZiroPrimaryButtonStyle())
             .disabled(!isEnabled)
+            // The visual hint caption is skipped by VoiceOver's default
+            // traversal; surface the gate reason as a hint on the control
+            // itself while it is disabled (r4 MEDIUM).
+            .accessibilityHint(!isEnabled ? (hint ?? "") : "")
         }
     }
 }
@@ -253,7 +257,8 @@ struct ConfigureStepView: View {
                 }
             } else if let error = viewModel.visionPairingError {
                 Label(error, systemImage: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.red)
+                    .foregroundStyle(ZiroTheme.warningText)
+                    .announcingOnAppear("Vision pairing failed. \(error)")
             } else {
                 Label("Resolving compatible vision pair…", systemImage: "hourglass")
                     .foregroundStyle(.secondary)
@@ -341,7 +346,8 @@ struct ReviewStepView: View {
             if case .failed(let message) = viewModel.phase {
                 Section {
                     Label(message, systemImage: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.red)
+                        .foregroundStyle(ZiroTheme.warningText)
+                        .announcingOnAppear("Import failed. \(message)")
                 }
             }
         }
@@ -491,7 +497,8 @@ struct TransferStepView: View {
         case .failed(let error):
             VStack(alignment: .leading, spacing: ZiroTheme.Spacing.small) {
                 Label(error.localizedDescription, systemImage: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.red)
+                    .foregroundStyle(ZiroTheme.warningText)
+                    .announcingOnAppear("Download failed. \(error.localizedDescription)")
                 Button("Manage in Library") { onClose() }
                     .buttonStyle(.bordered)
             }
@@ -605,7 +612,8 @@ struct PreflightCard: View {
             LabeledContent("Available storage", value: StorageByteFormatter.string(fromByteCount: storage.availableBytes))
             if !storage.canProceed {
                 Label("Not enough storage. No download can start.", systemImage: "internaldrive.fill.badge.xmark")
-                    .foregroundStyle(.red)
+                    .foregroundStyle(ZiroTheme.warningText)
+                    .announcingOnAppear("Not enough storage. No download can start.")
             }
         }
     }
@@ -685,12 +693,12 @@ struct ConfidenceBadge: View {
     }
 
     private var tint: Color {
-        // Semantic status tokens: raw .green/.orange fail 4.5:1 on light
-        // backgrounds for badge text. .red stays system (not in finding scope).
+        // Semantic status tokens: raw .green/.orange/.red fail 4.5:1 on light
+        // backgrounds for badge text (r5 pulled the .low case into tokens).
         switch confidence {
         case .high: ZiroTheme.positiveText
         case .medium: ZiroTheme.warningText
-        case .low: .red
+        case .low: ZiroTheme.warningText
         }
     }
 

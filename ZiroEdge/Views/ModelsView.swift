@@ -111,6 +111,9 @@ struct ModelsView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
+            // labelsHidden also drops the title from the a11y tree, leaving
+            // the segments unnamed for VoiceOver (r4 MEDIUM).
+            .accessibilityLabel("Catalog scope")
         }
     }
 
@@ -344,13 +347,28 @@ private struct ModelRow: View {
         }
     }
 
+    /// Ring plus a Dynamic Type-scaling percentage label. The percentage is
+    /// the only visible transfer indicator, so it can't live at a fixed 9pt
+    /// inside the 26pt ring (r4 MEDIUM) — it sits beside the ring at caption2
+    /// and scales with the user's text size. Hidden from a11y: the row's
+    /// combined label already announces the percentage.
+    private func downloadProgressIndicator(_ progress: Double, tint: Color) -> some View {
+        HStack(spacing: ZiroTheme.Spacing.micro) {
+            DownloadProgressRing(progress: progress, tint: tint)
+            Text("\(Int((progress * 100).rounded()))%")
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+        }
+    }
+
     @ViewBuilder
     private var statusIndicator: some View {
         switch status.displayState {
         case .downloading(let progress), .resuming(let progress), .pausing(let progress):
-            DownloadProgressRing(progress: progress)
+            downloadProgressIndicator(progress, tint: .accentColor)
         case .paused(let progress):
-            DownloadProgressRing(progress: progress, tint: .secondary)
+            downloadProgressIndicator(progress, tint: .secondary)
         case .verifying:
             VStack(spacing: ZiroTheme.Spacing.xSmall) {
                 ProgressView()
@@ -388,7 +406,8 @@ private struct ModelRow: View {
 }
 
 /// Compact circular progress indicator for in-flight downloads. Decorative:
-/// the row's combined accessibility label announces the percentage.
+/// the percentage is rendered beside the ring (scaling text) and the row's
+/// combined accessibility label announces it.
 private struct DownloadProgressRing: View {
     let progress: Double
     var tint: Color = .accentColor
@@ -403,13 +422,6 @@ private struct DownloadProgressRing: View {
                 .rotationEffect(.degrees(-90))
         }
         .frame(width: 26, height: 26)
-        .overlay {
-            Text("\(Int((progress * 100).rounded()))")
-                .font(.system(size: 9, weight: .semibold))
-                .monospacedDigit()
-                .foregroundStyle(.secondary)
-                .minimumScaleFactor(0.8)
-        }
         .accessibilityHidden(true)
     }
 }

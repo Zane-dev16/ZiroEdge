@@ -97,7 +97,9 @@ struct AppShellView: View {
                 // activation, programmatic writes) still load the transcript.
                 // loadGeneration dedupes this against the tap closure's own
                 // load; the guard keeps already-active selections (draft
-                // materialization, sendtest bootstrap) single-load.
+                // materialization) single-load. The --uitesting-sendtest
+                // bootstrap reuses this selection-driven load instead of
+                // starting its own.
                 if let selection, selection != chatViewModel.activeConversationID {
                     Task { await chatViewModel.loadConversation(selection) }
                 }
@@ -159,9 +161,26 @@ struct AppShellView: View {
                         modelID: model.id,
                         title: "UITest Send Test"
                     ) {
-                        await chatViewModel.loadConversation(id)
-                        chatViewModel.inputText = "Reply with exactly OK."
-                        await chatViewModel.sendMessage()
+                        // The selection write above drives the transcript load
+                        // through the onChange(selectedConversationID) handler.
+                        // This bootstrap used to also call loadConversation
+                        // directly; the two loads raced on loadGeneration — the
+                        // loser returned early while the winner was still
+                        // fetching, leaving isLoadingConversation set, and
+                        // sendMessage's precondition guard silently dropped the
+                        // seeded send. Reuse the selection-driven load: await
+                        // quiescence (bounded, matching the model-load wait)
+                        // before seeding and sending.
+                        for _ in 0..<480
+                        where chatViewModel.activeConversationID != id
+                            || chatViewModel.isLoadingConversation {
+                            try? await Task.sleep(for: .milliseconds(250))
+                        }
+                        if chatViewModel.activeConversationID == id,
+                           !chatViewModel.isLoadingConversation {
+                            chatViewModel.inputText = "Reply with exactly OK."
+                            await chatViewModel.sendMessage()
+                        }
                     }
                 }
             }

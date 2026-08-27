@@ -36,7 +36,10 @@ struct SidebarView: View {
                 Section {
                     Label(error, systemImage: "exclamationmark.triangle")
                         .font(.subheadline)
-                        .foregroundStyle(.red)
+                        .foregroundStyle(ZiroTheme.warningText)
+                        // The row mounts silently otherwise; VoiceOver users
+                        // only find it by browsing the list.
+                        .announcingOnAppear("Conversation list error. \(error)")
                 }
             }
 

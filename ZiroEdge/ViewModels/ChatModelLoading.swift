@@ -39,8 +39,17 @@ extension ChatViewModel {
             } else if lifecycleManager.activeModel == nil {
                 // Candidate named but not resident; the deferred loader bridges it.
                 modelLoadPhase = deferredLoadTask == nil ? .idle : .loading
-            } else {
+            } else if lifecycleManager.isLoadAttemptInFlight || deferredLoadTask != nil {
+                // Identity mismatch while a load is genuinely in flight: busy.
                 modelLoadPhase = .loading
+            } else {
+                // Mismatch with nothing loading (e.g. loadConversation named a
+                // non-resident model, or a draft nominated a candidate while a
+                // different model stayed resident). Nothing will resolve this
+                // on its own, and a permanent .loading would disable the pill
+                // menu, lock the composer, and offer no retry row — project
+                // the retryable idle phase so selection recovers it.
+                modelLoadPhase = .idle
             }
         }
         announceModelLoadTransitionIfNeeded(from: previousPhase)

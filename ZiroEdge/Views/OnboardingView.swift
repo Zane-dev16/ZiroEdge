@@ -11,7 +11,13 @@ struct OnboardingView: View {
 
     private struct Page {
         let symbol: String
+        /// Icon tint — large decorative glyphs are exempt from the 4.5:1
+        /// text contrast floor.
         let color: Color
+        /// Eyebrow caption tint. Caption-bold text must meet 4.5:1 on the
+        /// page background, so this uses a darkened token instead of `color`
+        /// (r5 contrast sweep: raw green/blue/purple all fail on white).
+        let eyebrowColor: Color
         let eyebrow: String
         let title: String
         let description: String
@@ -19,15 +25,18 @@ struct OnboardingView: View {
 
     private let pages = [
         Page(
-            symbol: "lock.shield.fill", color: .blue, eyebrow: "PRIVATE BY DESIGN", title: "Your AI stays yours",
+            symbol: "lock.shield.fill", color: .blue, eyebrowColor: ZiroTheme.infoText,
+            eyebrow: "PRIVATE BY DESIGN", title: "Your AI stays yours",
             description: "Messages, images, and model responses are processed locally. Your conversations never leave this device."
         ),
         Page(
-            symbol: "arrow.down.circle.fill", color: .green, eyebrow: "YOU CHOOSE THE MODEL", title: "Download once. Use anywhere.",
+            symbol: "arrow.down.circle.fill", color: .green, eyebrowColor: ZiroTheme.positiveText,
+            eyebrow: "YOU CHOOSE THE MODEL", title: "Download once. Use anywhere.",
             description: "Pick a model that fits your device. After downloading, chat works without an internet connection."
         ),
         Page(
-            symbol: "bubble.left.and.bubble.right.fill", color: .purple, eyebrow: "READY WHEN YOU ARE", title: "A focused place to think",
+            symbol: "bubble.left.and.bubble.right.fill", color: .purple, eyebrowColor: ZiroTheme.accentPurpleText,
+            eyebrow: "READY WHEN YOU ARE", title: "A focused place to think",
             description: "Start conversations, attach images with vision models, and keep a private history on your device."
         )
     ]
@@ -61,7 +70,7 @@ struct OnboardingView: View {
                                 Text(page.eyebrow)
                                     .font(.caption.weight(.bold))
                                     .tracking(1.1)
-                                    .foregroundStyle(page.color)
+                                    .foregroundStyle(page.eyebrowColor)
                                 Text(page.title)
                                     .font(.largeTitle.bold())
                                     .multilineTextAlignment(.center)

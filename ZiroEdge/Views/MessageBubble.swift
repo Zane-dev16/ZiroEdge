@@ -63,8 +63,18 @@ struct MessageBubble: View {
                 } else {
                     VStack(alignment: .leading, spacing: 0) {
                         if isStreaming {
+                            // The growing transcript must never re-bind this
+                            // element's label: VoiceOver would re-announce the
+                            // full text on every token chunk (r4 HIGH). The
+                            // streaming element keeps one stable label; the
+                            // finished reply becomes readable when this branch
+                            // swaps to the final Text below. Completion is
+                            // announced by ChatView when isStreaming flips —
+                            // this element is torn down at completion, so it
+                            // cannot announce its own finish.
                             StreamingText(content: displayContent)
-                                .accessibilityLabel("Assistant response: \(displayContent)")
+                                .accessibilityElement(children: .ignore)
+                                .accessibilityLabel("Assistant is responding")
                         } else {
                             Text(markdown: displayContent)
                                 .font(.body)
