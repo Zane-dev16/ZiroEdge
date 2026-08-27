@@ -45,15 +45,6 @@ enum ModelState: Sendable, Equatable {
     case loaded
     case evicted
     case loadFailed
-
-    static func == (lhs: ModelState, rhs: ModelState) -> Bool {
-        switch (lhs, rhs) {
-        case (.unloaded, .unloaded), (.loading, .loading), (.loaded, .loaded), (.evicted, .evicted), (.loadFailed, .loadFailed):
-            return true
-        default:
-            return false
-        }
-    }
 }
 
 // MARK: - Model Lifecycle Manager
@@ -91,9 +82,7 @@ final class ModelLifecycleManager: ObservableObject {
         memoryBudgeter: MemoryBudgeter,
         loadSafetyStore: LoadSafetyStore,
         importedModelStore: ImportedModelStore = .shared,
-        availabilityProvider: @escaping @Sendable (AIModel) -> ModelAvailability = {
-            ModelManagerService.availability(for: $0)
-        },
+        availabilityProvider: @escaping @Sendable (AIModel) -> ModelAvailability = { ModelManagerService.availability(for: $0) },
         recoveryDelay: Duration = .seconds(5)
     ) {
         self.inferenceService = inferenceService
@@ -194,14 +183,11 @@ final class ModelLifecycleManager: ObservableObject {
         guard loadEpoch == safetyEpoch else { return await invalidateLoadAttempt() }
         guard decision.recommendation == .proceed else {
             logger.warning("Blocking unsafe load for \(model.id, privacy: .public): \(decision.logSummary, privacy: .public)")
-            insufficientMemoryMessage = decision.alertMessage(modelName: model.displayName)
+            let alert = decision.alertMessage(modelName: model.displayName)
+            insufficientMemoryMessage = alert
             showInsufficientMemoryWarning = true
             currentState = .loadFailed
-            return .failed(ModelLoadFailure(
-                kind: .insufficientMemory,
-                message: decision.alertMessage(modelName: model.displayName),
-                nativeKind: nil
-            ))
+            return .failed(ModelLoadFailure(kind: .insufficientMemory, message: alert, nativeKind: nil))
         }
 
         let baseURL = ModelManagerService.baseModelPath(for: model)
@@ -238,12 +224,10 @@ final class ModelLifecycleManager: ObservableObject {
             let nativeKind = inferenceError?.nativeFailureKind
             let message = Self.userMessage(for: inferenceError)
             recordImportedLoadFailure(for: model, nativeKind: nativeKind, message: message)
-            return failLoad(
-                kind: inferenceError?.sanitizedDiagnostic.contains("load-safety") == true
-                    ? .safetyPersistence : .nativeLoadFailure,
-                message: message,
-                nativeKind: nativeKind
-            )
+            let kind: ModelLoadFailureKind =
+                inferenceError?.sanitizedDiagnostic.contains("load-safety") == true
+                    ? .safetyPersistence : .nativeLoadFailure
+            return failLoad(kind: kind, message: message, nativeKind: nativeKind)
         }
     }
 
@@ -253,9 +237,7 @@ final class ModelLifecycleManager: ObservableObject {
     }
 
     private func recordImportedLoadFailure(
-        for model: AIModel,
-        nativeKind: NativeFailureKind?,
-        message: String
+        for model: AIModel, nativeKind: NativeFailureKind?, message: String
     ) {
         guard model.isImported else { return }
         try? importedModelStore.update(id: model.id) {
@@ -268,9 +250,7 @@ final class ModelLifecycleManager: ObservableObject {
     }
 
     private func failLoad(
-        kind: ModelLoadFailureKind,
-        message: String,
-        nativeKind: NativeFailureKind? = nil
+        kind: ModelLoadFailureKind, message: String, nativeKind: NativeFailureKind? = nil
     ) -> ModelLoadResult {
         currentState = .loadFailed
         loadFailureMessage = message
@@ -337,7 +317,7 @@ final class ModelLifecycleManager: ObservableObject {
         return true
     }
 
-    /// Switch to a different model. Safety failures never trigger an automatic reload.
+    /// Switch models; safety failures never trigger an automatic reload.
     @discardableResult
     func switchToModel(_ model: AIModel) async -> ModelLoadResult {
         if let active = activeModel, active.id == model.id { return .alreadyLoaded }
@@ -345,9 +325,7 @@ final class ModelLifecycleManager: ObservableObject {
     }
 
     func resetLoadSafety(for model: AIModel) -> ModelSafetyResetResult {
-        guard let profile = MemoryProfileRegistry.profile(for: model) else {
-            return .failed(message: "No runtime profile exists for this model.")
-        }
+        guard let profile = MemoryProfileRegistry.profile(for: model) else { return .failed(message: "No runtime profile exists for this model.") }
         guard loadSafetyStore.isDisabled(profileID: profile.id) else { return .notDisabled }
         do {
             try loadSafetyStore.reset(profileID: profile.id)
@@ -368,10 +346,13 @@ final class ModelLifecycleManager: ObservableObject {
         return false
     }
 
+    /// Read-shared gate for opportunistic loaders preventing stacked loads.
+    var isLoadAttemptInFlight: Bool { loadInProgress }
+
     // MARK: - Memory Pressure
 
+    // Critical path stays allocation-free apart from dispatching actor work.
     @objc private func handleMemoryPressure() {
-        // Keep the critical notification path allocation-free apart from dispatching existing actor work.
         guard currentState == .loaded || currentState == .loading || loadInProgress else { return }
         safetyEpoch &+= 1
         currentState = .evicted
@@ -399,7 +380,7 @@ final class ModelLifecycleManager: ObservableObject {
 
     /// Load the first fully downloaded model. Used for UI testing.
     func autoLoadFirstModel() async {
-        guard activeModel == nil else { return }
+        guard activeModel == nil, !isLoadAttemptInFlight else { return }
 
         let candidates: [AIModel]
         if MemoryDiagnosticRecorder.shared.controlledWorkloadEnabled,

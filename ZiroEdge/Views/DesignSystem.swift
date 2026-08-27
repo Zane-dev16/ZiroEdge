@@ -102,6 +102,30 @@ extension ZiroStatusBanner where Actions == EmptyView {
     }
 }
 
+/// Shared card container: elevated rounded surface with a subtle border for
+/// content composed outside Form/List sections (wizard pages, heroes).
+struct ZiroCard<Content: View>: View {
+    private let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        content
+            .padding(ZiroTheme.Spacing.large)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: ZiroTheme.Radius.card)
+                    .fill(ZiroTheme.elevatedBackground)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: ZiroTheme.Radius.card)
+                    .stroke(ZiroTheme.subtleBorder)
+            )
+    }
+}
+
 struct ZiroHero: View {
     let symbol: String
     let title: String

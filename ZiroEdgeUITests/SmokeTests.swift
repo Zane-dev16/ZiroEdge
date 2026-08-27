@@ -86,9 +86,9 @@ final class SmokeTests: UITestBase {
 
     func testSidebar() {
         navigateTo(tab: "Chat")
-        // Sidebar is typically a menu or swipe gesture
-        // Try the sidebar button if present
-        if tapButton("sidebar") || tapButton("menu") || tapButton("conversations") {
+        // The chat toolbar's drawer toggle reveals the conversation sidebar
+        // on compact widths; on iPad the column is always visible.
+        if tapButton("sidebar-button") || tapButton("sidebar") || tapButton("menu") || tapButton("conversations") {
             capture("sidebar_open")
         } else {
             // Try swipe from left edge

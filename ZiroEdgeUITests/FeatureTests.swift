@@ -81,8 +81,8 @@ final class FeatureTests: UITestBase {
             XCTFail("App error: \(error)")
             return
         }
-        if let label = readModelPickerLabel(), label == "No Model" {
-            XCTFail("Model never loaded — picker still shows 'No Model'")
+        if let label = readModelPickerLabel(), label == "No Model" || label == "No model yet" {
+            XCTFail("Model never loaded — header pill still shows a placeholder")
             return
         }
         let texts = app.staticTexts.allElementsBoundByIndex.map { $0.label }.joined(separator: " | ")

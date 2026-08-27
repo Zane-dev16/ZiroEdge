@@ -4,9 +4,19 @@
 import PhotosUI
 import SwiftUI
 
+/// The chat surface. Identity/loading feedback lives in the header pill
+/// (`ChatHeaderPill`); the composer enables only while the model is resident;
+/// load failures surface as inline retry rows, not alerts (master plan §B).
 struct ChatView: View {
     @ObservedObject var viewModel: ChatViewModel
-    @FocusState private var isInputFocused: Bool
+    /// Compact shells render the sidebar toggle inside the chat toolbar.
+    var showsSidebarToggle: Bool = false
+    /// Opens a shell route (e.g. the models catalog) from header CTA states.
+    var onNavigateToRoute: ((ShellRoute) -> Void)? = nil
+    /// Presents the sidebar drawer; nil hides the toggle even when requested.
+    var onOpenSidebar: (() -> Void)? = nil
+
+    @FocusState var isInputFocused: Bool
     @State private var hasScrolledUp = false
     @State private var selectedPhotos: [PhotosPickerItem] = []
     @State private var canPasteImage = UIPasteboard.general.hasImages
@@ -22,13 +32,19 @@ struct ChatView: View {
             messageList
             Divider()
             banners
+            modelRetryRow
             inputBar
         }
         .background(ZiroTheme.pageBackground)
         .navigationTitle("Conversation")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { chatToolbar }
-        .onAppear { refreshPasteboardState() }
+        .onAppear {
+            refreshPasteboardState()
+            // Deferred autoload lives here rather than at startup: reaching
+            // the chat never waits on model work (master plan §B).
+            viewModel.startDeferredModelLoadIfNeeded()
+        }
         .onReceive(NotificationCenter.default.publisher(for: UIPasteboard.changedNotification)) { _ in
             refreshPasteboardState()
         }
@@ -63,7 +79,96 @@ struct ChatView: View {
         }
     }
 
-    private var messageList: some View {
+    var attachmentButtons: some View {
+        HStack(spacing: ZiroTheme.Spacing.medium) {
+            PhotosPicker(selection: $selectedPhotos, maxSelectionCount: 10, matching: .images) {
+                Image(systemName: "photo.on.rectangle")
+                    .font(.title3)
+                    .frame(width: 32, height: 40)
+            }
+            .accessibilityLabel("Add photos")
+            .accessibilityHint("Attach up to 10 images to this message")
+            .onChange(of: selectedPhotos) { _, items in
+                Task {
+                    for item in items {
+                        if let data = try? await item.loadTransferable(type: Data.self) { await viewModel.addImage(data) }
+                    }
+                    selectedPhotos.removeAll()
+                }
+            }
+
+            Button {
+                Task {
+                    if await viewModel.pasteImage() { refreshPasteboardState() }
+                }
+            } label: {
+                Image(systemName: "doc.on.clipboard").font(.title3).frame(width: 32, height: 40)
+            }
+            .disabled(!canPasteImage)
+            .accessibilityLabel("Paste image")
+        }
+        .foregroundStyle(Color.accentColor)
+    }
+
+    var sendButton: some View {
+        Button {
+            Task {
+                if viewModel.isStreaming { await viewModel.cancelStream() }
+                else { await viewModel.sendMessage() }
+            }
+        } label: {
+            Image(systemName: viewModel.isStreaming ? "stop.circle.fill" : "arrow.up.circle.fill")
+                .font(.title)
+                .foregroundStyle(sendTint)
+                .frame(width: 38, height: 42)
+        }
+        .disabled(sendDisabled)
+        .accessibilityLabel(viewModel.isStreaming ? "Stop generating" : "Send message")
+        .accessibilityHint(viewModel.isStreaming ? "Stops the current response" : "Sends your message to the local model")
+    }
+
+    /// Streaming stays interruptible; sending requires residency (`chatReady`).
+    private var sendDisabled: Bool {
+        (!chatReady || !canSend || viewModel.isLoadingConversation) && !viewModel.isStreaming
+    }
+
+    private var sendTint: Color {
+        (canSend && chatReady) || viewModel.isStreaming ? Color.accentColor : Color.secondary.opacity(0.45)
+    }
+
+    var imagePreviewRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: ZiroTheme.Spacing.small) {
+                ForEach(Array(viewModel.pendingImages.enumerated()), id: \.offset) { index, data in
+                    if let image = UIImage(data: data) {
+                        ZStack(alignment: .topTrailing) {
+                            Image(uiImage: image)
+                                .resizable().scaledToFill()
+                                .frame(width: 68, height: 68)
+                                .clipShape(RoundedRectangle(cornerRadius: ZiroTheme.Radius.control))
+                                .accessibilityLabel("Attached image \(index + 1)")
+                            Button { viewModel.removeImage(at: index) } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.title3).foregroundStyle(.white)
+                                    .shadow(radius: 2)
+                            }
+                            .accessibilityLabel("Remove attached image \(index + 1)")
+                            .offset(x: 5, y: -5)
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, ZiroTheme.Spacing.large)
+            .padding(.vertical, ZiroTheme.Spacing.small)
+        }
+    }
+}
+
+extension ChatView {
+
+    // MARK: Transcript
+
+    var messageList: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 0) {
@@ -135,7 +240,7 @@ struct ChatView: View {
         }
     }
 
-    private var loadingTranscript: some View {
+    var loadingTranscript: some View {
         VStack(spacing: ZiroTheme.Spacing.large) {
             ProgressView()
             Text("Loading conversation…")
@@ -146,7 +251,7 @@ struct ChatView: View {
         .accessibilityElement(children: .combine)
     }
 
-    private var emptyState: some View {
+    var emptyState: some View {
         ZiroHero(
             symbol: "bubble.left.and.bubble.right",
             title: "Start a conversation",
@@ -158,252 +263,9 @@ struct ChatView: View {
         .padding(.top, 96)
     }
 
-    @ViewBuilder
-    private var banners: some View {
-        if viewModel.hasPersistenceRecovery {
-            ZiroStatusBanner(
-                icon: "externaldrive.badge.exclamationmark",
-                title: "Response not saved yet",
-                message: "The response is safely retained while you choose what to do.",
-                tint: .orange
-            ) {
-                ViewThatFits(in: .horizontal) {
-                    recoveryActions
-                    recoveryActionsVertical
-                }
-            }
-            .accessibilityIdentifier("persistenceRecoveryBanner")
-        }
+    // MARK: Scrolling
 
-        if let missingID = viewModel.unavailableConversationModelID {
-            ZiroStatusBanner(
-                icon: "questionmark.folder.fill",
-                title: "Model unavailable",
-                message: "This conversation used \(missingID), which was removed. Explicitly choose another installed model to continue.",
-                tint: .orange
-            ) {
-                Button("Choose Model") { viewModel.needsModelRedirect = true }
-            }
-            .accessibilityIdentifier("unavailableConversationModelBanner")
-        }
-
-        if viewModel.showError, let error = viewModel.errorMessage {
-            if viewModel.isStartupError {
-                startupErrorBanner(message: error)
-            } else {
-                dismissibleBanner(
-                    icon: "exclamationmark.triangle.fill",
-                    message: error,
-                    tint: .red,
-                    identifier: "errorBanner"
-                ) { viewModel.showError = false }
-            }
-        }
-
-        if let warning = viewModel.truncationWarning {
-            dismissibleBanner(icon: "text.badge.minus", message: warning, tint: .orange) {
-                viewModel.dismissTruncationWarning()
-            }
-        }
-
-        if let warning = viewModel.visionWarning {
-            dismissibleBanner(icon: "photo.badge.exclamationmark", message: warning, tint: .orange) {
-                viewModel.visionWarning = nil
-            }
-        }
-    }
-
-    private func startupErrorBanner(message: String) -> some View {
-        ZiroStatusBanner(
-            icon: "exclamationmark.triangle.fill",
-            message: message,
-            tint: .red
-        ) {
-            HStack(spacing: ZiroTheme.Spacing.medium) {
-                Button("Retry") { Task { await viewModel.retryStartup() } }
-                    .accessibilityIdentifier("retryStartupButton")
-                Button("Dismiss") { viewModel.showError = false }
-            }
-        }
-        .accessibilityIdentifier("errorBanner")
-    }
-
-    private func dismissibleBanner(
-        icon: String,
-        message: String,
-        tint: Color,
-        identifier: String? = nil,
-        onDismiss: @escaping () -> Void
-    ) -> some View {
-        ZiroStatusBanner(icon: icon, message: message, tint: tint) {
-            Button("Dismiss", action: onDismiss)
-        }
-        .accessibilityIdentifier(identifier ?? "statusBanner")
-    }
-
-    private var inputBar: some View {
-        VStack(spacing: ZiroTheme.Spacing.xSmall) {
-            HStack {
-                modelPicker
-                Spacer()
-                tokenCountBadge
-            }
-            .padding(.horizontal, ZiroTheme.Spacing.large)
-
-            if !viewModel.pendingImages.isEmpty { imagePreviewRow }
-
-            HStack(alignment: .bottom, spacing: ZiroTheme.Spacing.medium) {
-                TextField("Message ZiroEdge", text: $viewModel.inputText, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .accessibilityIdentifier("chatInput")
-                    .accessibilityHint("Enter a message for the local model")
-                    .padding(.horizontal, ZiroTheme.Spacing.large)
-                    .padding(.vertical, 11)
-                    .background(ZiroTheme.inputBackground)
-                    .clipShape(RoundedRectangle(cornerRadius: ZiroTheme.Radius.card))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: ZiroTheme.Radius.card)
-                            .stroke(ZiroTheme.subtleBorder)
-                    }
-                    .lineLimit(1...6)
-                    .focused($isInputFocused)
-                    .disabled(viewModel.isLoadingConversation || viewModel.isSwitchingModel)
-                    .onSubmit {
-                        if !viewModel.isStreaming { Task { await viewModel.sendMessage() } }
-                    }
-
-                if viewModel.isVisionModel { attachmentButtons }
-                sendButton
-            }
-            .padding(.horizontal, ZiroTheme.Spacing.large)
-            .padding(.bottom, ZiroTheme.Spacing.medium)
-        }
-        .padding(.top, ZiroTheme.Spacing.small)
-        .background(.bar)
-    }
-
-    private var attachmentButtons: some View {
-        HStack(spacing: ZiroTheme.Spacing.medium) {
-            PhotosPicker(selection: $selectedPhotos, maxSelectionCount: 10, matching: .images) {
-                Image(systemName: "photo.on.rectangle")
-                    .font(.title3)
-                    .frame(width: 32, height: 40)
-            }
-            .accessibilityLabel("Add photos")
-            .accessibilityHint("Attach up to 10 images to this message")
-            .onChange(of: selectedPhotos) { _, items in
-                Task {
-                    for item in items {
-                        if let data = try? await item.loadTransferable(type: Data.self) { await viewModel.addImage(data) }
-                    }
-                    selectedPhotos.removeAll()
-                }
-            }
-
-            Button {
-                Task {
-                    if await viewModel.pasteImage() { refreshPasteboardState() }
-                }
-            } label: {
-                Image(systemName: "doc.on.clipboard").font(.title3).frame(width: 32, height: 40)
-            }
-            .disabled(!canPasteImage)
-            .accessibilityLabel("Paste image")
-        }
-        .foregroundStyle(Color.accentColor)
-    }
-
-    private var sendButton: some View {
-        Button {
-            Task {
-                if viewModel.isStreaming { await viewModel.cancelStream() }
-                else { await viewModel.sendMessage() }
-            }
-        } label: {
-            Image(systemName: viewModel.isStreaming ? "stop.circle.fill" : "arrow.up.circle.fill")
-                .font(.title)
-                .foregroundStyle(canSend || viewModel.isStreaming ? Color.accentColor : Color.secondary.opacity(0.45))
-                .frame(width: 38, height: 42)
-        }
-        .disabled((!canSend || viewModel.isLoadingConversation || viewModel.isSwitchingModel) && !viewModel.isStreaming)
-        .accessibilityLabel(viewModel.isStreaming ? "Stop generating" : "Send message")
-        .accessibilityHint(viewModel.isStreaming ? "Stops the current response" : "Sends your message to the local model")
-    }
-
-    private var imagePreviewRow: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: ZiroTheme.Spacing.small) {
-                ForEach(Array(viewModel.pendingImages.enumerated()), id: \.offset) { index, data in
-                    if let image = UIImage(data: data) {
-                        ZStack(alignment: .topTrailing) {
-                            Image(uiImage: image)
-                                .resizable().scaledToFill()
-                                .frame(width: 68, height: 68)
-                                .clipShape(RoundedRectangle(cornerRadius: ZiroTheme.Radius.control))
-                                .accessibilityLabel("Attached image \(index + 1)")
-                            Button { viewModel.removeImage(at: index) } label: {
-                                Image(systemName: "xmark.circle.fill")
-                                    .font(.title3).foregroundStyle(.white)
-                                    .shadow(radius: 2)
-                            }
-                            .accessibilityLabel("Remove attached image \(index + 1)")
-                            .offset(x: 5, y: -5)
-                        }
-                    }
-                }
-            }
-            .padding(.horizontal, ZiroTheme.Spacing.large)
-            .padding(.vertical, ZiroTheme.Spacing.small)
-        }
-    }
-
-}
-
-private extension ChatView {
-    var modelPicker: some View {
-        Menu {
-            if viewModel.availableModels.isEmpty {
-                Button { viewModel.needsModelRedirect = true } label: {
-                    Label("Download a Model…", systemImage: "arrow.down.circle")
-                }
-            } else {
-                ForEach(viewModel.availableModels) { model in
-                    Button { Task { await viewModel.selectModel(model) } } label: {
-                        Label(model.displayName, systemImage: viewModel.selectedModel?.id == model.id ? "checkmark" : "cpu")
-                    }
-                }
-            }
-        } label: {
-            HStack(spacing: ZiroTheme.Spacing.xSmall) {
-                if viewModel.isSwitchingModel { ProgressView().controlSize(.small) }
-                else { Image(systemName: "cpu").font(.caption) }
-                Text(modelPickerLabel).font(.caption.weight(.semibold)).lineLimit(1)
-                Image(systemName: "chevron.up.chevron.down").font(.caption2)
-            }
-            .foregroundStyle(viewModel.selectedModel != nil ? Color.accentColor : Color.secondary)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .background(ZiroTheme.inputBackground)
-            .clipShape(Capsule())
-        }
-        .disabled(viewModel.isSwitchingModel)
-        .accessibilityLabel("Chat model, \(modelPickerLabel)")
-        .accessibilityHint("Choose the local model for this conversation")
-    }
-
-    private var modelPickerLabel: String {
-        if viewModel.isSwitchingModel { return "Switching…" }
-        if let model = viewModel.selectedModel { return model.displayName }
-        return viewModel.availableModels.isEmpty ? "Download Model" : "Select Model"
-    }
-
-    private var tokenCountBadge: some View {
-        Text("~\(viewModel.tokenCount) / \(viewModel.contextWindowSize) tokens")
-            .font(.caption2).foregroundStyle(.secondary).monospacedDigit()
-            .accessibilityLabel("Approximately \(viewModel.tokenCount) of \(viewModel.contextWindowSize) context tokens used")
-    }
-
-    private func jumpToBottomButton(action: @escaping () -> Void) -> some View {
+    func jumpToBottomButton(action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: "arrow.down")
                 .font(.body.weight(.bold))
@@ -415,11 +277,11 @@ private extension ChatView {
         .accessibilityLabel("Jump to latest message")
     }
 
-    private var canSend: Bool {
+    var canSend: Bool {
         !viewModel.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !viewModel.pendingImages.isEmpty
     }
 
-    private func scrollToBottom(_ proxy: ScrollViewProxy) {
+    func scrollToBottom(_ proxy: ScrollViewProxy) {
         let scroll = {
             if viewModel.isStreaming {
                 proxy.scrollTo(viewModel.streamingText.isEmpty ? "thinking" : "streaming", anchor: .bottom)
@@ -432,7 +294,7 @@ private extension ChatView {
     }
 
     // BATCH-04: debounced scroll — at most one animated scroll per 250ms, coalesces bursts
-    private func throttledScrollToBottom(_ proxy: ScrollViewProxy) {
+    func throttledScrollToBottom(_ proxy: ScrollViewProxy) {
         let now = Date()
         if now.timeIntervalSince(lastScrollTime) > 0.25 {
             scrollToBottom(proxy)
@@ -448,16 +310,42 @@ private extension ChatView {
         }
     }
 
-    private func refreshPasteboardState() { canPasteImage = UIPasteboard.general.hasImages }
+    func refreshPasteboardState() { canPasteImage = UIPasteboard.general.hasImages }
+
+    // MARK: Routes
+
+    /// Shell route hook when provided (AppShellView); falls back to the legacy
+    /// redirect flag so previews and tests keep working bare.
+    func navigateToRoute(_ route: ShellRoute) {
+        if let onNavigateToRoute {
+            onNavigateToRoute(route)
+        } else if route == .models {
+            viewModel.needsModelRedirect = true
+        }
+    }
+
+    // MARK: Toolbar
 
     @ToolbarContentBuilder
-    private var chatToolbar: some ToolbarContent {
-        ToolbarItem(placement: .principal) {
-            VStack(spacing: 1) {
-                Text("ZiroEdge").font(.headline)
-                Text(viewModel.selectedModel?.displayName ?? "Private on-device chat")
-                    .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+    var chatToolbar: some ToolbarContent {
+        if showsSidebarToggle, let onOpenSidebar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button(action: onOpenSidebar) {
+                    Image(systemName: "line.3.horizontal")
+                }
+                .accessibilityLabel("Conversations")
+                .accessibilityIdentifier("sidebar-button")
             }
+        }
+        ToolbarItem(placement: .principal) {
+            ChatHeaderPill(
+                phase: viewModel.modelLoadPhase,
+                modelName: viewModel.selectedModel?.displayName,
+                availableModels: viewModel.availableModels,
+                onSelectModel: { model in Task { await viewModel.selectModel(model) } },
+                onBrowseModels: { navigateToRoute(.models) },
+                onRetryLoad: { viewModel.retryModelLoad() }
+            )
         }
         ToolbarItem(placement: .secondaryAction) {
             Button {
@@ -471,7 +359,9 @@ private extension ChatView {
         }
     }
 
-    private var recoveryActions: some View {
+    // MARK: Recovery Actions
+
+    var recoveryActions: some View {
         HStack(spacing: ZiroTheme.Spacing.medium) {
             Button("Retry Save") { Task { await viewModel.retryPersistenceRecovery() } }
             Button("Export") { Task { await viewModel.exportPersistenceRecovery() } }
@@ -480,7 +370,7 @@ private extension ChatView {
         }
     }
 
-    private var recoveryActionsVertical: some View {
+    var recoveryActionsVertical: some View {
         VStack(alignment: .leading, spacing: ZiroTheme.Spacing.small) {
             Button("Retry Save") { Task { await viewModel.retryPersistenceRecovery() } }
             Button("Export") { Task { await viewModel.exportPersistenceRecovery() } }
@@ -490,95 +380,19 @@ private extension ChatView {
     }
 }
 
-private struct ConversationSystemPromptEditor: View {
-    @Binding var prompt: String
-    let defaultPrompt: String
-    let onSave: () async -> Void
-    let onUseDefault: () async -> Void
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    TextEditor(text: $prompt)
-                        .frame(minHeight: 180)
-                        .accessibilityLabel("Conversation instructions")
-                } header: {
-                    Text("Instructions for this conversation")
-                } footer: {
-                    Text("These instructions are sent only to the on-device model.")
-                }
-
-                if !defaultPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Section("Default Instructions") {
-                        Text(defaultPrompt)
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                        Button("Use Default") { Task { await onUseDefault() } }
-                    }
-                }
-            }
-            .navigationTitle("Conversation Instructions")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { Task { await onSave() } }
-                }
-            }
-        }
-    }
-}
-
-struct ThinkingIndicator: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        Group {
-            if reduceMotion {
-                thinkingRow(text: "Thinking…")
-            } else {
-                TimelineView(.periodic(from: .now, by: 0.5)) { context in
-                    let dots = (Int(context.date.timeIntervalSinceReferenceDate * 2) % 3) + 1
-                    thinkingRow(text: "Thinking" + String(repeating: ".", count: dots))
-                }
-            }
-        }
-        .accessibilityLabel("Model is thinking")
-    }
-
-    private func thinkingRow(text: String) -> some View {
-        HStack {
-            Text(text)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .frame(width: 96, alignment: .leading)
-                .padding(.horizontal, ZiroTheme.Spacing.large)
-                .padding(.vertical, 10)
-                .background(ZiroTheme.elevatedBackground)
-                .clipShape(RoundedRectangle(cornerRadius: ZiroTheme.Radius.bubble))
-            Spacer()
-        }
-        .padding(.horizontal, ZiroTheme.Spacing.large)
-        .padding(.vertical, ZiroTheme.Spacing.xSmall)
-    }
-}
-
-struct ScrollOffsetKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
-}
-
 #if DEBUG
 #Preview {
     ChatView(viewModel: ChatViewModel(
         persistence: PersistenceController(inMemory: true),
         inferenceService: InferenceService(),
-        sessionActor: ChatSessionActor(inferenceService: InferenceService(), persistence: PersistenceController(inMemory: true)),
-        lifecycleManager: ModelLifecycleManager(inferenceService: InferenceService(), memoryBudgeter: MemoryBudgeter()),
+        sessionActor: ChatSessionActor(
+            inferenceService: InferenceService(),
+            persistence: PersistenceController(inMemory: true)
+        ),
+        lifecycleManager: ModelLifecycleManager(
+            inferenceService: InferenceService(),
+            memoryBudgeter: MemoryBudgeter()
+        ),
         downloadStatusProvider: DownloadManager()
     ))
 }

@@ -15,8 +15,6 @@ class UITestBase: XCTestCase {
         app.launch()
     }
 
-    // MARK: - Screenshot Capture
-
     private static var stepCounters: [String: Int] = [:]
 
     /// Capture a screenshot with auto-numbered filename.
@@ -46,18 +44,30 @@ class UITestBase: XCTestCase {
         return true
     }
 
-    /// Open the Settings sheet via the gear toolbar button. Returns true only
-    /// after the Settings navigation title and a screen-specific row appear.
+    /// Reveal the conversation sidebar (drawer toggle on compact widths;
+    /// verifies the persistent column on regular widths).
     @discardableResult
-    func openSettings(timeout: TimeInterval = 5) -> Bool {
-        let settingsButtons = app.buttons.matching(identifier: "Settings")
-        guard settingsButtons.firstMatch.waitForExistence(timeout: timeout),
-              let settingsButton = settingsButtons.allElementsBoundByIndex
-                .filter(\.isHittable)
-                .max(by: { $0.frame.maxX < $1.frame.maxX }) else {
-            return false
+    func openSidebar(timeout: TimeInterval = 8) -> Bool {
+        let sidebarButton = app.buttons["sidebar-button"].firstMatch
+        if sidebarButton.waitForExistence(timeout: 2) {
+            sidebarButton.tap()
+            return true
         }
-        settingsButton.tap()
+        let conversationsTitle = app.staticTexts["Conversations"].firstMatch
+        return conversationsTitle.waitForExistence(timeout: timeout)
+    }
+
+    /// Open Settings as an in-app page: reveal the sidebar (drawer on iPhone,
+    /// persistent column on iPad), then tap the "Settings" Library row.
+    /// Returns true only after the "Manage Models" link and the
+    /// "Active Model" section header appear.
+    @discardableResult
+    func openSettings(timeout: TimeInterval = 10) -> Bool {
+        guard openSidebar(timeout: timeout) else { return false }
+
+        let settingsRow = app.buttons["Settings"].firstMatch
+        guard settingsRow.waitForExistence(timeout: timeout) else { return false }
+        settingsRow.tap()
 
         let manageModelsButton = app.buttons["Manage Models"].firstMatch
         let manageModelsText = app.staticTexts["Manage Models"].firstMatch
@@ -68,7 +78,7 @@ class UITestBase: XCTestCase {
             && activeModelSection.waitForExistence(timeout: timeout)
     }
 
-    /// Open the Models screen: Settings sheet -> "Manage Models" NavigationLink.
+    /// Open the Models screen: sidebar -> Settings page -> "Manage Models" link.
     /// Returns true only after the Models navigation title and model list appear.
     @discardableResult
     func openModels(timeout: TimeInterval = 10) -> Bool {
@@ -88,14 +98,28 @@ class UITestBase: XCTestCase {
         }
 
         let modelsTitle = app.staticTexts["Models"].firstMatch
+        guard modelsTitle.waitForExistence(timeout: timeout) else { return false }
+
+        // The catalog defaults to the Installed scope when a model is already
+        // on the device; curated downloads (including Llama 3.2 3B) live
+        // under the Available segment.
         let modelCatalogContent = app.staticTexts["Llama 3.2 3B"].firstMatch
-        return modelsTitle.waitForExistence(timeout: timeout)
-            && modelCatalogContent.waitForExistence(timeout: timeout)
+        if modelCatalogContent.waitForExistence(timeout: 3) { return true }
+
+        let availableSegment = app.buttons["Available"].firstMatch
+        if availableSegment.waitForExistence(timeout: 2) {
+            availableSegment.tap()
+        }
+        return modelCatalogContent.waitForExistence(timeout: timeout)
     }
 
     /// Select an existing conversation or create a new one. Returns true only
     /// when ChatView's input exists; tapping a control alone is not navigation
     /// evidence (for example, a model redirect may appear instead).
+    ///
+    /// Since the shell overhaul the app launches directly into a chat surface,
+    /// so the input check usually succeeds immediately. New Conversation lives
+    /// in the sidebar; S2 made it an unsaved draft chat.
     @discardableResult
     func selectOrCreateConversation(timeout: TimeInterval = 8) -> Bool {
         let chatInput = app.textFields["chatInput"].firstMatch
@@ -130,15 +154,15 @@ class UITestBase: XCTestCase {
         return false
     }
 
-    /// Select a model from the model picker menu in the chat input bar.
-    /// Assumes we're already in a ChatView. Taps the picker, selects the
-    /// first available model, waits for it to load.
+    /// Select a model from the header pill menu (taps picker, picks the first
+    /// available model, waits for it to load).
     @discardableResult
     func selectModelFromPicker(timeout: TimeInterval = 30) -> Bool {
         // `firstMatch` is never nil. Test each candidate's existence instead
         // of using a dead nil-coalescing chain.
         let candidates = [
             app.buttons["No Model"].firstMatch,
+            app.buttons["No model yet"].firstMatch,
             app.buttons.containing(NSPredicate(format: "label CONTAINS 'Gemma'")).firstMatch,
             app.buttons.containing(NSPredicate(format: "label CONTAINS[c] 'model'")).firstMatch,
         ]
@@ -153,12 +177,11 @@ class UITestBase: XCTestCase {
         let firstModel = app.buttons.containing(NSPredicate(format: "label CONTAINS 'Gemma'")).firstMatch
         if firstModel.waitForExistence(timeout: 3) {
             firstModel.tap()
-            // Wait for model to load — picker label should change from "No Model"
-            // to the model name, and the ProgressView should disappear.
+            // Wait for model to load — picker label should change from a
+            // placeholder to the model name, and the loading indicator go away.
             let start = Date()
             while Date().timeIntervalSince(start) < timeout {
-                let noModel = app.buttons["No Model"].firstMatch
-                if !noModel.exists { return true }
+                if !hasNoModelIndicator() { return true }
                 sleep(2)
             }
         }
@@ -222,9 +245,8 @@ class UITestBase: XCTestCase {
         }
     }
 
-    /// Wait for a response to appear (message count increases).
-    /// Snapshots the baseline text count first, then waits for it to increase
-    /// by at least 2 (user message bubble + assistant response bubble).
+    /// Wait for a response: baseline text count must grow by at least 2
+    /// (user bubble + assistant bubble).
     func waitForResponse(timeout: TimeInterval = 30) -> Bool {
         let baseline = app.scrollViews.otherElements.staticTexts.count
         let start = Date()
@@ -238,24 +260,29 @@ class UITestBase: XCTestCase {
 
     // MARK: - Model Helpers
 
-    /// Wait for a production model to be loaded and ready in the picker.
-    /// The model picker label must show a model name (not "No Model") and
-    /// any loading ProgressView must have disappeared.
+    /// Wait for the chat header pill to show a loaded model (no placeholder).
     func waitForModelLoaded(timeout: TimeInterval = 30) -> Bool {
         let start = Date()
         while Date().timeIntervalSince(start) < timeout {
-            // Once "No Model" is gone, a model is loaded
-            let noModel = app.buttons["No Model"].firstMatch
-            if !noModel.exists {
-                // Double-check: the picker should show an actual model name
+            if !hasNoModelIndicator() {
+                // Double-check: the pill should show an actual model name
                 let pickerLabel = readModelPickerLabel()
-                if let label = pickerLabel, label != "No Model", !label.isEmpty {
+                if let label = pickerLabel, !isPlaceholderLabel(label) {
                     return true
                 }
             }
             sleep(2)
         }
         return false
+    }
+
+    /// Placeholder pill states: legacy "No Model" and S2's "No model yet".
+    private func hasNoModelIndicator() -> Bool {
+        app.buttons["No Model"].firstMatch.exists || app.buttons["No model yet"].firstMatch.exists
+    }
+
+    private func isPlaceholderLabel(_ label: String) -> Bool {
+        label == "No Model" || label == "No model yet" || label.isEmpty
     }
 
     /// Verify that a specific screen is visible by checking for a
@@ -344,9 +371,20 @@ class UITestBase: XCTestCase {
         return texts.last
     }
 
-    /// Read the model picker label to see what model is selected.
+    /// Read the chat header pill title to see what model is selected.
+    /// Strategy: parse the "Chat model, <name>" accessibility label first
+    /// (authoritative for every pill state), then fall back to family-name scans.
     func readModelPickerLabel() -> String? {
-        if app.buttons["No Model"].firstMatch.exists { return "No Model" }
+        if hasNoModelIndicator() { return "No Model" }
+        let pill = app.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH[c] 'Chat model,'")
+        ).firstMatch
+        if pill.exists {
+            let tail = pill.label
+                .replacingOccurrences(of: "Chat model,", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !tail.isEmpty { return tail }
+        }
         for label in ["Gemma", "Llama", "Mistral", "Phi", "Qwen"] {
             let btn = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", label)).firstMatch
             if btn.exists { return btn.label }

@@ -8,6 +8,15 @@ import Foundation
 import SwiftUI
 import os
 
+/// One relative-time bucket of sidebar conversations (Today / Yesterday /
+/// Previous 7 Days / Earlier). `title` is nil for the open-ended earlier
+/// bucket so it renders without a header.
+struct ConversationGroup: Identifiable {
+    let id: String
+    let title: String?
+    let items: [ConversationPayload]
+}
+
 @MainActor
 final class ConversationListViewModel: ObservableObject {
 
@@ -99,6 +108,47 @@ final class ConversationListViewModel: ObservableObject {
     /// Select a conversation.
     func selectConversation(_ id: UUID) {
         selectedConversationID = id
+    }
+
+    // MARK: - Grouping
+
+    /// Maximum conversation rows rendered in the sidebar regardless of history size.
+    static let groupedRowLimit = 50
+
+    /// Bucket conversations into relative-time sections ordered newest first:
+    /// Today → Yesterday → Previous 7 Days → Earlier. Empty buckets are omitted.
+    func groupedConversations(now: Date = Date()) -> [ConversationGroup] {
+        let calendar = Calendar.current
+        let sevenDaysAgo = calendar.date(byAdding: .day, value: -7, to: now) ?? now
+
+        var buckets: [(key: String, title: String?, items: [ConversationPayload])] = [
+            ("today", "Today", []),
+            ("yesterday", "Yesterday", []),
+            ("previous-7-days", "Previous 7 Days", []),
+            ("earlier", nil, [])
+        ]
+        let slotByKey = ["today": 0, "yesterday": 1, "previous-7-days": 2, "earlier": 3]
+
+        // Persistence delivers rows newest-first; cap how far back we render.
+        for conversation in conversations.prefix(Self.groupedRowLimit) {
+            let date = conversation.updatedAt ?? conversation.createdAt ?? now
+            let slot: Int
+            if calendar.isDateInToday(date) {
+                slot = 0
+            } else if calendar.isDateInYesterday(date) {
+                slot = 1
+            } else if date >= sevenDaysAgo {
+                slot = 2
+            } else {
+                slot = 3
+            }
+            buckets[slot].items.append(conversation)
+        }
+
+        return buckets.compactMap { bucket in
+            guard !bucket.items.isEmpty else { return nil }
+            return ConversationGroup(id: bucket.key, title: bucket.title, items: bucket.items)
+        }
     }
 
     // MARK: - Helpers

@@ -3,10 +3,9 @@
 //
 // ViewModel for the main chat interface. Bridges ChatSessionActor with SwiftUI.
 
+import Combine
 import Foundation
-import ImageIO
 import SwiftUI
-import UniformTypeIdentifiers
 import os
 
 /// Protocol for checking model download status. Enables testability.
@@ -15,6 +14,23 @@ protocol ModelDownloadStatusProvider: AnyObject {
 }
 
 extension DownloadManager: @preconcurrency ModelDownloadStatusProvider {}
+
+/// User-facing residency state of the chat's selected model.
+/// A pure projection of `ModelLifecycleManager` state (see `refreshModelLoadPhase`).
+enum ModelLoadPhase: Equatable {
+    /// Decided nothing yet — the brief window before the deferred load begins.
+    case idle
+    /// No downloaded candidate exists at all; CTA pushes the models catalog.
+    case needsDownload
+    /// Lifecycle `.loading`, or switching between models.
+    case loading
+    /// The selected model is resident and accepting work.
+    case ready
+    /// Evicted / memory-pressure unload; may be retried automatically on appear.
+    case evicted
+    /// Last load failure with its user-visible message.
+    case failed(String)
+}
 
 @MainActor
 final class ChatViewModel: ObservableObject {
@@ -34,6 +50,15 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var hasPersistenceRecovery = false
     @Published private(set) var recoveryExportURL: URL?
     @Published private(set) var unavailableConversationModelID: String?
+
+    /// Observable projection of the model residency bridging ModelLifecycleManager:
+    /// drives the chat header pill and composer gating. Written only by the
+    /// loading extensions in ChatModelLoading.swift and selection mutations.
+    @Published var modelLoadPhase: ModelLoadPhase = .idle
+
+    /// True while the visible surface is an unsaved chat. Drafts exist purely
+    /// in memory — no persistence row until first send (`materializeDraftForSend`).
+    @Published private(set) var isDraftConversation: Bool
 
     // MARK: - Chat UX State
 
@@ -82,12 +107,18 @@ final class ChatViewModel: ObservableObject {
     @Published var showingExperimentalConsent = false
     @Published private(set) var pendingExperimentalModel: AIModel?
 
+    /// In-flight asynchronous autoload started from ChatView appearing. Owned
+    /// by the loading extensions in ChatModelLoading.swift.
+    var deferredLoadTask: Task<Void, Never>?
+    private var cancellables = Set<AnyCancellable>()
+
     // MARK: - Dependencies
 
     private let persistence: any PersistenceProviding
     private let inferenceService: any InferenceServiceProtocol
     private let sessionActor: ChatSessionActor
-    private let lifecycleManager: ModelLifecycleManager
+    /// Read-shared with the deferred-load extensions in ChatModelLoading.swift.
+    let lifecycleManager: ModelLifecycleManager
     private let downloadStatusProvider: any ModelDownloadStatusProvider
     private let modelProvider: () -> [AIModel]
     private let titleGenerator: TitleGenerator
@@ -132,11 +163,20 @@ final class ChatViewModel: ObservableObject {
         self.downloadStatusProvider = downloadStatusProvider
         self.modelProvider = modelProvider
         self.titleGenerator = titleGenerator ?? TitleGenerator(inferenceService: inferenceService)
+        // The visible chat surface always starts as an untitled draft; opening
+        // a persisted conversation clears the flag again.
+        self.isDraftConversation = true
+
+        // Keep the load-phase projection live without polling: every publish
+        // from the lifecycle manager re-derives the observable phase.
+        lifecycleManager.objectWillChange
+            .sink { [weak self] _ in
+                Task { @MainActor [weak self] in self?.refreshModelLoadPhase() }
+            }
+            .store(in: &cancellables)
     }
 
     // MARK: - Conversation Management
-
-    // MARK: - Model Selection
 
     /// All models that are fully downloaded and available for use.
     var availableModels: [AIModel] {
@@ -165,32 +205,42 @@ final class ChatViewModel: ObservableObject {
 
     /// Auto-select a model for a new conversation. Uses the fallback chain:
     /// last used model → first available → redirect to models page.
+    /// Reimplemented atop `preferredAutoLoadCandidate()`; behavior (and the
+    /// `needsModelRedirect` contract relied on by unit tests) is unchanged.
     func autoSelectModel() {
-        let downloaded = availableModels
-
-        guard !downloaded.isEmpty else {
+        guard let candidate = preferredAutoLoadCandidate() else {
             selectedModel = nil
             needsModelRedirect = true
             return
         }
-
+        selectedModel = candidate
         needsModelRedirect = false
+        refreshModelLoadPhase()
+    }
 
-        // Try last used model.
+    /// The best available model for the untitled draft chat's deferred load:
+    /// last used model, then the first fully downloaded model.
+    /// Hermetic test runtimes only ever satisfy llama32_3B paths downstream,
+    /// so they are pinned to that profile. Controlled-workload diagnostics
+    /// route through `lifecycleManager.autoLoadFirstModel()` instead and never
+    /// consult this method.
+    func preferredAutoLoadCandidate() -> AIModel? {
+        let downloaded = availableModels
+        if HermeticUITestRuntime.isEnabled {
+            return downloaded.first { $0.id == ModelRegistry.llama32_3B.id }
+        }
         if let lastID = UserDefaults.standard.string(forKey: DefaultsKeys.lastUsedModelID),
            let lastModel = downloaded.first(where: { $0.id == lastID }) {
-            selectedModel = lastModel
-            return
+            return lastModel
         }
-
-        // Fallback: first available model.
-        selectedModel = downloaded.first
+        return downloaded.first
     }
 
     /// Select a model and persist the choice. Loads it if not already loaded.
     /// Returns false when selection is waiting for explicit first-use consent.
     @discardableResult
     func selectModel(_ model: AIModel) async -> Bool {
+        defer { refreshModelLoadPhase() }
         guard model.runtimeEligibility != .experimental
                 || ExperimentalModelConsent.isGranted(for: model) else {
             pendingExperimentalModel = model
@@ -232,6 +282,54 @@ final class ChatViewModel: ObservableObject {
         showingExperimentalConsent = false
     }
 
+    // MARK: - Draft Conversation
+
+    /// Reset the surface to an unsaved, untitled chat. Cheap and synchronous:
+    /// no persistence row exists until first send. Nominates a display
+    /// candidate for the header pill when nothing is chosen yet.
+    func beginNewDraft() {
+        clearActiveConversation()
+        isDraftConversation = true
+        conversationListViewModel?.selectedConversationID = nil
+        if selectedModel == nil, let candidate = preferredAutoLoadCandidate() {
+            selectedModel = candidate
+        }
+        refreshModelLoadPhase()
+        startDeferredModelLoadIfNeeded()
+    }
+
+    /// Create the persistence row backing an in-memory draft at first send.
+    /// Mirrors the failure mapping of `startNewConversation(model:)` exactly.
+    private func materializeDraftForSend() async -> UUID? {
+        guard let model = selectedModel else {
+            needsModelRedirect = true
+            return nil
+        }
+        let defaultPrompt = UserDefaults.standard.string(forKey: DefaultsKeys.defaultSystemPrompt)
+        let result = await persistence.createConversationResult(
+            id: UUID(),
+            title: "New Conversation",
+            modelID: model.id,
+            systemPrompt: defaultPrompt?.nilIfBlank
+        )
+        guard case .success(let id) = result else {
+            if case .failure(let error) = result {
+                errorMessage = "Could not start the conversation. \(error.localizedDescription)"
+                showError = true
+                isStartupError = true
+            }
+            return nil
+        }
+        // Commit identity before returning so streaming/persistence callbacks
+        // attach to this conversation even if the caller suspends immediately.
+        isDraftConversation = false
+        activeConversationID = id
+        activeConversationSystemPrompt = defaultPrompt?.nilIfBlank
+        await conversationListViewModel?.loadConversations()
+        conversationListViewModel?.selectedConversationID = id
+        return id
+    }
+
     func loadConversation(_ conversationID: UUID) async {
         // Switching conversations must not leave a live generation writing into
         // the wrong transcript or yanking navigation back on completion.
@@ -253,13 +351,8 @@ final class ChatViewModel: ObservableObject {
               case .success(let conversations) = conversationResult,
               let conversation = conversations.first(where: { $0.id == conversationID }) else {
             isLoadingConversation = false
-            if case .failure(let failure) = messageResult {
-                errorMessage = failure.localizedDescription
-            } else if case .failure(let failure) = conversationResult {
-                errorMessage = failure.localizedDescription
-            } else {
-                errorMessage = "The selected conversation is no longer available."
-            }
+            errorMessage = [resultFailureText(messageResult), resultFailureText(conversationResult)]
+                .compactMap { $0 }.first ?? "The selected conversation is no longer available."
             showError = true
             conversationListViewModel?.selectedConversationID = previousConversationID
             return
@@ -268,12 +361,10 @@ final class ChatViewModel: ObservableObject {
         // Commit identity and content together so a failed fetch can never pair the
         // previous transcript with the newly selected conversation.
         activeConversationID = conversationID
+        isDraftConversation = false
         messages = fetched
         activeConversationSystemPrompt = conversation.systemPrompt
-        tokenCount = min(
-            contextWindowSize,
-            fetched.reduce(0) { $0 + max(1, $1.content.count / 4) }
-        )
+        tokenCount = min(contextWindowSize, fetched.reduce(0) { $0 + max(1, $1.content.count / 4) })
         truncationWarning = nil
         errorMessage = nil
 
@@ -293,13 +384,19 @@ final class ChatViewModel: ObservableObject {
         }
         guard loadGeneration == myGeneration else { return }
         isLoadingConversation = false
+        refreshModelLoadPhase()
+    }
+
+    /// First failure message from a `Result`, for surfacing load errors to the user.
+    private func resultFailureText<T, E: Error>(_ result: Result<T, E>) -> String? {
+        guard case .failure(let error) = result else { return nil }
+        return error.localizedDescription
     }
 
     /// Clear transient transcript state when the selected conversation disappears.
     func clearActiveConversation() {
-        // Detach any live generation before wiping state so stale token and
-        // completion callbacks cannot write into cleared buffers; the actor
-        // cancel finishes asynchronously without touching UI identity here.
+        // Detach any live generation before wiping state so stale callbacks cannot
+        // write into cleared buffers; actor cancel finishes asynchronously.
         let wasStreaming = isStreaming
         activeGenerationID = nil
         streamedConversationID = nil
@@ -315,6 +412,7 @@ final class ChatViewModel: ObservableObject {
         truncationWarning = nil
         activeConversationSystemPrompt = nil
         unavailableConversationModelID = nil
+        refreshModelLoadPhase()
         if wasStreaming {
             Task { await self.cancelStream() }
         }
@@ -323,6 +421,13 @@ final class ChatViewModel: ObservableObject {
     /// Single-flight startup covering model readiness, persistence creation,
     /// and transcript loading. Loading feedback is published before the first await.
     func startNewConversation(model: AIModel) async -> UUID? {
+        func failStartup(_ model: AIModel) -> UUID? {
+            errorMessage = "\(model.displayName) could not be loaded. Repair it or choose another model, then retry."
+            showError = true
+            isStartupError = true
+            return nil
+        }
+
         guard !isStartingConversation else { return nil }
         isStartingConversation = true
         isLoadingConversation = true
@@ -331,21 +436,14 @@ final class ChatViewModel: ObservableObject {
         defer {
             isStartingConversation = false
             if activeConversationID == nil { isLoadingConversation = false }
+            refreshModelLoadPhase()
         }
 
         guard await selectModel(model) else {
             if showingExperimentalConsent { return nil }
-            errorMessage = "\(model.displayName) could not be loaded. Repair it or choose another model, then retry."
-            showError = true
-            isStartupError = true
-            return nil
+            return failStartup(model)
         }
-        guard lifecycleManager.activeModel?.id == model.id else {
-            errorMessage = "\(model.displayName) could not be loaded. Repair it or choose another model, then retry."
-            showError = true
-            isStartupError = true
-            return nil
-        }
+        guard lifecycleManager.activeModel?.id == model.id else { return failStartup(model) }
 
         let defaultPrompt = UserDefaults.standard.string(forKey: DefaultsKeys.defaultSystemPrompt)
         let result = await persistence.createConversationResult(
@@ -372,7 +470,9 @@ final class ChatViewModel: ObservableObject {
         isStartupError = false
         showError = false
         errorMessage = nil
-        return await createNewConversation()
+        let id = await createNewConversation()
+        refreshModelLoadPhase()
+        return id
     }
 
     func createNewConversation(modelID: String? = nil) async -> UUID? {
@@ -411,9 +511,8 @@ extension ChatViewModel {
             visionWarning = "Vision not supported with text-only model. Switch to a vision model."
             return nil
         }
-        guard let conversationID = activeConversationID else {
-            errorMessage = "No active conversation."; showError = true; return nil
-        }
+        // Belt-and-braces residency gate: the composer stays disabled until
+        // modelLoadPhase == .ready, so manual sends always pass this.
         if lifecycleManager.activeModel?.id != selectedModel.id {
             let selected = await selectModel(selectedModel)
             if !selected, showingExperimentalConsent { return nil }
@@ -422,6 +521,15 @@ extension ChatViewModel {
             errorMessage = "\(selectedModel.displayName) could not be loaded. Choose another downloaded model."
             showError = true
             return nil
+        }
+
+        // Untitled drafts materialize their persistence row just-in-time — only
+        // after the model is confirmed resident.
+        guard let conversationID = activeConversationID else {
+            guard isDraftConversation else {
+                errorMessage = "No active conversation."; showError = true; return nil
+            }
+            return await materializeDraftForSend()
         }
         return conversationID
     }
@@ -434,10 +542,10 @@ extension ChatViewModel {
             text: text, hasImages: hasImages
         ) else { return }
 
-        // Snapshot and atomically drop only the prefix that is being sent.
-        // This makes the window between snapshot and the first await safe: any
-        // addImage that runs while we are suspended will append after the
-        // removed prefix and therefore survive the post-streaming cleanup.
+        // Snapshot and atomically drop only the prefix being sent, making the
+        // suspend-window between snapshot and first await safe: any addImage
+        // running while suspended appends after the removed prefix and survives
+        // post-streaming cleanup.
         let imagesToSend = pendingImages
         let snapshotCount = imagesToSend.count
         if snapshotCount > 0 {
@@ -459,8 +567,7 @@ extension ChatViewModel {
         if case .failure(let error) = insertResult {
             inputText = text
             if snapshotCount > 0 {
-                // Restore the snapshot in front of any interleaved adds
-                // that arrived during the insert await.
+                // Restore snapshot ahead of any interleaved adds from insert await.
                 pendingImages.insert(contentsOf: imagesToSend, at: 0)
             }
             errorMessage = error.localizedDescription
@@ -488,13 +595,22 @@ extension ChatViewModel {
             hasImages: hasImagesToSend, isFirstExchange: isFirstExchange,
             firstUserMessage: firstUserMessage
         )
-        // Snapshot was already removed before the first await. Do not use
-        // removeAll which would wipe interleaved adds that arrived during
-        // either await window. Keep any pending images that appeared after
-        // the snapshot and just clear the transient warning.
+        // Snapshot was already removed before the first await. Do not use removeAll:
+        // it would wipe interleaved adds that arrived during either await window;
+        // keep any pending images that appeared after the snapshot.
         if snapshotCount > 0 {
             visionWarning = nil
         }
+    }
+
+    /// Shared completion/reset of a generation slot; both success and error
+    /// closures funnel through this.
+    private func finishGeneration(_ generationID: UUID) {
+        streamingFlushTask?.cancel()
+        flushStreamingChunks()
+        activeGenerationID = nil
+        isStreaming = false
+        streamedConversationID = nil
     }
 
     private func startStreaming(
@@ -511,11 +627,7 @@ extension ChatViewModel {
         let onComplete: @Sendable () -> Void = { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self, self.activeGenerationID == generationID else { return }
-                self.streamingFlushTask?.cancel()
-                self.flushStreamingChunks()
-                self.activeGenerationID = nil
-                self.isStreaming = false
-                self.streamedConversationID = nil
+                self.finishGeneration(generationID)
                 let trimmed = self.streamingText.trimmingCharacters(in: .newlines)
                 if !trimmed.isEmpty {
                     self.messages.append(ChatMessagePayload(role: .assistant, content: trimmed))
@@ -533,11 +645,7 @@ extension ChatViewModel {
         let onError: @Sendable (Error) -> Void = { [weak self] error in
             Task { @MainActor [weak self] in
                 guard let self, self.activeGenerationID == generationID else { return }
-                self.streamingFlushTask?.cancel()
-                self.flushStreamingChunks()
-                self.activeGenerationID = nil
-                self.isStreaming = false
-                self.streamedConversationID = nil
+                self.finishGeneration(generationID)
                 self.hasPersistenceRecovery = await self.sessionActor.recoveryHandle != nil
                 if !self.hasPersistenceRecovery {
                     self.streamingText = ""
@@ -788,7 +896,6 @@ extension ChatViewModel {
         lastStreamingFlushMs = currentTimeMs()
         streamedCharacterCount = 0
     }
-
 }
 
 private extension String {
@@ -798,149 +905,3 @@ private extension String {
     }
 }
 
-extension ChatViewModel {
-    // MARK: - Image Attachment
-
-    /// Maximum image dimension (width or height) in pixels.
-    nonisolated static let maxImageDimension: CGFloat = 1024
-    /// Maximum raw image data size before forced downsample (10 MB).
-    private nonisolated static let maxImageBytes = 10 * 1024 * 1024
-
-    /// Outcome of attachment preprocessing (legacy validation semantics).
-    enum AttachmentPreparation: Equatable {
-        /// Final bytes to attach (downsampled JPEG or pass-through original).
-        case ready(Data)
-        /// Oversize payload that could not be read as an image.
-        case unreadable
-        /// Oversize payload that was readable but could not be re-encoded.
-        case downsampleFailed
-        /// Small payload over the pixel budget whose re-encode failed; dropped silently.
-        case dropped
-    }
-
-    /// Result of running the attachment pipeline, including the executor it ran on.
-    struct AttachmentPipelineOutput {
-        let preparation: AttachmentPreparation
-        /// True iff preprocessing executed on the main thread. Must always be false;
-        /// exposed for tests and diagnostics.
-        let ranOnMainThread: Bool
-    }
-
-    /// Add an image to the pending attachments. Validates size and downsamples if needed.
-    /// Decoding/downsampling runs off the main actor via ImageIO, so multi-megabyte
-    /// photos never freeze the UI.
-    func addImage(_ data: Data) async {
-        let output = await Self.prepareAttachment(data)
-        switch output.preparation {
-        case .ready(let bytes):
-            pendingImages.append(bytes)
-            visionWarning = nil
-        case .unreadable:
-            visionWarning = "Could not read image data."
-        case .downsampleFailed:
-            visionWarning = "Image is too large and could not be resized."
-        case .dropped:
-            break // Legacy behavior: silently drop.
-        }
-    }
-
-    /// Decode, validate, and downsample attachment data using ImageIO.
-    ///
-    /// Nonisolated async functions execute on the cooperative thread pool, never on
-    /// the main thread, so full-resolution bitmaps are never materialized for the UI.
-    nonisolated static func prepareAttachment(_ data: Data) async -> AttachmentPipelineOutput {
-        let startedOnMainThread = isExecutingOnMainThread
-
-        // Read pixel bounds without decoding the bitmap.
-        let dimensions = Self.pixelDimensions(of: data)
-        let exceedsPixelBudget = dimensions.map {
-            $0.width > Int(Self.maxImageDimension) || $0.height > Int(Self.maxImageDimension)
-        } ?? false
-
-        let preparation: AttachmentPreparation
-        if !exceedsPixelBudget && data.count <= Self.maxImageBytes {
-            // Small enough already: attach as-is (matches legacy pass-through,
-            // including undecodable payloads, which report no dimensions).
-            preparation = .ready(data)
-        } else if let cgImage = Self.downsampledCGImage(from: data, maxPixelSize: Int(Self.maxImageDimension)),
-                  let jpeg = Self.jpegData(from: cgImage, quality: 0.8) {
-            preparation = .ready(jpeg)
-        } else if data.count > Self.maxImageBytes {
-            preparation = dimensions == nil ? .unreadable : .downsampleFailed
-        } else {
-            preparation = .dropped
-        }
-
-        return AttachmentPipelineOutput(preparation: preparation, ranOnMainThread: startedOnMainThread)
-    }
-
-    /// Synchronous accessor avoids the async-context availability warning on
-    /// `Thread.isMainThread` while still reporting the actually-executing thread.
-    private nonisolated static var isExecutingOnMainThread: Bool { Thread.isMainThread }
-
-    /// Create a thumbnail bounded by `maxPixelSize` on the long edge, preserving
-    /// aspect ratio and baking in EXIF orientation. Returns nil when undecodable.
-    private nonisolated static func downsampledCGImage(from data: Data, maxPixelSize: Int) -> CGImage? {
-        let options: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceShouldCacheImmediately: true,
-        ]
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
-        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
-    }
-
-    /// Read pixel width/height from image metadata without decoding the bitmap.
-    private nonisolated static func pixelDimensions(of data: Data) -> (width: Int, height: Int)? {
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
-              let width = properties[kCGImagePropertyPixelWidth] as? Int,
-              let height = properties[kCGImagePropertyPixelHeight] as? Int else { return nil }
-        return (width, height)
-    }
-
-    /// Encode a CGImage as JPEG entirely in CoreGraphics (no UIKit round-trip).
-    private nonisolated static func jpegData(from image: CGImage, quality: Double) -> Data? {
-        let output = NSMutableData()
-        guard let destination = CGImageDestinationCreateWithData(
-            output, UTType.jpeg.identifier as CFString, 1, nil
-        ) else { return nil }
-        CGImageDestinationAddImage(
-            destination, image,
-            [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary
-        )
-        guard CGImageDestinationFinalize(destination) else { return nil }
-        return output as Data
-    }
-
-    /// Remove an image at the specified index.
-    func removeImage(at index: Int) {
-        guard pendingImages.indices.contains(index) else { return }
-        pendingImages.remove(at: index)
-    }
-
-    /// Clear all pending images.
-    func clearImages() {
-        pendingImages.removeAll()
-        visionWarning = nil
-    }
-
-    /// Attempt to paste an image from the clipboard.
-    /// Returns true if an image was found and added.
-    @discardableResult
-    func pasteImage() async -> Bool {
-        guard UIPasteboard.general.hasImages,
-              let image = UIPasteboard.general.image,
-              let data = image.pngData() else {
-            return false
-        }
-        await addImage(data)
-        return true
-    }
-
-    /// Whether the currently selected model supports vision.
-    var isVisionModel: Bool {
-        selectedModel?.modelType == .vision
-    }
-}

@@ -1,15 +1,20 @@
 // SidebarView.swift
 // ZiroEdge — Privacy-first local AI assistant
 //
-// Conversation list sidebar. Create, select, rename, delete conversations.
-// Split view on iPad/macOS, NavigationStack on iPhone.
+// Conversation list sidebar. Create, select, rename, delete conversations,
+// and reach the app's secondary destinations (Models, Settings). Rendered
+// inside the split-view sidebar column on regular widths and inside the
+// drawer sheet on compact widths.
 
 import SwiftUI
 
 struct SidebarView: View {
     @ObservedObject var viewModel: ConversationListViewModel
-    let onNewConversation: () -> Void
-    let onSelectConversation: (UUID) -> Void
+    var onNewConversation: () -> Void = {}
+    var onSelectConversation: (UUID) -> Void = { _ in }
+    /// Library row tap (Models / Settings). The shell dismisses the drawer
+    /// (compact) and pushes the destination onto the shared detail stack.
+    var onOpenRoute: (ShellRoute) -> Void = { _ in }
 
     @State private var conversationToRename: ConversationPayload?
     @State private var renameText: String = ""
@@ -35,52 +40,18 @@ struct SidebarView: View {
                 }
             }
 
-            Section("Recent") {
-                if viewModel.isLoading && viewModel.conversations.isEmpty {
-                    ForEach(0..<4, id: \.self) { _ in
-                        ConversationRow.placeholder
-                            .redacted(reason: .placeholder)
-                            .accessibilityHidden(true)
-                    }
-                } else if viewModel.conversations.isEmpty {
-                    ContentUnavailableView(
-                        "No Conversations",
-                        systemImage: "bubble.left.and.bubble.right",
-                        description: Text("Create a conversation to get started.")
-                    )
-                    .listRowBackground(Color.clear)
+            conversationSections
+
+            Section("Library") {
+                Button {
+                    onOpenRoute(.models)
+                } label: {
+                    Label("Models", systemImage: "arrow.down.circle")
                 }
-
-                ForEach(viewModel.conversations) { conversation in
-                    ConversationRow(conversation: conversation)
-                        .tag(conversation.id)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            onSelectConversation(conversation.id)
-                        }
-                        .contextMenu {
-                            Button(action: {
-                                conversationToRename = conversation
-                                renameText = conversation.title
-                            }) {
-                                Label("Rename", systemImage: "pencil")
-                            }
-
-                            Button(role: .destructive, action: {
-                                conversationToDelete = conversation
-                                showDeleteConfirmation = true
-                            }) {
-                                Label("Delete", systemImage: "trash")
-                            }
-                        }
-                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                            Button(role: .destructive) {
-                                conversationToDelete = conversation
-                                showDeleteConfirmation = true
-                            } label: {
-                                Label("Delete", systemImage: "trash")
-                            }
-                        }
+                Button {
+                    onOpenRoute(.settings)
+                } label: {
+                    Label("Settings", systemImage: "gearshape")
                 }
             }
         }
@@ -119,6 +90,74 @@ struct SidebarView: View {
         .task {
             await viewModel.loadConversations()
         }
+    }
+
+    // MARK: - Conversation Sections
+
+    @ViewBuilder
+    private var conversationSections: some View {
+        if viewModel.isLoading && viewModel.conversations.isEmpty {
+            Section {
+                ForEach(0..<4, id: \.self) { _ in
+                    ConversationRow.placeholder
+                        .redacted(reason: .placeholder)
+                        .accessibilityHidden(true)
+                }
+            }
+        } else if viewModel.conversations.isEmpty {
+            Section {
+                ContentUnavailableView(
+                    "No Conversations",
+                    systemImage: "bubble.left.and.bubble.right",
+                    description: Text("Create a conversation to get started.")
+                )
+                .listRowBackground(Color.clear)
+            }
+        } else {
+            ForEach(viewModel.groupedConversations()) { group in
+                Section {
+                    ForEach(group.items) { conversation in
+                        conversationRow(conversation)
+                    }
+                } header: {
+                    if let title = group.title {
+                        Text(title)
+                    }
+                }
+            }
+        }
+    }
+
+    private func conversationRow(_ conversation: ConversationPayload) -> some View {
+        ConversationRow(conversation: conversation)
+            .tag(conversation.id)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                onSelectConversation(conversation.id)
+            }
+            .contextMenu {
+                Button {
+                    conversationToRename = conversation
+                    renameText = conversation.title
+                } label: {
+                    Label("Rename", systemImage: "pencil")
+                }
+
+                Button(role: .destructive) {
+                    conversationToDelete = conversation
+                    showDeleteConfirmation = true
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+            }
+            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                Button(role: .destructive) {
+                    conversationToDelete = conversation
+                    showDeleteConfirmation = true
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+            }
     }
 }
 
@@ -182,9 +221,7 @@ struct ConversationRow: View {
 #Preview {
     NavigationStack {
         SidebarView(
-            viewModel: ConversationListViewModel(persistence: PersistenceController(inMemory: true)),
-            onNewConversation: {},
-            onSelectConversation: { _ in }
+            viewModel: ConversationListViewModel(persistence: PersistenceController(inMemory: true))
         )
     }
 }

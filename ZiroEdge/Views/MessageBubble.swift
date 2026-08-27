@@ -25,16 +25,16 @@ struct MessageBubble: View {
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .top, spacing: ZiroTheme.Spacing.medium) {
             if message.role == .user {
                 Spacer(minLength: ZiroTheme.Spacing.xLarge)
             }
 
-            VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 4) {
+            VStack(alignment: message.role == .user ? .trailing : .leading, spacing: ZiroTheme.Spacing.xSmall) {
                 // Ordered image attachments (including decoded legacy single images).
                 if !message.attachments.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
+                        HStack(spacing: ZiroTheme.Spacing.small) {
                             ForEach(Array(message.attachments.enumerated()), id: \.offset) { _, imageData in
                                 if let uiImage = UIImage(data: imageData) {
                                     Image(uiImage: uiImage)
@@ -47,7 +47,7 @@ struct MessageBubble: View {
                             }
                         }
                     }
-                    .padding(.bottom, 4)
+                    .padding(.bottom, ZiroTheme.Spacing.xSmall)
                 }
 
                 // Message content.
@@ -55,8 +55,8 @@ struct MessageBubble: View {
                     Text(message.content)
                         .font(.body)
                         .foregroundStyle(ZiroTheme.accentForeground)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 10)
+                        .padding(.horizontal, ZiroTheme.Spacing.large)
+                        .padding(.vertical, ZiroTheme.Spacing.medium)
                         .background(Color.accentColor)
                         .clipShape(RoundedRectangle(cornerRadius: ZiroTheme.Radius.bubble))
                         .accessibilityLabel("You said: \(message.content)")
@@ -72,15 +72,15 @@ struct MessageBubble: View {
                                 .accessibilityLabel("Assistant said: \(displayContent)")
                         }
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
+                    .padding(.horizontal, ZiroTheme.Spacing.large)
+                    .padding(.vertical, ZiroTheme.Spacing.medium)
                     .background(ZiroTheme.elevatedBackground)
                     .clipShape(RoundedRectangle(cornerRadius: ZiroTheme.Radius.bubble))
                 }
 
                 // Action buttons (assistant messages only).
                 if message.role == .assistant && !isStreaming {
-                    HStack(spacing: 16) {
+                    HStack(spacing: ZiroTheme.Spacing.medium) {
                         Button(action: { onCopy?() }) {
                             Image(systemName: "doc.on.doc")
                                 .font(.caption)
@@ -95,7 +95,7 @@ struct MessageBubble: View {
                         }
                         .accessibilityLabel("Branch from this message")
                     }
-                    .padding(.horizontal, 4)
+                    .padding(.horizontal, ZiroTheme.Spacing.xSmall)
                 }
             }
 
@@ -132,7 +132,8 @@ private struct StreamingText: View {
                 Text(renderedWithCursor(visible: true))
             } else {
                 TimelineView(.periodic(from: .now, by: 0.6)) { context in
-                    Text(renderedWithCursor(visible: Int(context.date.timeIntervalSinceReferenceDate / 0.6).isMultiple(of: 2)))
+                    let tick = Int(context.date.timeIntervalSinceReferenceDate / 0.6)
+                    Text(renderedWithCursor(visible: tick.isMultiple(of: 2)))
                 }
             }
         }
@@ -192,7 +193,8 @@ private struct StreamingText: View {
     MessageBubble(
         message: ChatMessagePayload(
             role: .assistant,
-            content: "SwiftUI is Apple's **declarative** framework for building user interfaces across all Apple platforms."
+            content: "SwiftUI is Apple's **declarative** framework "
+                + "for building user interfaces across all Apple platforms."
         ),
         onBranch: {},
         onCopy: {}

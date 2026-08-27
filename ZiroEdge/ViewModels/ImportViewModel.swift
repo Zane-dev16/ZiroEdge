@@ -20,6 +20,11 @@ final class ImportViewModel: ObservableObject {
     @Published var licenseConfirmed = false
     @Published var ramRiskAccepted = false
     @Published private(set) var existingModel: AIModel?
+    /// The freshly recorded model when `confirmImport()` takes the fresh
+    /// path. Stays nil on the duplicate branch, which sets `existingModel`
+    /// instead. The wizard's Transfer/Done pages bind their live status to
+    /// this model via `downloadManager.status(for:)`.
+    @Published private(set) var importingModel: AIModel?
     /// When true, the user has explicitly confirmed the suggested vision pair.
     @Published var visionPairConfirmed = false
 
@@ -142,6 +147,11 @@ final class ImportViewModel: ObservableObject {
 
     // MARK: - Confirmation Gate
 
+    /// Full confirmation gate. The wizard partitions this conjunction across
+    /// steps — Artifacts: `selectedBase != nil`; Configure: license + vision
+    /// halves; Review: storage + RAM halves — while `confirmImport()` still
+    /// re-checks everything here, so per-step gating is presentational and
+    /// can never admit an import `canConfirm` would refuse.
     var canConfirm: Bool {
         selectedBase != nil
             && licenseConfirmed
@@ -158,6 +168,7 @@ final class ImportViewModel: ObservableObject {
         review = nil
         selectedBase = nil
         existingModel = nil
+        importingModel = nil
         visionPairConfirmed = false
         do {
             let result = try await inspector.inspect(repositoryInput)
@@ -202,6 +213,9 @@ final class ImportViewModel: ObservableObject {
             let persisted = try store.upsert(record)
             downloadManager.updateStatusesFromDisk()
             downloadManager.startDownload(for: persisted.model)
+            // Assign before the phase flip so the router lands on a Transfer
+            // page that already has its live model.
+            importingModel = persisted.model
             phase = .importing
         } catch {
             phase = .failed("The imported-model record could not be saved.")
