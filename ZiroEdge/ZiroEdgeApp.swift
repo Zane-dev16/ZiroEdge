@@ -98,8 +98,9 @@ struct ZiroEdgeApp: App {
                         ZiroStatusBanner(
                             icon: "checkmark.circle.fill",
                             message: message,
-                            tint: .green
+                            tint: ZiroTheme.positiveText
                         )
+                        .announcingOnAppear(message)
                         .clipShape(RoundedRectangle(cornerRadius: ZiroTheme.Radius.control))
                         .shadow(color: .black.opacity(0.12), radius: 8, y: 4)
                         .padding()

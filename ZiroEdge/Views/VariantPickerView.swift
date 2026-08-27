@@ -101,11 +101,11 @@ struct QuantizationBadge: View {
 
     private var qualityTint: Color {
         let upper = label.uppercased()
-        // Semantic status tokens: raw .green/.orange fail 4.5:1 on light
-        // backgrounds for badge text.
-        if upper.contains("Q8") || upper.contains("F16") { return .blue }
+        // Semantic status tokens: raw .green/.orange/.blue/.purple all fail
+        // 4.5:1 on light backgrounds for caption2 badge text.
+        if upper.contains("Q8") || upper.contains("F16") { return ZiroTheme.infoText }
         if upper.contains("Q6") { return .indigo }
-        if upper.contains("Q5") { return .purple }
+        if upper.contains("Q5") { return ZiroTheme.accentPurpleText }
         if upper.contains("Q4") { return ZiroTheme.positiveText }
         if upper.contains("Q3") || upper.contains("Q2") { return ZiroTheme.warningText }
         return .secondary

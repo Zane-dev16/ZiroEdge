@@ -326,7 +326,7 @@ private struct ModelRow: View {
             Text("VISION")
                 .font(.caption2.weight(.bold))
                 .padding(.horizontal, ZiroTheme.Spacing.badge).padding(.vertical, ZiroTheme.Spacing.micro)
-                .foregroundStyle(.purple)
+                .foregroundStyle(ZiroTheme.accentPurpleText)
                 .background(Color.purple.opacity(0.1), in: Capsule())
         } else if model.modelType == .vision {
             Text("PAIR INCOMPLETE")
