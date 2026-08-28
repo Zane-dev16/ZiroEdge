@@ -328,12 +328,16 @@ private struct ModelRow: View {
                 .padding(.horizontal, ZiroTheme.Spacing.badge).padding(.vertical, ZiroTheme.Spacing.micro)
                 .foregroundStyle(ZiroTheme.accentPurpleText)
                 .background(Color.purple.opacity(0.1), in: Capsule())
+                // Badge copy is a single unit — keep the capsule hugging one
+                // line instead of wrapping when the name row gets tight.
+                .fixedSize()
         } else if model.modelType == .vision {
             Text("PAIR INCOMPLETE")
                 .font(.caption2.weight(.bold))
                 .padding(.horizontal, ZiroTheme.Spacing.badge).padding(.vertical, ZiroTheme.Spacing.micro)
                 .foregroundStyle(ZiroTheme.warningText)
                 .background(Color.orange.opacity(0.1), in: Capsule())
+                .fixedSize()
         }
     }
 

@@ -29,10 +29,15 @@ final class AppStoreScreenshotTests: UITestBase {
 
     // MARK: - Sidebar + Chat
 
-    /// Capture the NavigationSplitView showing the conversation sidebar
-    /// alongside the chat detail area (WelcomeView or ChatView). On a fresh
-    /// install with no conversations, the split view itself demonstrates the
-    /// required layout even without an active conversation.
+    /// Capture the sidebar alongside the chat surface. On regular widths
+    /// (iPad) this is the NavigationSplitView with the persistent sidebar
+    /// column; on compact widths (iPhone) the sidebar lives in the drawer
+    /// sheet opened from the toolbar toggle, so the screenshot captures the
+    /// drawer presented over the chat — the compact representation of the
+    /// same sidebar+chat layout.
+    ///
+    /// Every test fails closed: navigation failures produce test failures,
+    /// not fallback images.
     func testSidebarAndChat() throws {
         app.terminate()
         app = XCUIApplication()
@@ -40,24 +45,29 @@ final class AppStoreScreenshotTests: UITestBase {
         app.launch()
         sleep(3)
 
-        // Wait for the sidebar to render — the "New Conversation" button
-        // or conversation cells indicate the sidebar is ready.
-        let sidebarReady = app.buttons["New Conversation"].firstMatch.waitForExistence(timeout: 10)
-            || app.collectionViews.cells.firstMatch.waitForExistence(timeout: 10)
-            || app.staticTexts["Conversations"].waitForExistence(timeout: 10)
-        guard sidebarReady else {
-            XCTFail("iPad sidebar did not render — cannot capture split-view screenshot")
+        // The chat surface is the launch root on every size class since the
+        // shell overhaul; the composer input proves it rendered.
+        guard app.textFields["chatInput"].firstMatch.waitForExistence(timeout: 15) else {
+            XCTFail("Chat surface did not render — cannot capture sidebar+chat screenshot")
             return
         }
 
-        // A chat or welcome detail is required in addition to the sidebar.
-        let newConversation = app.buttons["New Conversation"].firstMatch
-        guard selectOrCreateConversation(timeout: 10),
-              app.textFields["chatInput"].firstMatch.waitForExistence(timeout: 5),
-              newConversation.waitForExistence(timeout: 5),
-              newConversation.isHittable else {
-            XCTFail("iPad sidebar and ChatView were not simultaneously visible — refusing to capture")
-            return
+        if app.buttons["sidebar-button"].firstMatch.waitForExistence(timeout: 3) {
+            // Compact width: reveal the drawer and verify its content.
+            guard openSidebar(),
+                  app.buttons["New Conversation"].firstMatch.waitForExistence(timeout: 5) else {
+                XCTFail("Drawer sidebar did not render — cannot capture sidebar+chat screenshot")
+                return
+            }
+        } else {
+            // Regular width: verify the persistent sidebar column rendered.
+            let sidebarReady = app.buttons["New Conversation"].firstMatch.waitForExistence(timeout: 10)
+                || app.collectionViews.cells.firstMatch.waitForExistence(timeout: 10)
+                || app.staticTexts["Conversations"].waitForExistence(timeout: 10)
+            guard sidebarReady else {
+                XCTFail("iPad sidebar did not render — cannot capture split-view screenshot")
+                return
+            }
         }
         sleep(2)
         capture("sidebar_chat")

@@ -2,10 +2,11 @@
 // ZiroEdge — Privacy-first local AI assistant
 //
 // Detail view for a single model. The landing page is the Overview:
-// identity, the primary action (download / start chatting) with live
-// transfer status, and a runtime strip. Everything else is a dedicated
+// identity, the primary action (download / start chatting) with a compact
+// transfer-status link, and a runtime strip. Everything else is a dedicated
 // child page kept one push deep — Generation Settings (imported models),
-// Safety & Runtime, and Storage & Provenance. The staged-update flow lives
+// Safety & Runtime, and Storage & Provenance (live download management:
+// progress, pause/resume, verify, cancel). The staged-update flow lives
 // in UpdateFlowSheet, presented from Generation Settings, and reuses the
 // import wizard's shared pieces (VariantPickerView, PreflightCard,
 // RAMAssessmentCard, LicenseRow).
@@ -107,23 +108,19 @@ struct ModelDetailView: View {
             }
 
         case .downloading(let progress):
-            downloadingRow(progress: progress)
+            transferManagementLink(label: "Downloading… \(Int(progress * 100))%", symbol: "arrow.down.circle")
 
-        case .pausing(let progress):
-            transferTransitionRow(label: "Saving resume data…", progress: progress)
+        case .pausing:
+            transferManagementLink(label: "Saving resume data…", symbol: "arrow.down.circle")
 
-        case .resuming(let progress):
-            transferTransitionRow(label: "Resuming…", progress: progress)
+        case .resuming:
+            transferManagementLink(label: "Resuming…", symbol: "arrow.down.circle")
 
         case .paused(let progress):
-            pausedRow(progress: progress)
+            transferManagementLink(label: "Paused · \(Int(progress * 100))%", symbol: "pause.circle")
 
         case .verifying:
-            HStack {
-                ProgressView()
-                Text("Verifying...")
-                    .foregroundStyle(.secondary)
-            }
+            transferManagementLink(label: "Verifying...", symbol: "checkmark.seal")
 
         case .downloaded:
             readyContent(status)
@@ -230,72 +227,14 @@ struct ModelDetailView: View {
         .accessibilityHint("Downloads the model for offline use")
     }
 
-    private func transferTransitionRow(label: String, progress: Double) -> some View {
-        HStack {
-            ProgressView()
-            VStack(alignment: .leading) {
-                Text(label)
-                Text("\(Int(progress * 100))% complete")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private func pausedRow(progress: Double) -> some View {
-        VStack(alignment: .leading, spacing: ZiroTheme.Spacing.small) {
-            ProgressView(value: progress) {
-                Text("Paused")
-            } currentValueLabel: {
-                Text("\(Int(progress * 100))%")
-            }
-            .accessibilityValue("\(Int(progress * 100)) percent complete")
-
-            HStack(spacing: ZiroTheme.Spacing.medium) {
-                Button {
-                    viewModel.resumeDownload(for: model)
-                } label: {
-                    Label("Resume Download", systemImage: "play.fill")
-                }
-                .buttonStyle(.borderedProminent)
-
-                Button(role: .destructive) {
-                    viewModel.requestCancelDownload(for: model)
-                } label: {
-                    Label("Cancel", systemImage: "xmark.circle.fill")
-                }
-                .buttonStyle(.bordered)
-            }
-        }
-    }
-
-    private func downloadingRow(progress: Double) -> some View {
-        VStack(alignment: .leading, spacing: ZiroTheme.Spacing.small) {
-            ProgressView(value: progress) {
-                Text("Downloading…")
-            } currentValueLabel: {
-                Text("\(Int(progress * 100))%")
-            }
-            .accessibilityLabel("Downloading \(model.displayName)")
-            .accessibilityValue("\(Int(progress * 100)) percent complete")
-
-            HStack(spacing: ZiroTheme.Spacing.large) {
-                Button {
-                    viewModel.pauseDownload(for: model)
-                } label: {
-                    Label("Pause", systemImage: "pause.fill")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-
-                Button(role: .destructive) {
-                    viewModel.requestCancelDownload(for: model)
-                } label: {
-                    Label("Cancel", systemImage: "xmark.circle.fill")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-            }
+    /// Compact transfer-status affordance for the Overview. Live transfer
+    /// management (progress, pause/resume, verify, cancel) lives on the
+    /// Storage & Provenance page (plan §D: one concern per page).
+    private func transferManagementLink(label: String, symbol: String) -> some View {
+        NavigationLink {
+            StorageProvenancePage(model: model, viewModel: viewModel)
+        } label: {
+            Label(label, systemImage: symbol)
         }
     }
 
@@ -537,7 +476,8 @@ private struct SafetyRuntimePage: View {
 
 // MARK: - Storage & Provenance Page
 
-/// Where the model came from, what it uses on disk, and the destructive
+/// Live download management (progress / pause / resume / verify / cancel),
+/// where the model came from, what it uses on disk, and the destructive
 /// management zone (delete / forget import).
 private struct StorageProvenancePage: View {
     let model: AIModel
@@ -545,6 +485,8 @@ private struct StorageProvenancePage: View {
 
     var body: some View {
         List {
+            transferSection
+
             Section("Model Info") {
                 LabeledContent("Size", value: model.formattedSize)
                 LabeledContent("Quantization", value: model.quantization)
@@ -565,6 +507,111 @@ private struct StorageProvenancePage: View {
         }
         .navigationTitle("Storage & Provenance")
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    // MARK: Live Transfer
+
+    /// Active-transfer management rows (plan §D): progress with pause/cancel,
+    /// resume, and the verify transition. Hidden when nothing is in flight.
+    @ViewBuilder
+    private var transferSection: some View {
+        switch viewModel.status(for: model).displayState {
+        case .downloading(let progress):
+            Section("Download") {
+                downloadingRow(progress: progress)
+            }
+        case .pausing(let progress):
+            Section("Download") {
+                transferTransitionRow(label: "Saving resume data…", progress: progress)
+            }
+        case .resuming(let progress):
+            Section("Download") {
+                transferTransitionRow(label: "Resuming…", progress: progress)
+            }
+        case .paused(let progress):
+            Section("Download") {
+                pausedRow(progress: progress)
+            }
+        case .verifying:
+            Section("Download") {
+                HStack {
+                    ProgressView()
+                    Text("Verifying...")
+                        .foregroundStyle(.secondary)
+                }
+            }
+        default:
+            EmptyView()
+        }
+    }
+
+    private func transferTransitionRow(label: String, progress: Double) -> some View {
+        HStack {
+            ProgressView()
+            VStack(alignment: .leading) {
+                Text(label)
+                Text("\(Int(progress * 100))% complete")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func pausedRow(progress: Double) -> some View {
+        VStack(alignment: .leading, spacing: ZiroTheme.Spacing.small) {
+            ProgressView(value: progress) {
+                Text("Paused")
+            } currentValueLabel: {
+                Text("\(Int(progress * 100))%")
+            }
+            .accessibilityValue("\(Int(progress * 100)) percent complete")
+
+            HStack(spacing: ZiroTheme.Spacing.medium) {
+                Button {
+                    viewModel.resumeDownload(for: model)
+                } label: {
+                    Label("Resume Download", systemImage: "play.fill")
+                }
+                .buttonStyle(.borderedProminent)
+
+                Button(role: .destructive) {
+                    viewModel.requestCancelDownload(for: model)
+                } label: {
+                    Label("Cancel", systemImage: "xmark.circle.fill")
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+    }
+
+    private func downloadingRow(progress: Double) -> some View {
+        VStack(alignment: .leading, spacing: ZiroTheme.Spacing.small) {
+            ProgressView(value: progress) {
+                Text("Downloading…")
+            } currentValueLabel: {
+                Text("\(Int(progress * 100))%")
+            }
+            .accessibilityLabel("Downloading \(model.displayName)")
+            .accessibilityValue("\(Int(progress * 100)) percent complete")
+
+            HStack(spacing: ZiroTheme.Spacing.large) {
+                Button {
+                    viewModel.pauseDownload(for: model)
+                } label: {
+                    Label("Pause", systemImage: "pause.fill")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+
+                Button(role: .destructive) {
+                    viewModel.requestCancelDownload(for: model)
+                } label: {
+                    Label("Cancel", systemImage: "xmark.circle.fill")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+        }
     }
 
     private var modelTypeLabel: String {

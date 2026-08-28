@@ -66,6 +66,15 @@ class UITestBase: XCTestCase {
         guard openSidebar(timeout: timeout) else { return false }
 
         let settingsRow = app.buttons["Settings"].firstMatch
+        // The drawer's Library section sits below the conversation list;
+        // with several conversations it renders below the fold (lazy
+        // List), so scroll toward it before concluding the row is absent.
+        if !settingsRow.waitForExistence(timeout: 3) {
+            app.swipeUp()
+            if !settingsRow.waitForExistence(timeout: 2) {
+                app.swipeUp()
+            }
+        }
         guard settingsRow.waitForExistence(timeout: timeout) else { return false }
         settingsRow.tap()
 
@@ -117,14 +126,20 @@ class UITestBase: XCTestCase {
     /// when ChatView's input exists; tapping a control alone is not navigation
     /// evidence (for example, a model redirect may appear instead).
     ///
-    /// Since the shell overhaul the app launches directly into a chat surface,
-    /// so the input check usually succeeds immediately. New Conversation lives
-    /// in the sidebar; S2 made it an unsaved draft chat.
+    /// Since the shell overhaul the app launches directly into a chat surface
+    /// (unsaved draft when nothing is selected), so the input check usually
+    /// succeeds immediately. "New Conversation" lives inside the sidebar — a
+    /// drawer sheet on compact widths — so it is only reachable after revealing
+    /// the sidebar.
     @discardableResult
     func selectOrCreateConversation(timeout: TimeInterval = 8) -> Bool {
         let chatInput = app.textFields["chatInput"].firstMatch
-        if chatInput.waitForExistence(timeout: 2) { return true }
+        if chatInput.waitForExistence(timeout: min(timeout, 5)) { return true }
 
+        // Reveal the sidebar first: on the compact shell the drawer sheet is
+        // closed at launch, so its "New Conversation" button is not in the
+        // accessibility hierarchy until the drawer is presented.
+        _ = openSidebar(timeout: timeout)
         let newConversation = app.buttons["New Conversation"].firstMatch
         if newConversation.waitForExistence(timeout: timeout) {
             newConversation.tap()
@@ -236,6 +251,16 @@ class UITestBase: XCTestCase {
         app.typeText(text)
         Thread.sleep(forTimeInterval: 1) // Wait for binding
 
+        // Prefer the app's own send affordance: the overhauled composer's
+        // Return handling proved unreliable under XCUITest on iOS 26 (the
+        // keyboard key tap does not always fire onSubmit), so the labeled
+        // send button is the primary path with Return as fallback.
+        let sendButton = app.buttons["Send message"].firstMatch
+        if sendButton.waitForExistence(timeout: 2), sendButton.isEnabled {
+            sendButton.tap()
+            return
+        }
+
         // Send via the localized keyboard return key.
         let returnButtons = ["Return", "enter", "return"].map {
             app.keyboards.buttons[$0].firstMatch
@@ -281,7 +306,7 @@ class UITestBase: XCTestCase {
         app.buttons["No Model"].firstMatch.exists || app.buttons["No model yet"].firstMatch.exists
     }
 
-    private func isPlaceholderLabel(_ label: String) -> Bool {
+    func isPlaceholderLabel(_ label: String) -> Bool {
         label == "No Model" || label == "No model yet" || label.isEmpty
     }
 
@@ -354,21 +379,15 @@ class UITestBase: XCTestCase {
     // MARK: - Diagnostics (accessibility-tree based, no screenshots)
 
     /// Read the current error banner text, if visible. Returns nil if no error.
+    /// Banners carry the `errorBanner` accessibility identifier; reading the
+    /// identified element resolves in a single snapshot (no index enumeration
+    /// to race against a re-rendering transcript).
     func readErrorBanner() -> String? {
-        // Error banner has: exclamation image + Text(message) + "Dismiss" button
-        let dismiss = app.buttons["Dismiss"].firstMatch
-        guard dismiss.waitForExistence(timeout: 2) else { return nil }
-        // Read all static texts — the error message is the red text near Dismiss
-        let texts = app.staticTexts.allElementsBoundByIndex.compactMap { elem -> String? in
-            let label = elem.label
-            guard !label.isEmpty else { return nil }
-            if label == "ZiroEdge" || label.contains("Gemma") || label == "Dismiss"
-               || label.contains("Message Ziro") || label.contains("messages")
-               || label == "Conversations" || label.contains("min ago")
-               || label == "\u{00B7}" || label == "New Conversation" { return nil }
-            return label
-        }
-        return texts.last
+        let banner = app.descendants(matching: .any)["errorBanner"].firstMatch
+        guard banner.waitForExistence(timeout: 2) else { return nil }
+        if !banner.label.isEmpty { return banner.label }
+        let message = banner.staticTexts.firstMatch
+        return message.exists ? message.label : nil
     }
 
     /// Read the chat header pill title to see what model is selected.
@@ -392,17 +411,18 @@ class UITestBase: XCTestCase {
         return nil
     }
 
-    /// Read visible messages from the chat. Returns the last meaningful text.
+    /// Read the assistant's reply text from the chat, if present. Assistant
+    /// bubbles carry a stable "Assistant said: …" accessibility label, so this
+    /// resolves via a single-snapshot label predicate instead of enumerating
+    /// `allElementsBoundByIndex` (which aborts with "Failed to get matching
+    /// snapshot" when the transcript re-renders mid-read). In a multi-turn
+    /// conversation this returns the first assistant bubble — sufficient for
+    /// the diagnostic callers, which use it on fresh conversations.
     func readLastAssistantMessage() -> String? {
-        let texts = app.scrollViews.otherElements.staticTexts.allElementsBoundByIndex.compactMap { elem -> String? in
-            let label = elem.label
-            guard !label.isEmpty else { return nil }
-            if label == "ZiroEdge" || label.contains("Gemma") || label.contains("No Model")
-               || label.contains("Message Ziro") || label.contains("messages")
-               || label == "Conversations" || label.contains("min ago")
-               || label == "\u{00B7}" || label == "New Conversation" { return nil }
-            return label
-        }
-        return texts.last
+        let reply = app.descendants(matching: .any).matching(
+            NSPredicate(format: "label BEGINSWITH 'Assistant said: '")
+        ).firstMatch
+        guard reply.exists, !reply.label.isEmpty else { return nil }
+        return String(reply.label.dropFirst("Assistant said: ".count))
     }
 }

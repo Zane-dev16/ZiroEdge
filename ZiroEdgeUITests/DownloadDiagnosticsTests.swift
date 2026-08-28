@@ -175,12 +175,12 @@ final class DownloadDiagnosticsTests: UITestBase {
             let progressExists = progressView.exists
             print("[UITEST] t=\(elapsed)s: progressIndicator.exists=\(progressExists)")
 
-            // Check for percentage text
-            let percentTexts = app.staticTexts.allElementsBoundByIndex.filter { elem in
-                elem.label.contains("%")
-            }
-            for pt in percentTexts {
-                print("[UITEST] t=\(elapsed)s: percent label='\(pt.label)'")
+            // Check for percentage text (single-snapshot filtered read:
+            // allElementsBoundByIndex races with per-second progress updates)
+            let percentLabels = app.staticTexts.matching(NSPredicate(format: "label CONTAINS '%'"))
+            print("[UITEST] t=\(elapsed)s: percentLabelCount=\(percentLabels.count)")
+            if let firstPercent = percentLabels.firstMatch.exists ? percentLabels.firstMatch.label : nil {
+                print("[UITEST] t=\(elapsed)s: percent label='\(firstPercent)'")
             }
 
             // Check for state labels
@@ -274,9 +274,11 @@ final class DownloadDiagnosticsTests: UITestBase {
         let progressAppeared = progressView.waitForExistence(timeout: 30)
         capture("progress_check")
 
-        let percentLabels = app.staticTexts.allElementsBoundByIndex.filter { $0.label.contains("%") }
+        // Single-snapshot filtered read: progress labels churn every second.
+        let percentQuery = app.staticTexts.matching(NSPredicate(format: "label CONTAINS '%'"))
+        let percentLabels = percentQuery.count
         print("[UITEST] progressAppeared=\(progressAppeared)")
-        print("[UITEST] percentLabels=\(percentLabels.map(\.label))")
+        print("[UITEST] percentLabels=\(percentLabels) first=\(percentQuery.firstMatch.exists ? percentQuery.firstMatch.label : "none")")
 
         // We don't assert failure here — the download may fail for network
         // reasons on CI. But we capture the state for analysis.
