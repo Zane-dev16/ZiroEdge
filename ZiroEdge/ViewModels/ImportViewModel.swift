@@ -178,10 +178,27 @@ final class ImportViewModel: ObservableObject {
         licenseConfirmed = false
         ramRiskAccepted = false
         do {
+            #if DEBUG
+            // --uitesting-hermetic-import: offline wizard navigation. The
+            // canned review keeps the reset semantics above identical to a
+            // live inspection; the fake repository does not exist upstream, so
+            // a download confirmed from Review fails fast without transferring
+            // model bytes.
+            let result = CommandLine.arguments.contains("--uitesting-hermetic-import")
+                ? HermeticImportFixture.review
+                : try await inspector.inspect(repositoryInput)
+            #else
             let result = try await inspector.inspect(repositoryInput)
+            #endif
             review = result
             selectedBase = result.baseArtifacts.count == 1 ? result.baseArtifacts.first : nil
-            if selectedBase != nil, !hasViableVisionPair {
+            // Reset the vision toggle whenever this repository cannot support
+            // vision — not only when a base was preselected. Enabling vision
+            // on repo A then inspecting a multi-artifact repo B without
+            // projectors otherwise carries the stale toggle into a Configure
+            // step that renders no toggle to clear it, so `visionPairingError`
+            // could never clear and the Continue gate stayed closed.
+            if !hasViableVisionPair {
                 importAsVision = false
             }
             phase = .review
@@ -497,3 +514,40 @@ final class ImportedModelUpdateCoordinator: ObservableObject {
         return stagedRecords[modelID]?.model
     }
 }
+
+// MARK: - Hermetic Import Fixture (DEBUG)
+
+#if DEBUG
+/// Canned Hugging Face inspection for `--uitesting-hermetic-import` (DEBUG
+/// builds only). A single text-only base artifact with reviewable license
+/// terms keeps the wizard's Artifacts → Configure → Review steps reachable
+/// with no network. The repository does not exist upstream: confirming the
+/// import starts a download that fails fast, exercising the Transfer failure
+/// state without transferring model bytes.
+private enum HermeticImportFixture {
+    static var review: HFRepositoryReview {
+        HFRepositoryReview(
+            repositoryID: "zanish-labs/hermetic-fixture",
+            revision: "main",
+            licenseName: "Apache 2.0",
+            licenseURL: URL(string: "https://www.apache.org/licenses/LICENSE-2.0")!,
+            artifacts: [
+                HFArtifact(
+                    filename: "hermetic-fixture-1b-Q4_K_M.gguf",
+                    size: 900_000_000,
+                    sha256: String(repeating: "a", count: 64),
+                    quantization: "Q4_K_M",
+                    architecture: "llama",
+                    role: .base,
+                    metadata: HFGGUFMetadata(
+                        architecture: "llama",
+                        contextLength: 4096,
+                        chatTemplate: nil,
+                        modelName: "Hermetic Fixture 1B"
+                    )
+                )
+            ]
+        )
+    }
+}
+#endif

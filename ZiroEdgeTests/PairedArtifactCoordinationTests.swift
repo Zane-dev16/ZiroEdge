@@ -271,7 +271,10 @@ final class PairedArtifactCoordinationTests: XCTestCase {
         // Only base is valid on disk.
         try validGGUFData(length: 16).write(to: ModelManagerService.baseModelPath(for: model))
 
-        let manager = DownloadManager()
+        // Hermetic disk space: startDownload consults real host free space
+        // first, so a nearly-full volume would fail the status before the
+        // skip-verified-artifact behavior under test is exercised.
+        let manager = DownloadManager(availableDiskSpaceProvider: { .max })
         manager.updateStatusesFromDisk()
 
         // startDownload should skip the base and only try to download the projector.

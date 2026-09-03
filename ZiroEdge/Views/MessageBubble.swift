@@ -1,8 +1,9 @@
 // MessageBubble.swift
 // ZiroEdge — Privacy-first local AI assistant
 //
-// Individual message bubble. User messages right-aligned blue,
-// assistant messages left-aligned with markdown rendering.
+// Individual message bubble. User messages right-aligned on the accent fill,
+// assistant messages left-aligned on the raised surface with markdown
+// rendering — both via the design system's `ziroMessageBubble` treatment.
 
 import SwiftUI
 
@@ -11,6 +12,12 @@ struct MessageBubble: View {
     let isStreaming: Bool
     let onBranch: (() -> Void)?
     let onCopy: (() -> Void)?
+
+    // Copy/branch hit targets: scale with Dynamic Type (like ChatView's
+    // composerControlSide) so the caption glyphs never overflow their frames
+    // at accessibility sizes, while meeting the 44×44 minimum at the default
+    // size.
+    @ScaledMetric(relativeTo: .body) private var actionControlSide: CGFloat = 44
 
     init(
         message: ChatMessagePayload,
@@ -41,7 +48,7 @@ struct MessageBubble: View {
                                         .resizable()
                                         .scaledToFit()
                                         .frame(maxWidth: 240, maxHeight: 240)
-                                        .clipShape(RoundedRectangle(cornerRadius: ZiroTheme.Radius.control))
+                                        .clipShape(RoundedRectangle(cornerRadius: ZiroTheme.Radius.small, style: .continuous))
                                         .accessibilityLabel("Message attachment")
                                 }
                             }
@@ -53,12 +60,11 @@ struct MessageBubble: View {
                 // Message content.
                 if message.role == .user {
                     Text(message.content)
-                        .font(.body)
+                        .font(ZiroType.body)
                         .foregroundStyle(ZiroTheme.accentForeground)
                         .padding(.horizontal, ZiroTheme.Spacing.large)
                         .padding(.vertical, ZiroTheme.Spacing.medium)
-                        .background(Color.accentColor)
-                        .clipShape(RoundedRectangle(cornerRadius: ZiroTheme.Radius.bubble))
+                        .ziroMessageBubble(.user)
                         .accessibilityLabel("You said: \(message.content)")
                 } else {
                     VStack(alignment: .leading, spacing: 0) {
@@ -77,38 +83,38 @@ struct MessageBubble: View {
                                 .accessibilityLabel("Assistant is responding")
                         } else {
                             Text(markdown: displayContent)
-                                .font(.body)
+                                .font(ZiroType.body)
+                                .foregroundStyle(ZiroTheme.primaryText)
                                 .textSelection(.enabled)
                                 .accessibilityLabel("Assistant said: \(displayContent)")
                         }
                     }
                     .padding(.horizontal, ZiroTheme.Spacing.large)
                     .padding(.vertical, ZiroTheme.Spacing.medium)
-                    .background(ZiroTheme.elevatedBackground)
-                    .clipShape(RoundedRectangle(cornerRadius: ZiroTheme.Radius.bubble))
+                    .ziroMessageBubble(.assistant)
                 }
 
                 // Action buttons (assistant messages only). The glyphs stay
-                // caption-size, but each button reserves a 44x44pt frame with
-                // a full-area contentShape — they are the only path to copy or
-                // branch a message, so the hit target must meet the 44pt
-                // minimum.
+                // caption-size, but each button reserves a scaled 44pt-square
+                // frame with a full-area contentShape — they are the only path
+                // to copy or branch a message, so the hit target must meet the
+                // 44pt minimum and grow with Dynamic Type.
                 if message.role == .assistant && !isStreaming {
                     HStack(spacing: 0) {
                         Button(action: { onCopy?() }) {
                             Image(systemName: "doc.on.doc")
                                 .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .frame(width: 44, height: 44)
+                                .foregroundStyle(ZiroTheme.secondaryText)
+                                .frame(width: actionControlSide, height: actionControlSide)
                                 .contentShape(Rectangle())
                         }
                         .accessibilityLabel("Copy message")
 
                         Button(action: { onBranch?() }) {
-                            Image(systemName: "arrow.branch")
+                            Image(systemName: "arrow.triangle.branch")
                                 .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .frame(width: 44, height: 44)
+                                .foregroundStyle(ZiroTheme.secondaryText)
+                                .frame(width: actionControlSide, height: actionControlSide)
                                 .contentShape(Rectangle())
                         }
                         .accessibilityLabel("Branch from this message")
@@ -121,7 +127,10 @@ struct MessageBubble: View {
                 Spacer(minLength: ZiroTheme.Spacing.xLarge)
             }
         }
-        .frame(maxWidth: 680)
+        // Bubble rows cap at the reading measure; the transcript column above
+        // caps wider (ZiroMeasure.full) — the nested 760/680 rhythm from the
+        // design system's measure scale.
+        .frame(maxWidth: ZiroMeasure.wide)
         .padding(.horizontal, ZiroTheme.Spacing.large)
         .padding(.vertical, ZiroTheme.Spacing.xSmall)
     }
@@ -149,13 +158,15 @@ private struct StreamingText: View {
             if reduceMotion {
                 Text(renderedWithCursor(visible: true))
             } else {
-                TimelineView(.periodic(from: .now, by: 0.6)) { context in
-                    let tick = Int(context.date.timeIntervalSinceReferenceDate / 0.6)
+                // Blink cadence is the design system's cursor period (0.6s);
+                // the TimelineView pattern itself is the Reduce-Motion exit.
+                TimelineView(.periodic(from: .now, by: ZiroMotion.cursorPeriod)) { context in
+                    let tick = Int(context.date.timeIntervalSinceReferenceDate / ZiroMotion.cursorPeriod)
                     Text(renderedWithCursor(visible: tick.isMultiple(of: 2)))
                 }
             }
         }
-        .font(.body)
+        .font(ZiroType.body)
         .textSelection(.enabled)
         .task(id: content) {
             // Debounce 80ms then render off-main
@@ -189,8 +200,9 @@ private struct StreamingText: View {
     private func renderedWithCursor(visible: Bool) -> AttributedString {
         var attributed = rendered
         var cursor = AttributedString("|")
-        cursor.font = .body
-        cursor.foregroundColor = visible ? Color.accentColor : Color.clear
+        cursor.font = ZiroType.body
+        // The amber caret: the ember accent marks what is alive on screen.
+        cursor.foregroundColor = visible ? ZiroTheme.accent : Color.clear
         attributed.append(cursor)
         return attributed
     }

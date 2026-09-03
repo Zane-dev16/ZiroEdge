@@ -23,7 +23,13 @@ public actor LlamaEngine {
     private var vocabulary: OpaquePointer?
     private var mtmdCtx: OpaquePointer?
     private let config: LlamaConfigSwift
-    private var isCancelled = false
+    /// Nonisolated cancellation flag. The decode loop is fully synchronous, so
+    /// an actor-isolated flag could only be observed by work queued *behind*
+    /// the entire generation — `cancel()` would be a no-op until it finished.
+    /// A lock-protected flag lets cancellation reach the loop at the next token
+    /// boundary. Reset at stream start (never at end) so a stale cancel cannot
+    /// kill a subsequent generation.
+    private let cancelFlag = OSAllocatedUnfairLock<Bool>(initialState: false)
     private var eosTokenID: llama_token = -1
     private var isBackendInitialized = false
 
@@ -259,9 +265,14 @@ extension LlamaEngine {
             throw LlamaError.modelNotLoaded
         }
 
-        isCancelled = false
+        beginGenerationScope()
 
         return AsyncThrowingStream<String, Error> { continuation in
+            // Consumer termination (task cancelled, stream dropped) must stop
+            // the producer at the next token boundary instead of decoding on.
+            continuation.onTermination = { [weak self] _ in
+                self?.cancel()
+            }
             Task {
                 do {
                     // Tokenize prompt.
@@ -354,9 +365,14 @@ extension LlamaEngine {
             throw LlamaError.visionNotSupported
         }
 
-        isCancelled = false
+        beginGenerationScope()
 
         return AsyncThrowingStream<String, Error> { continuation in
+            // Consumer termination (task cancelled, stream dropped) must stop
+            // the producer at the next token boundary instead of decoding on.
+            continuation.onTermination = { [weak self] _ in
+                self?.cancel()
+            }
             Task {
                 do {
                     // Create bitmaps from image data.
@@ -451,8 +467,21 @@ extension LlamaEngine {
 
     // MARK: - Cancellation
 
-    public func cancel() {
-        isCancelled = true
+    /// Nonisolated so cancellation lands while the synchronous decode loop
+    /// monopolizes this actor. Idempotent; safe to call from any thread.
+    public nonisolated func cancel() {
+        cancelFlag.withLock { $0 = true }
+    }
+
+    /// Opens a fresh generation scope: any cancel recorded before this stream
+    /// started is dropped so it cannot kill the new generation. Called on the
+    /// actor at stream start; the decode loop cannot have begun yet.
+    private func beginGenerationScope() {
+        cancelFlag.withLock { $0 = false }
+    }
+
+    private var isGenerationCancelled: Bool {
+        cancelFlag.withLock { $0 }
     }
 
     public nonisolated static func promptBatchRanges(
@@ -599,7 +628,7 @@ private extension LlamaEngine {
         let maxTokens = sampling.maxTokens > 0 ? sampling.maxTokens : 2048
 
         while nPos < Int32(config.contextLength) && nGenerated < maxTokens {
-            if self.isCancelled || Task.isCancelled { break }
+            if isGenerationCancelled || Task.isCancelled { break }
 
             let newTokenID = llama_sampler_sample(sampler, ctx, -1)
             if newTokenID == self.eosTokenID { break }

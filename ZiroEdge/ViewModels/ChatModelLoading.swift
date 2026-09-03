@@ -23,7 +23,15 @@ extension ChatViewModel {
         case .loading:
             modelLoadPhase = .loading
         case .loaded where lifecycleManager.activeModel?.id == selectedModel?.id,
-             .loaded where selectedModel == nil && lifecycleManager.activeModel != nil:
+             .loaded where selectedModel == nil && lifecycleManager.activeModel != nil,
+             // A failed switch can leave the prior model resident: the new
+             // selection's preflight fails before the prior model unloads, so
+             // the identity still matches. The working model must read ready —
+             // retryModelLoad no-ops while a model is resident, and re-selecting
+             // the resident model returns .alreadyLoaded without touching
+             // currentState, so only this projection can unstick the composer.
+             .loadFailed where lifecycleManager.activeModel?.id == selectedModel?.id,
+             .loadFailed where selectedModel == nil && lifecycleManager.activeModel != nil:
             modelLoadPhase = .ready
         case .evicted:
             modelLoadPhase = .evicted
@@ -103,7 +111,12 @@ extension ChatViewModel {
     /// Appear-time kicks allow fresh starts plus eviction retries; manual taps
     /// additionally replay failures. `.failed` is never auto-retried because
     /// native-load failures would simply repeat.
+    /// A user-initiated unload (Settings → Unload Model) suppresses only the
+    /// automatic kick — without this gate the next `.onAppear` (any pop from
+    /// Settings/Models routes) would silently reload the just-unloaded model,
+    /// reversing the user's explicit action and burning a full load cycle.
     private func isEligibleForDeferredStart(manual: Bool) -> Bool {
+        if !manual, lifecycleManager.isUserUnloaded { return false }
         switch modelLoadPhase {
         case .idle, .evicted:
             return true
@@ -117,6 +130,9 @@ extension ChatViewModel {
     // MARK: - Load Execution
 
     private func spawnDeferredLoadTask() {
+        // Reaching the loader consumes a prior user-unload intent: an explicit
+        // retry here (or a fresh nomination below) deliberately loads.
+        lifecycleManager.consumeUserUnloadIntent()
         // Controlled-workload UI tests drive their own load choreography.
         if MemoryDiagnosticRecorder.shared.controlledWorkloadEnabled {
             deferredLoadTask = Task { @MainActor [weak self] in

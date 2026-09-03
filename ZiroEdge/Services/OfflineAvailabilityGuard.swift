@@ -68,7 +68,13 @@ enum OfflineAvailabilityGuard {
     // MARK: - Public API
 
     // BATCH-03: mtime+size cache + off-main execution
-    static var lastSweepWasOffMain: Bool?
+    // Lock-protected: the async sweep writes this from a detached task while
+    // tests and legacy callers read it from arbitrary threads.
+    private static let sweepFlagLock = OSAllocatedUnfairLock<Bool?>(initialState: nil)
+    static var lastSweepWasOffMain: Bool? {
+        get { sweepFlagLock.withLock { $0 } }
+        set { sweepFlagLock.withLock { $0 = newValue } }
+    }
 
     private static func makeReport(extraModels: [AIModel]) -> OfflineAvailabilityReport {
         let all = ModelRegistry.allModels + extraModels

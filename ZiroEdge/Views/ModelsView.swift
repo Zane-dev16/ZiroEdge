@@ -24,6 +24,15 @@ struct ModelsView: View {
 
     @State private var scope: Scope
 
+    // Hit targets and icon gutters scale with Dynamic Type (like ChatView's
+    // composerControlSide) so glyphs never overflow their frames at
+    // accessibility sizes, while meeting the 44×44 hit-target minimum at the
+    // default size.
+    @ScaledMetric(relativeTo: .title3) private var cancelControlSide: CGFloat = 44
+    /// The import row's accent icon square (44×44 min per the spec's import
+    /// entry), scaling with Dynamic Type.
+    @ScaledMetric(relativeTo: .title3) private var importIconSide: CGFloat = 44
+
     init(viewModel: ModelsViewModel, onStartChatting: @escaping (AIModel) -> Void = { _ in }) {
         self.viewModel = viewModel
         self.onStartChatting = onStartChatting
@@ -50,6 +59,10 @@ struct ModelsView: View {
             }
         }
         .listStyle(.insetGrouped)
+        // Warm paper canvas with raised card rows (design spec §3.1).
+        .scrollContentBackground(.hidden)
+        .background(ZiroTheme.pageBackground.ignoresSafeArea())
+        .listRowBackground(ZiroTheme.raisedBackground)
         .navigationTitle("Models")
         .navigationBarTitleDisplayMode(.large)
         .sheet(isPresented: $viewModel.showingImporter) {
@@ -121,11 +134,11 @@ struct ModelsView: View {
         Section {
             VStack(alignment: .leading, spacing: ZiroTheme.Spacing.medium) {
                 Label("Runs entirely on your device", systemImage: "lock.shield")
-                    .font(.headline)
-                    .foregroundStyle(Color.accentColor)
+                    .font(ZiroType.rowTitle)
+                    .foregroundStyle(ZiroTheme.accent)
                 Text("Download one model to begin. Larger models can be more capable, while smaller models load faster and use less memory.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .font(ZiroType.supporting)
+                    .foregroundStyle(ZiroTheme.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(.vertical, ZiroTheme.Spacing.small)
@@ -136,18 +149,25 @@ struct ModelsView: View {
         Section {
             Button { viewModel.showingImporter = true } label: {
                 HStack(spacing: ZiroTheme.Spacing.medium) {
+                    // Import-entry icon in the spec's accent-tinted rounded
+                    // square (44×44 min, Radius.small), scaling with
+                    // Dynamic Type so the glyph never overflows.
                     Image(systemName: "square.and.arrow.down.fill")
                         .font(.title3)
-                        .foregroundStyle(Color.accentColor)
-                        .frame(width: 30)
+                        .foregroundStyle(ZiroTheme.accent)
+                        .frame(width: importIconSide, height: importIconSide)
+                        .background(
+                            ZiroTheme.accentContainer,
+                            in: RoundedRectangle(cornerRadius: ZiroTheme.Radius.small, style: .continuous)
+                        )
                         .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: ZiroTheme.Spacing.micro) {
                         Text("Import from Hugging Face")
-                            .font(.headline)
-                            .foregroundStyle(Color.accentColor)
+                            .font(ZiroType.rowTitle)
+                            .foregroundStyle(ZiroTheme.accent)
                         Text("Bring a compatible GGUF model onto this device.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .font(ZiroType.caption)
+                            .foregroundStyle(ZiroTheme.secondaryText)
                     }
                 }
                 .padding(.vertical, ZiroTheme.Spacing.xSmall)
@@ -207,10 +227,10 @@ struct ModelsView: View {
                 .foregroundStyle(ZiroTheme.positiveText)
                 .accessibilityHidden(true)
             Text("All curated models are installed")
-                .font(.headline)
+                .font(ZiroType.rowTitle)
             Text("Import a model from Hugging Face to add more.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .font(ZiroType.supporting)
+                .foregroundStyle(ZiroTheme.secondaryText)
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
@@ -234,9 +254,11 @@ struct ModelsView: View {
                 Button { viewModel.requestCancelDownload(for: model) } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.title3)
+                        .frame(width: cancelControlSide, height: cancelControlSide)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(ZiroTheme.secondaryText)
                 .accessibilityLabel("Cancel \(model.displayName) download")
             }
         }
@@ -267,33 +289,40 @@ private struct ModelRow: View {
     let subtitle: String
     let status: ModelDownloadStatus
 
+    // Icon gutter scales with Dynamic Type so the title3 glyph never
+    // overflows the column at accessibility sizes.
+    @ScaledMetric(relativeTo: .title3) private var iconColumnWidth: CGFloat = 30
+
     var body: some View {
         HStack(spacing: ZiroTheme.Spacing.medium) {
             Image(systemName: iconName)
                 .font(.title3)
-                .foregroundStyle(Color.accentColor)
+                .foregroundStyle(ZiroTheme.accent)
                 .symbolRenderingMode(.hierarchical)
-                .frame(width: 30)
+                .frame(width: iconColumnWidth)
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: ZiroTheme.Spacing.xSmall) {
                 HStack(spacing: ZiroTheme.Spacing.small) {
                     Text(model.displayName)
-                        .font(.headline)
+                        .font(ZiroType.rowTitle)
                     capabilityBadge
                 }
                 Text(subtitle)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .font(ZiroType.supporting)
+                    .foregroundStyle(ZiroTheme.secondaryText)
                     .lineLimit(2)
-                HStack(spacing: ZiroTheme.Spacing.small) {
-                    Text(model.runtimeEligibility.label)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(eligibilityTint)
-                    Text("\(model.formattedSize) · \(model.quantization)")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                }
+                // Single wrapping Text with styled runs: sibling Texts in an
+                // HStack truncate to fragments at accessibility sizes, and the
+                // safety-tinted runtime state must stay legible and spoken.
+                // The size/quantization tail is engineering data — technical
+                // (monospaced) voice per the type scale.
+                (Text(model.runtimeEligibility.label)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(eligibilityTint) +
+                 Text(" · \(model.formattedSize) · \(model.quantization)")
+                    .font(ZiroType.technical(.caption))
+                    .foregroundStyle(ZiroTheme.tertiaryText))
             }
 
             Spacer(minLength: ZiroTheme.Spacing.small)
@@ -308,7 +337,7 @@ private struct ModelRow: View {
     /// "available to download" — the visible orange Repair state is the row's
     /// most important information, so it is spoken plus a pointer to the fix.
     private var rowAccessibilityLabel: String {
-        var label = "\(model.displayName), \(subtitle), \(model.formattedSize), \(status.statusAccessibilityLabel(for: model))"
+        var label = "\(model.displayName), \(subtitle), \(model.runtimeEligibility.label), \(model.formattedSize), \(status.statusAccessibilityLabel(for: model))"
         if status.presentsAsRepairNeeded(for: model) {
             label += ". Open the model to repair its download."
         }
@@ -322,22 +351,12 @@ private struct ModelRow: View {
 
     @ViewBuilder
     private var capabilityBadge: some View {
+        // The one badge system: VISION is a purple data hue, PAIR INCOMPLETE
+        // a warning — both verified token pairs via ZiroBadge.
         if status.isVisionReady {
-            Text("VISION")
-                .font(.caption2.weight(.bold))
-                .padding(.horizontal, ZiroTheme.Spacing.badge).padding(.vertical, ZiroTheme.Spacing.micro)
-                .foregroundStyle(ZiroTheme.accentPurpleText)
-                .background(Color.purple.opacity(0.1), in: Capsule())
-                // Badge copy is a single unit — keep the capsule hugging one
-                // line instead of wrapping when the name row gets tight.
-                .fixedSize()
+            ZiroBadge(text: "VISION", tone: .purple)
         } else if model.modelType == .vision {
-            Text("PAIR INCOMPLETE")
-                .font(.caption2.weight(.bold))
-                .padding(.horizontal, ZiroTheme.Spacing.badge).padding(.vertical, ZiroTheme.Spacing.micro)
-                .foregroundStyle(ZiroTheme.warningText)
-                .background(Color.orange.opacity(0.1), in: Capsule())
-                .fixedSize()
+            ZiroBadge(text: "PAIR INCOMPLETE", tone: .warning)
         }
     }
 
@@ -347,7 +366,7 @@ private struct ModelRow: View {
         switch model.runtimeEligibility {
         case .validated: ZiroTheme.positiveText
         case .experimental: ZiroTheme.warningText
-        case .unavailable: .secondary
+        case .unavailable: ZiroTheme.secondaryText
         }
     }
 
@@ -358,10 +377,10 @@ private struct ModelRow: View {
     /// combined label already announces the percentage.
     private func downloadProgressIndicator(_ progress: Double, tint: Color) -> some View {
         HStack(spacing: ZiroTheme.Spacing.micro) {
-            DownloadProgressRing(progress: progress, tint: tint)
+            ZiroProgressRing(progress: progress, tint: tint)
             Text("\(Int((progress * 100).rounded()))%")
                 .font(.caption2.monospacedDigit())
-                .foregroundStyle(.secondary)
+                .foregroundStyle(ZiroTheme.secondaryText)
                 .accessibilityHidden(true)
         }
     }
@@ -370,24 +389,25 @@ private struct ModelRow: View {
     private var statusIndicator: some View {
         switch status.displayState {
         case .downloading(let progress), .resuming(let progress), .pausing(let progress):
-            downloadProgressIndicator(progress, tint: .accentColor)
+            downloadProgressIndicator(progress, tint: ZiroTheme.accent)
         case .paused(let progress):
-            downloadProgressIndicator(progress, tint: .secondary)
+            downloadProgressIndicator(progress, tint: ZiroTheme.secondaryText)
         case .verifying:
             VStack(spacing: ZiroTheme.Spacing.xSmall) {
                 ProgressView()
                 Text("Verifying")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .font(ZiroType.micro)
+                    .foregroundStyle(ZiroTheme.secondaryText)
             }
             .accessibilityHidden(true)
         case .failed:
+            // Hard failure → the danger token (raw .red fails AA for this size).
             Image(systemName: "exclamationmark.circle.fill")
-                .foregroundStyle(.red)
+                .foregroundStyle(ZiroTheme.dangerText)
                 .accessibilityLabel("Download failed")
         case .cancelled:
             Image(systemName: "xmark.circle")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(ZiroTheme.secondaryText)
                 .accessibilityLabel("Download cancelled")
         case .downloaded:
             Image(systemName: "checkmark.circle.fill")
@@ -396,37 +416,16 @@ private struct ModelRow: View {
         case .notDownloaded:
             if status.isRepairNeeded || ModelManagerService.isRepairNeeded(for: model) {
                 Text("Repair")
-                    .font(.caption.weight(.semibold))
+                    .font(ZiroType.caption.weight(.semibold))
                     .foregroundStyle(ZiroTheme.warningText)
                     .accessibilityLabel("Repair \(model.displayName)")
             } else {
                 Image(systemName: "arrow.down.circle")
                     .font(.title2)
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(ZiroTheme.accent)
                     .accessibilityHidden(true)
             }
         }
-    }
-}
-
-/// Compact circular progress indicator for in-flight downloads. Decorative:
-/// the percentage is rendered beside the ring (scaling text) and the row's
-/// combined accessibility label announces it.
-private struct DownloadProgressRing: View {
-    let progress: Double
-    var tint: Color = .accentColor
-
-    var body: some View {
-        ZStack {
-            Circle()
-                .stroke(.quaternary, style: StrokeStyle(lineWidth: 2.5))
-            Circle()
-                .trim(from: 0, to: max(0.02, progress))
-                .stroke(tint, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-                .rotationEffect(.degrees(-90))
-        }
-        .frame(width: 26, height: 26)
-        .accessibilityHidden(true)
     }
 }
 

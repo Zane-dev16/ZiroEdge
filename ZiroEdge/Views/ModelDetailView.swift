@@ -27,6 +27,10 @@ struct ModelDetailView: View {
             runtimeSection
             manageSection
         }
+        // Warm paper canvas with raised card rows (design spec §3.1).
+        .scrollContentBackground(.hidden)
+        .background(ZiroTheme.pageBackground.ignoresSafeArea())
+        .listRowBackground(ZiroTheme.raisedBackground)
         .navigationTitle(model.displayName)
         .navigationBarTitleDisplayMode(.inline)
         .alert("Load Safety", isPresented: $viewModel.showingSafetyResetResult) {
@@ -55,23 +59,34 @@ struct ModelDetailView: View {
                 HStack(spacing: ZiroTheme.Spacing.medium) {
                     Image(systemName: modelIconName)
                         .font(.largeTitle)
-                        .foregroundStyle(Color.accentColor)
+                        .foregroundStyle(ZiroTheme.accent)
                         .symbolRenderingMode(.hierarchical)
                         .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: ZiroTheme.Spacing.xSmall) {
                         Text(model.displayName)
-                            .font(.title3.weight(.semibold))
+                            .font(ZiroType.heading)
+                        // Engineering data in the technical voice.
                         Text("\(model.formattedSize) · \(model.quantization)")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                            .font(ZiroType.technical(.subheadline))
+                            .foregroundStyle(ZiroTheme.secondaryText)
                     }
                 }
                 Text(model.description)
-                    .font(.body)
-                    .foregroundStyle(.secondary)
+                    .font(ZiroType.body)
+                    .foregroundStyle(ZiroTheme.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(.vertical, ZiroTheme.Spacing.small)
+        }
+    }
+
+    /// Token tint for the runtime-eligibility voice, shared by the Overview
+    /// runtime strip. Semantic tokens keep caption-size text AA in both modes.
+    private func eligibilityTint(_ eligibility: RuntimeEligibility) -> Color {
+        switch eligibility {
+        case .validated: ZiroTheme.positiveText
+        case .experimental: ZiroTheme.warningText
+        case .unavailable: ZiroTheme.secondaryText
         }
     }
 
@@ -129,11 +144,12 @@ struct ModelDetailView: View {
             VStack(alignment: .leading, spacing: ZiroTheme.Spacing.small) {
                 HStack {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(ZiroTheme.warningText)
+                        .foregroundStyle(ZiroTheme.dangerText)
                     Text("Failed: \(error.localizedDescription)")
-                        .font(.caption)
-                        .foregroundStyle(ZiroTheme.warningText)
+                        .font(ZiroType.caption)
+                        .foregroundStyle(ZiroTheme.dangerText)
                 }
+                .announcingOnAppear("Download failed. \(error.localizedDescription)")
                 partialOutcomeSummary(for: status)
                 HStack(spacing: ZiroTheme.Spacing.medium) {
                     retryButton
@@ -143,7 +159,7 @@ struct ModelDetailView: View {
                         } label: {
                             Label("Retry Only Invalid", systemImage: "arrow.trianglehead.clockwise")
                         }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(ZiroSecondaryButtonStyle())
                     }
                 }
             }
@@ -151,7 +167,8 @@ struct ModelDetailView: View {
         case .cancelled:
             VStack(alignment: .leading, spacing: ZiroTheme.Spacing.small) {
                 Text("Cancelled")
-                    .foregroundStyle(.secondary)
+                    .font(ZiroType.body)
+                    .foregroundStyle(ZiroTheme.secondaryText)
                 downloadButton
             }
         }
@@ -166,8 +183,8 @@ struct ModelDetailView: View {
             Label("Installed", systemImage: "checkmark.circle.fill")
                 .foregroundStyle(ZiroTheme.positiveText)
             Text(status.isVisionReady ? "Text + Image Processing" : "Text Only")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(ZiroType.caption)
+                .foregroundStyle(ZiroTheme.secondaryText)
 
             Button { onStartChatting(model) } label: {
                 Label("Start Chatting", systemImage: "bubble.left.and.text.bubble.right")
@@ -183,7 +200,7 @@ struct ModelDetailView: View {
                         systemImage: "photo.badge.plus"
                     )
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(ZiroSecondaryButtonStyle())
             }
         }
     }
@@ -197,7 +214,6 @@ struct ModelDetailView: View {
                     "Text Only · \(StorageByteFormatter.string(fromByteCount: model.baseFileSizeBytes))",
                     systemImage: "text.bubble"
                 )
-                .frame(maxWidth: .infinity)
             }
             .buttonStyle(ZiroPrimaryButtonStyle())
 
@@ -205,12 +221,11 @@ struct ModelDetailView: View {
                 viewModel.initiateDownload(for: model, includeOptionalProjector: true)
             } label: {
                 Label("Text + Image Processing · \(model.formattedSize)", systemImage: "photo")
-                    .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(ZiroSecondaryButtonStyle())
             Text("Both choices reuse any verified E2B files already on this device.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(ZiroType.caption)
+                .foregroundStyle(ZiroTheme.secondaryText)
         }
     }
 
@@ -219,9 +234,6 @@ struct ModelDetailView: View {
             viewModel.initiateDownload(for: model)
         } label: {
             Label("Download \(model.formattedSize)", systemImage: "arrow.down.circle.fill")
-                .font(.body.weight(.medium))
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, ZiroTheme.Spacing.xSmall)
         }
         .buttonStyle(ZiroPrimaryButtonStyle())
         .accessibilityHint("Downloads the model for offline use")
@@ -247,36 +259,36 @@ struct ModelDetailView: View {
                 switch outcomes[idx] {
                 case .baseDownloaded:
                     Label("Base model verified", systemImage: "checkmark.circle.fill")
-                        .font(.caption)
+                        .font(ZiroType.caption)
                         .foregroundStyle(ZiroTheme.positiveText)
                 case .baseFailed(let error):
                     Label("Base: \(error.localizedDescription)", systemImage: "xmark.circle.fill")
-                        .font(.caption)
-                        .foregroundStyle(ZiroTheme.warningText)
+                        .font(ZiroType.caption)
+                        .foregroundStyle(ZiroTheme.dangerText)
                 case .baseDownloading(let progress):
                     Label("Base downloading (\(Int(progress * 100))%)", systemImage: "arrow.down.circle")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(ZiroType.caption)
+                        .foregroundStyle(ZiroTheme.secondaryText)
                 case .basePaused(let progress):
                     Label("Base paused (\(Int(progress * 100))%)", systemImage: "pause.circle")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(ZiroType.caption)
+                        .foregroundStyle(ZiroTheme.secondaryText)
                 case .projectorDownloaded:
                     Label("Projector verified", systemImage: "checkmark.circle.fill")
-                        .font(.caption)
+                        .font(ZiroType.caption)
                         .foregroundStyle(ZiroTheme.positiveText)
                 case .projectorFailed(let error):
                     Label("Projector: \(error.localizedDescription)", systemImage: "xmark.circle.fill")
-                        .font(.caption)
-                        .foregroundStyle(ZiroTheme.warningText)
+                        .font(ZiroType.caption)
+                        .foregroundStyle(ZiroTheme.dangerText)
                 case .projectorDownloading(let progress):
                     Label("Projector downloading (\(Int(progress * 100))%)", systemImage: "arrow.down.circle")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(ZiroType.caption)
+                        .foregroundStyle(ZiroTheme.secondaryText)
                 case .projectorPaused(let progress):
                     Label("Projector paused (\(Int(progress * 100))%)", systemImage: "pause.circle")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(ZiroType.caption)
+                        .foregroundStyle(ZiroTheme.secondaryText)
                     }
                 }
             }
@@ -289,7 +301,7 @@ struct ModelDetailView: View {
         } label: {
             Label("Retry Download", systemImage: "arrow.clockwise")
         }
-        .buttonStyle(.bordered)
+        .buttonStyle(ZiroSecondaryButtonStyle())
     }
 
     @ViewBuilder
@@ -298,12 +310,12 @@ struct ModelDetailView: View {
         let required = model.formattedSize
         if !viewModel.downloadManager.hasSufficientStorage(for: model) {
             Label("Low storage: \(available) available, \(required) required", systemImage: "exclamationmark.triangle")
-                .font(.caption)
+                .font(ZiroType.caption)
                 .foregroundStyle(ZiroTheme.warningText)
         } else {
             Label("Storage: \(available) available", systemImage: "internaldrive")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(ZiroType.caption)
+                .foregroundStyle(ZiroTheme.secondaryText)
         }
     }
 
@@ -311,10 +323,14 @@ struct ModelDetailView: View {
 
     private var runtimeSection: some View {
         Section("Runtime Status") {
-            LabeledContent("Mode", value: model.runtimeEligibility.label)
+            LabeledContent("Mode") {
+                Text(model.runtimeEligibility.label)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(eligibilityTint(model.runtimeEligibility))
+            }
             Text(model.runtimeEligibilityExplanation)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .font(ZiroType.supporting)
+                .foregroundStyle(ZiroTheme.secondaryText)
         }
     }
 
@@ -379,6 +395,9 @@ private struct GenerationSettingsPage: View {
                 }
             }
         }
+        .scrollContentBackground(.hidden)
+        .background(ZiroTheme.pageBackground.ignoresSafeArea())
+        .listRowBackground(ZiroTheme.raisedBackground)
         .navigationTitle("Generation Settings")
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showingUpdateFlow) {
@@ -413,7 +432,7 @@ private struct SafetyRuntimePage: View {
                         "Load-safety monitoring is active for this model.",
                         systemImage: "checkmark.shield"
                     )
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(ZiroTheme.secondaryText)
                 }
             }
 
@@ -439,6 +458,9 @@ private struct SafetyRuntimePage: View {
                 Text("These parameters are controlled by ZiroEdge for safety and cannot be overridden.")
             }
         }
+        .scrollContentBackground(.hidden)
+        .background(ZiroTheme.pageBackground.ignoresSafeArea())
+        .listRowBackground(ZiroTheme.raisedBackground)
         .navigationTitle("Safety & Runtime")
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -446,9 +468,10 @@ private struct SafetyRuntimePage: View {
     private var lockedParameters: some View {
         VStack(alignment: .leading, spacing: ZiroTheme.Spacing.xSmall) {
             Text("Non-adjustable runtime parameters:")
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.secondary)
+                .font(ZiroType.caption.weight(.medium))
+                .foregroundStyle(ZiroTheme.secondaryText)
 
+            // Locked values are engineering data — technical voice.
             lockedRow("Batch size", value: "\(model.config.batchSize)")
             lockedRow("Micro-batch", value: "\(model.config.microBatchSize)")
             lockedRow("Threads", value: "\(model.config.threadCount)")
@@ -461,15 +484,15 @@ private struct SafetyRuntimePage: View {
     private func lockedRow(_ label: String, value: String) -> some View {
         HStack {
             Text(label)
-                .font(.caption)
-                .foregroundStyle(.tertiary)
+                .font(ZiroType.caption)
+                .foregroundStyle(ZiroTheme.tertiaryText)
             Spacer()
             Text(value)
-                .font(.caption.monospaced())
-                .foregroundStyle(.tertiary)
+                .font(ZiroType.technical(.caption))
+                .foregroundStyle(ZiroTheme.tertiaryText)
             Image(systemName: "lock.fill")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
+                .font(ZiroType.micro)
+                .foregroundStyle(ZiroTheme.tertiaryText)
         }
     }
 }
@@ -488,8 +511,15 @@ private struct StorageProvenancePage: View {
             transferSection
 
             Section("Model Info") {
-                LabeledContent("Size", value: model.formattedSize)
-                LabeledContent("Quantization", value: model.quantization)
+                // Sizes and quantization are engineering data — technical voice.
+                LabeledContent("Size") {
+                    Text(model.formattedSize)
+                        .font(ZiroType.technical(.footnote))
+                }
+                LabeledContent("Quantization") {
+                    Text(model.quantization)
+                        .font(ZiroType.technical(.footnote))
+                }
                 LabeledContent("Type", value: modelTypeLabel)
                 LabeledContent("License", value: model.license.name)
                 if let source = model.huggingFaceProvenance {
@@ -499,12 +529,18 @@ private struct StorageProvenancePage: View {
 
             if viewModel.isDownloaded(model) {
                 Section("On This Device") {
-                    LabeledContent("Storage Used", value: viewModel.diskUsage(for: model))
+                    LabeledContent("Storage Used") {
+                        Text(viewModel.diskUsage(for: model))
+                            .font(ZiroType.technical(.footnote))
+                    }
                 }
             }
 
             destructiveSection
         }
+        .scrollContentBackground(.hidden)
+        .background(ZiroTheme.pageBackground.ignoresSafeArea())
+        .listRowBackground(ZiroTheme.raisedBackground)
         .navigationTitle("Storage & Provenance")
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -537,7 +573,21 @@ private struct StorageProvenancePage: View {
                 HStack {
                     ProgressView()
                     Text("Verifying...")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(ZiroTheme.secondaryText)
+                }
+            }
+        case .failed(let error):
+            Section("Download") {
+                VStack(alignment: .leading, spacing: ZiroTheme.Spacing.small) {
+                    Label("Failed: \(error.localizedDescription)", systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(ZiroTheme.dangerText)
+                        .announcingOnAppear("Download failed. \(error.localizedDescription)")
+                    Button {
+                        viewModel.initiateDownload(for: model)
+                    } label: {
+                        Label("Retry Download", systemImage: "arrow.clockwise")
+                    }
+                    .buttonStyle(ZiroSecondaryButtonStyle())
                 }
             }
         default:
@@ -551,8 +601,8 @@ private struct StorageProvenancePage: View {
             VStack(alignment: .leading) {
                 Text(label)
                 Text("\(Int(progress * 100))% complete")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(ZiroType.technical(.caption))
+                    .foregroundStyle(ZiroTheme.secondaryText)
             }
         }
     }
@@ -563,6 +613,7 @@ private struct StorageProvenancePage: View {
                 Text("Paused")
             } currentValueLabel: {
                 Text("\(Int(progress * 100))%")
+                    .font(ZiroType.technical(.caption))
             }
             .accessibilityValue("\(Int(progress * 100)) percent complete")
 
@@ -572,14 +623,14 @@ private struct StorageProvenancePage: View {
                 } label: {
                     Label("Resume Download", systemImage: "play.fill")
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(ZiroPrimaryButtonStyle())
 
                 Button(role: .destructive) {
                     viewModel.requestCancelDownload(for: model)
                 } label: {
                     Label("Cancel", systemImage: "xmark.circle.fill")
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(ZiroDestructiveButtonStyle())
             }
         }
     }
@@ -590,6 +641,7 @@ private struct StorageProvenancePage: View {
                 Text("Downloading…")
             } currentValueLabel: {
                 Text("\(Int(progress * 100))%")
+                    .font(ZiroType.technical(.caption))
             }
             .accessibilityLabel("Downloading \(model.displayName)")
             .accessibilityValue("\(Int(progress * 100)) percent complete")
@@ -600,16 +652,14 @@ private struct StorageProvenancePage: View {
                 } label: {
                     Label("Pause", systemImage: "pause.fill")
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+                .buttonStyle(ZiroSecondaryButtonStyle())
 
                 Button(role: .destructive) {
                     viewModel.requestCancelDownload(for: model)
                 } label: {
                     Label("Cancel", systemImage: "xmark.circle.fill")
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+                .buttonStyle(ZiroDestructiveButtonStyle())
             }
         }
     }
@@ -647,346 +697,30 @@ private struct StorageProvenancePage: View {
     }
 }
 
-// MARK: - Update Flow Sheet
-
-/// Staged-update flow for imported models, extracted from the old settings
-/// panel. Check → review (variant, vision pair, storage, RAM, license) →
-/// stage → finish/verify, driven entirely by the unchanged
-/// ImportedModelUpdateCoordinator API.
-private struct UpdateFlowSheet: View {
-    let model: AIModel
-    @ObservedObject var coordinator: ImportedModelUpdateCoordinator
-
-    @Environment(\.dismiss) private var dismiss
-
-    @State private var isChecking = false
-    @State private var checkFailed = false
-    @State private var upToDate = false
-    @State private var availableUpdate: HFRepositoryReview?
-    @State private var statusMessage: String?
-
-    @State private var selectedBase: HFArtifact?
-    @State private var updateLicenseConfirmed = false
-    @State private var updatePairConfirmed = false
-    @State private var updateRAMRiskAccepted = false
-    @State private var showsCancelStagedConfirmation = false
-
-    var body: some View {
-        NavigationStack {
-            List {
-                if coordinator.hasStagedUpdate(modelID: model.id) {
-                    stagedSection
-                } else if isChecking {
-                    Section {
-                        HStack(spacing: ZiroTheme.Spacing.medium) {
-                            ProgressView()
-                            Text("Checking for updates…")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                } else if let review = availableUpdate {
-                    reviewSections(review)
-                } else {
-                    outcomeSection
-                }
-
-                if let statusMessage {
-                    Section {
-                        Text(statusMessage)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-            .navigationTitle("Check for Update")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                }
-            }
-            .task { await runCheckIfIdle() }
-        }
-    }
-
-    // MARK: Check
-
-    @MainActor
-    private func runCheckIfIdle() async {
-        guard !coordinator.hasStagedUpdate(modelID: model.id) else { return }
-        isChecking = true
-        checkFailed = false
-        upToDate = false
-        availableUpdate = nil
-        // Every check can resolve a different revision/artifact set (this is
-        // the only place availableUpdate is assigned, so resetting here also
-        // covers any revision change). The prior revision's license
-        // acceptance, vision-pair confirmation, and RAM-risk acknowledgment
-        // were given for that earlier artifact set; carrying them over would
-        // let canStageUpdate pass without the user reviewing the new license
-        // or risk (same leak class the wizard's inspect() reset fixed).
-        selectedBase = nil
-        updateLicenseConfirmed = false
-        updatePairConfirmed = false
-        updateRAMRiskAccepted = false
-        statusMessage = nil
-        do {
-            switch try await coordinator.checkForUpdate(model: model) {
-            case .upToDate:
-                upToDate = true
-            case .review(let review):
-                availableUpdate = review
-            }
-        } catch {
-            checkFailed = true
-            statusMessage = error.localizedDescription
-        }
-        isChecking = false
-    }
-
-    /// Up-to-date or failed initial check; offers a manual re-check.
-    private var outcomeSection: some View {
-        Section {
-            if upToDate {
-                Label("This pinned revision is up to date.", systemImage: "checkmark.seal.fill")
-                    .foregroundStyle(ZiroTheme.positiveText)
-            } else if checkFailed {
-                Label("Could not check for updates.", systemImage: "wifi.exclamationmark")
-                    .foregroundStyle(ZiroTheme.warningText)
-            }
-            Button("Check Again") {
-                Task { await runCheckIfIdle() }
-            }
-        }
-    }
-
-    // MARK: Review
-
-    @ViewBuilder
-    private func reviewSections(_ review: HFRepositoryReview) -> some View {
-        Section("Available Update") {
-            LabeledContent(
-                "Revision",
-                value: String(review.revision.prefix(12))
-            )
-            LabeledContent("License", value: review.licenseName)
-        }
-
-        Section("Choose Artifact") {
-            VariantPickerView(
-                candidates: review.baseArtifacts,
-                selection: Binding(
-                    get: { selectedBase },
-                    set: {
-                        selectedBase = $0
-                        updatePairConfirmed = false
-                    }
-                ),
-                capabilityEstimate: {
-                    coordinator.capabilityEstimate(
-                        for: $0,
-                        candidates: review.baseArtifacts
-                    )
-                }
-            )
-        }
-
-        if model.modelType == .vision, let selectedBase {
-            visionPairSection(base: selectedBase, review: review)
-        }
-
-        if let selectedBase {
-            Section("Storage") {
-                PreflightCard(
-                    storage: coordinator.storagePreflight(
-                        base: selectedBase,
-                        projector: updateProjector(for: selectedBase, review: review)
-                    )
-                )
-            }
-
-            Section("Memory") {
-                RAMAssessmentCard(
-                    assessment: coordinator.ramAssessment(
-                        base: selectedBase,
-                        projector: updateProjector(for: selectedBase, review: review)
-                    ),
-                    riskAccepted: $updateRAMRiskAccepted
-                )
-            }
-        }
-
-        Section("License") {
-            LicenseRow(licenseURL: review.licenseURL, confirmed: $updateLicenseConfirmed)
-        }
-
-        Section {
-            Button("Download and Stage Update") {
-                do {
-                    try stageUpdate(review)
-                    statusMessage = "The update is downloading beside the installed revision."
-                } catch {
-                    statusMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                }
-            }
-            .disabled(!canStageUpdate(review: review))
-            // Gate explanation, mirroring the import wizard's
-            // ImportWizardContinueButton hint: five silent gates (variant,
-            // license, vision-pair confirmation, storage, RAM risk) would
-            // otherwise leave the disabled button unexplained.
-            if !canStageUpdate(review: review), let hint = stageGateHint(review: review) {
-                Text(hint)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-    }
-
-    /// The first unmet staging gate, in the order canStageUpdate evaluates
-    /// them; nil when staging is allowed.
-    private func stageGateHint(review: HFRepositoryReview) -> String? {
-        guard let base = selectedBase else { return "Choose a base artifact to continue." }
-        if !updateLicenseConfirmed { return "Accept the license to continue." }
-        let projector = updateProjector(for: base, review: review)
-        if model.modelType == .vision {
-            if projector == nil { return "No unambiguous vision pair is available for this artifact — choose another." }
-            if !updatePairConfirmed { return "Confirm the vision pairing to continue." }
-        }
-        if !coordinator.storagePreflight(base: base, projector: projector).canProceed {
-            return "Free up storage — the download cannot start."
-        }
-        let ram = coordinator.ramAssessment(base: base, projector: projector)
-        if ram.classification == .risky, !updateRAMRiskAccepted {
-            return "Acknowledge the memory risk to continue."
-        }
-        return nil
-    }
-
-    @ViewBuilder
-    private func visionPairSection(base: HFArtifact, review: HFRepositoryReview) -> some View {
-        Section("Vision Pair") {
-            if let pair = VisionPairResolver().bestPair(for: base, in: review) {
-                Text("Projector: \(pair.projector.filename) · \(pair.confidence.label)")
-                    .font(.caption)
-                Toggle("I confirm this updated vision pair", isOn: $updatePairConfirmed)
-            } else {
-                Label("No unambiguous high-confidence projector pair is available.", systemImage: "eye.slash")
-                    .font(.caption)
-                    .foregroundStyle(ZiroTheme.warningText)
-            }
-        }
-    }
-
-    // MARK: Staged
-
-    private var stagedSection: some View {
-        Section("Staged Update") {
-            Button("Finish Verified Update") {
-                Task {
-                    do {
-                        if try await coordinator.promoteIfVerified(modelID: model.id) != nil {
-                            statusMessage = "Update installed. Return to Models to open the new revision."
-                        } else {
-                            statusMessage = "The staged artifacts are still downloading or have not passed verification."
-                        }
-                    } catch {
-                        statusMessage = error.localizedDescription
-                    }
-                }
-            }
-
-            // r4 MEDIUM: discarding deletes staged download data (a later
-            // update re-downloads it), so the destructive action confirms
-            // first — mirroring ModelsView's cancel-download dialog.
-            Button("Cancel Staged Update", role: .destructive) {
-                showsCancelStagedConfirmation = true
-            }
-            .confirmationDialog(
-                "Discard Staged Update",
-                isPresented: $showsCancelStagedConfirmation,
-                titleVisibility: .visible
-            ) {
-                Button("Discard Staged Update", role: .destructive) {
-                    coordinator.discardStagedUpdate(modelID: model.id)
-                    statusMessage = "The staged update was discarded. The installed revision is unchanged."
-                }
-                Button("Keep Staged Update", role: .cancel) {}
-            } message: {
-                Text("Discarding removes the staged download data. The installed revision stays unchanged; checking for the update again would re-download it.")
-            }
-        }
-    }
-
-    // MARK: Staging math (preserved from the pre-redesign settings panel)
-
-    private func updateProjector(for base: HFArtifact, review: HFRepositoryReview) -> HFArtifact? {
-        guard model.modelType == .vision else { return nil }
-        return VisionPairResolver().bestPair(for: base, in: review)?.projector
-    }
-
-    private func canStageUpdate(review: HFRepositoryReview) -> Bool {
-        guard updateLicenseConfirmed, let base = selectedBase else { return false }
-        let projector = updateProjector(for: base, review: review)
-        guard model.modelType != .vision || (updatePairConfirmed && projector != nil) else { return false }
-        let storage = coordinator.storagePreflight(base: base, projector: projector)
-        let ram = coordinator.ramAssessment(base: base, projector: projector)
-        return storage.canProceed && (ram.classification == .likelyFits || updateRAMRiskAccepted)
-    }
-
-    private func stageUpdate(_ review: HFRepositoryReview) throws {
-        guard canStageUpdate(review: review), let base = selectedBase else {
-            throw HFInspectionError.noCompatibleArtifact
-        }
-
-        if model.modelType == .vision {
-            guard let candidate = VisionPairResolver().bestPair(for: base, in: review) else {
-                throw review.projectorArtifacts.isEmpty
-                    ? HFInspectionError.projectorMissing
-                    : HFInspectionError.projectorAmbiguous
-            }
-            switch try coordinator.stagePairedUpdate(
-                existing: model,
-                review: review,
-                candidate: candidate
-            ) {
-            case .staging, .promoted:
-                return
-            case .rejected(let message):
-                throw ImportedModelUpdateError.rejected(message)
-            }
-        } else {
-            _ = try coordinator.stageUpdate(
-                existing: model,
-                review: review,
-                base: base,
-                projector: nil
-            )
-        }
-    }
-}
-
-private enum ImportedModelUpdateError: LocalizedError {
-    case rejected(String)
-
-    var errorDescription: String? {
-        switch self {
-        case .rejected(let message): message
-        }
-    }
-}
-
 // MARK: - Provenance Rows
 
 private struct ImportedProvenanceRows: View {
     let source: HuggingFaceProvenance
 
     var body: some View {
-        LabeledContent("Repository", value: source.repositoryID)
-        LabeledContent("Pinned Revision", value: String(source.revision.prefix(12)))
-        LabeledContent("Artifact", value: source.baseFilename)
+        // Provenance values are pinned engineering identifiers — technical voice.
+        LabeledContent("Repository") {
+            Text(source.repositoryID)
+                .font(ZiroType.technical(.footnote))
+        }
+        LabeledContent("Pinned Revision") {
+            Text(String(source.revision.prefix(12)))
+                .font(ZiroType.technical(.footnote))
+        }
+        LabeledContent("Artifact") {
+            Text(source.baseFilename)
+                .font(ZiroType.technical(.footnote))
+        }
         if let projector = source.projectorFilename {
-            LabeledContent("Projector", value: projector)
+            LabeledContent("Projector") {
+                Text(projector)
+                    .font(ZiroType.technical(.footnote))
+            }
         }
     }
 }

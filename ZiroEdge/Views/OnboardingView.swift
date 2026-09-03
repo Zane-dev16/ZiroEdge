@@ -6,17 +6,23 @@ import SwiftUI
 struct OnboardingView: View {
     @Binding var isPresented: Bool
     @State private var currentPage = 0
+    // Decorative sizes scale with Dynamic Type via @ScaledMetric (spec rule 5)
+    // — the hero follows ZiroEmptyState's uncapped mark pattern, so it grows
+    // monotonically at accessibility sizes instead of clamping.
     @ScaledMetric(relativeTo: .largeTitle) private var heroIconSize: CGFloat = 72
+    @ScaledMetric(relativeTo: .body) private var topBarMarkSize: CGFloat = 48
+    // Hit-target floor for the quiet "Skip" dismissal; scales like the
+    // composer controls so the glyph/text never overflows its frame.
+    @ScaledMetric(relativeTo: .body) private var skipControlSide: CGFloat = 44
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private struct Page {
         let symbol: String
-        /// Icon tint — large decorative glyphs are exempt from the 4.5:1
-        /// text contrast floor.
+        /// Hero glyph tint. Large decorative glyphs are exempt from the
+        /// 4.5:1 text contrast floor, but they still resolve through the
+        /// verified tone tokens (no raw system hues).
         let color: Color
-        /// Eyebrow caption tint. Caption-bold text must meet 4.5:1 on the
-        /// page background, so this uses a darkened token instead of `color`
-        /// (r5 contrast sweep: raw green/blue/purple all fail on white).
+        /// Eyebrow caption tint — the verified text tokens (spec §8.5.2).
         let eyebrowColor: Color
         let eyebrow: String
         let title: String
@@ -25,17 +31,17 @@ struct OnboardingView: View {
 
     private let pages = [
         Page(
-            symbol: "lock.shield.fill", color: .blue, eyebrowColor: ZiroTheme.infoText,
+            symbol: "lock.shield.fill", color: ZiroTheme.infoText, eyebrowColor: ZiroTheme.infoText,
             eyebrow: "PRIVATE BY DESIGN", title: "Your AI stays yours",
             description: "Messages, images, and model responses are processed locally. Your conversations never leave this device."
         ),
         Page(
-            symbol: "arrow.down.circle.fill", color: .green, eyebrowColor: ZiroTheme.positiveText,
+            symbol: "arrow.down.circle.fill", color: ZiroTheme.positiveText, eyebrowColor: ZiroTheme.positiveText,
             eyebrow: "YOU CHOOSE THE MODEL", title: "Download once. Use anywhere.",
             description: "Pick a model that fits your device. After downloading, chat works without an internet connection."
         ),
         Page(
-            symbol: "bubble.left.and.bubble.right.fill", color: .purple, eyebrowColor: ZiroTheme.accentPurpleText,
+            symbol: "bubble.left.and.bubble.right.fill", color: ZiroTheme.accentPurpleText, eyebrowColor: ZiroTheme.accentPurpleText,
             eyebrow: "READY WHEN YOU ARE", title: "A focused place to think",
             description: "Start conversations, attach images with vision models, and keep a private history on your device."
         )
@@ -43,14 +49,21 @@ struct OnboardingView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
+            HStack(spacing: ZiroTheme.Spacing.small) {
+                ZiroBrandMark(size: topBarMarkSize)
                 Text("ZIROEDGE")
                     .font(.caption.weight(.bold))
                     .tracking(1.4)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(ZiroTheme.secondaryText)
                 Spacer()
                 Button("Skip", action: completeOnboarding)
-                    .foregroundStyle(.secondary)
+                    .font(ZiroType.footnote.weight(.semibold))
+                    .foregroundStyle(ZiroTheme.secondaryText)
+                    // The app's quiet dismissal must still meet the 44×44pt
+                    // hit-target floor; the scaled frame grows with Dynamic
+                    // Type so the label never overflows it.
+                    .frame(minWidth: skipControlSide, minHeight: skipControlSide)
+                    .contentShape(Rectangle())
                     .accessibilityHint("Closes introduction")
             }
             .padding(.horizontal, ZiroTheme.Spacing.xLarge)
@@ -61,7 +74,7 @@ struct OnboardingView: View {
                     ScrollView {
                         VStack(spacing: ZiroTheme.Spacing.xLarge) {
                             Image(systemName: page.symbol)
-                                .font(.system(size: min(heroIconSize, 120), weight: .medium))
+                                .font(.system(size: heroIconSize, weight: .medium))
                                 .foregroundStyle(page.color)
                                 .symbolRenderingMode(.hierarchical)
                                 .accessibilityHidden(true)
@@ -72,15 +85,16 @@ struct OnboardingView: View {
                                     .tracking(1.1)
                                     .foregroundStyle(page.eyebrowColor)
                                 Text(page.title)
-                                    .font(.largeTitle.bold())
+                                    .font(ZiroType.display)
+                                    .foregroundStyle(ZiroTheme.primaryText)
                                     .multilineTextAlignment(.center)
                                 Text(page.description)
-                                    .font(.body)
-                                    .foregroundStyle(.secondary)
+                                    .font(ZiroType.body)
+                                    .foregroundStyle(ZiroTheme.secondaryText)
                                     .multilineTextAlignment(.center)
                                     .fixedSize(horizontal: false, vertical: true)
                             }
-                            .frame(maxWidth: 520)
+                            .frame(maxWidth: ZiroMeasure.standard)
                         }
                         .padding(.horizontal, ZiroTheme.Spacing.xLarge)
                         .padding(.vertical, ZiroTheme.Spacing.xxLarge)
@@ -96,18 +110,13 @@ struct OnboardingView: View {
 
             HStack(spacing: ZiroTheme.Spacing.medium) {
                 if currentPage > 0 {
-                    Button("Back") {
-                        if reduceMotion { currentPage -= 1 }
-                        else { withAnimation(.snappy) { currentPage -= 1 } }
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.large)
+                    Button("Back") { stepPage(-1) }
+                        .buttonStyle(ZiroSecondaryButtonStyle())
                 }
 
                 Button(currentPage < pages.count - 1 ? "Continue" : "Get Started") {
                     if currentPage < pages.count - 1 {
-                        if reduceMotion { currentPage += 1 }
-                        else { withAnimation(.snappy) { currentPage += 1 } }
+                        stepPage(1)
                     } else {
                         completeOnboarding()
                     }
@@ -119,6 +128,17 @@ struct OnboardingView: View {
         }
         .background(ZiroTheme.pageBackground)
         .interactiveDismissDisabled()
+    }
+
+    /// Page navigation shares one motion treatment: `ZiroMotion.appear` for
+    /// the transition, dropped entirely under Reduce Motion (the page still
+    /// changes, just without animation).
+    private func stepPage(_ direction: Int) {
+        if reduceMotion {
+            currentPage += direction
+        } else {
+            withAnimation(ZiroMotion.appear) { currentPage += direction }
+        }
     }
 
     private func completeOnboarding() {

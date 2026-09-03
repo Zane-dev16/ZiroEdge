@@ -117,6 +117,8 @@ extension DownloadManager {
             removeDurableState(for: task, discardStaging: true)
         }
         activeTasks.removeValue(forKey: key)
+        clearTransferProgress(key)
+        stopStuckWatchdogIfIdle()
         logger.info("Cancelled download: \(key, privacy: .public) discardStaging=\(discardStaging)")
     }
 }

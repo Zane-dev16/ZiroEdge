@@ -2,8 +2,9 @@
 // ZiroEdgeTests
 //
 // Comprehensive device lifecycle QA tests for model downloads.
-// Covers fresh install, legacy upgrade, network conditions, background/lifecycle,
-// storage constraints, and repeated pause/resume for text and paired vision models.
+// Covers fresh install, legacy upgrade, background/lifecycle, and repeated
+// pause/resume for text and paired vision models. Network-condition and
+// storage-constraint suites live in their own files.
 //
 // Issue: DOWNLOAD-DEVICE-QA (#16)
 // Dependencies: #7-#15 (all implemented in the codebase)
@@ -193,140 +194,6 @@ final class FreshInstallLegacyUpgradeTests: XCTestCase {
     }
 }
 
-// MARK: - Network Condition Tests
-
-/// Tests that exercise network conditions: Wi-Fi, cellular, handoff,
-/// connection loss, and Airplane Mode behavior.
-@MainActor
-final class NetworkConditionTests: XCTestCase {
-
-    var downloadManager: DownloadManager!
-
-    override func setUp() {
-        super.setUp()
-        downloadManager = DownloadManager()
-    }
-
-    override func tearDown() {
-        downloadManager = nil
-        super.tearDown()
-    }
-
-    // MARK: Network Monitor Behavior
-
-    func testNetworkMonitorInitializesWithKnownState() {
-        let monitor = NetworkMonitor(startMonitoring: false)
-        // Without live monitoring, defaults must be safe.
-        XCTAssertTrue(monitor.isConnected, "Default must assume connected")
-        XCTAssertFalse(monitor.isOnCellular, "Default must assume not on cellular")
-    }
-
-    func testNetworkMonitorPublishesStateChanges() {
-        let monitor = NetworkMonitor()
-        // Monitor publishes to @Published properties — verify they exist.
-        XCTAssertNotNil(monitor.isConnected)
-        XCTAssertNotNil(monitor.isOnCellular)
-    }
-
-    // MARK: Airplane Mode / Connection Loss
-
-    func testDownloadRefusesInsufficientStorageEvenWhenOffline() {
-        let hugeModel = AIModel(
-            id: "huge-offline",
-            displayName: "Huge Offline",
-            description: "Test",
-            modelType: .text,
-            baseURL: URL(string: "https://example.com/huge.gguf")!,
-            mmprojURL: nil,
-            baseFileSizeBytes: Int64.max,
-            mmprojFileSizeBytes: nil,
-            baseSHA256: String(repeating: "a", count: 64),
-            mmprojSHA256: nil,
-            quantization: "Q4",
-            config: .llama32,
-            license: LicenseInfo(name: "Test", url: URL(string: "https://example.com")!, copyright: "Test")
-        )
-
-        downloadManager.startDownload(for: hugeModel)
-        let status = downloadManager.status(for: hugeModel)
-
-        // Must fail closed with disk space error, not attempt network.
-        guard case .failed(let error) = status.baseState else {
-            return XCTFail("Expected failed state for huge model")
-        }
-        XCTAssertEqual(error, .diskSpaceInsufficient)
-    }
-
-    func testNetworkErrorPersistsDurableStateForResume() throws {
-        let data = TestModelFixtures.gguf()
-        let model = TestModelFixtures.text(data: data)
-        defer { ModelManagerService.deleteModel(model) }
-
-        let task = DownloadTask(model: model, artifact: .base)
-        ModelMigrationService.ensureManagedDirectories()
-        try Data("partial-resume".utf8).write(to: task.resumeDataURL, options: .atomic)
-
-        downloadManager.persistDurableState(for: task, failed: true)
-        let status = downloadManager.status(for: model)
-
-        if case .failed = status.baseState {
-            // Failed state is preserved for user retry.
-            XCTAssertTrue(true)
-        }
-    }
-
-    func testWiFiToCellularTransitionDoesNotCorruptActiveTransfers() {
-        // The network monitor only observes; the download manager's
-        // waitsForConnectivity = true handles transitions implicitly.
-        let monitor = downloadManager.networkMonitor
-        XCTAssertNotNil(monitor.isConnected)
-    }
-
-    // MARK: HTTP Error / Credential Error Simulation
-
-    func testAuthorizationRequiredErrorProducesCorrectDescription() {
-        let error = DownloadError.authorizationRequired(statusCode: 403)
-        XCTAssertTrue(error.localizedDescription.contains("403"))
-    }
-
-    func testContentRejectedErrorIsDescriptive() {
-        let error = DownloadError.contentRejected(reason: "the staged artifact could not be read")
-        XCTAssertFalse(error.localizedDescription.isEmpty)
-    }
-
-    func testInvalidCatalogMetadataBlocksDownload() {
-        let badModel = AIModel(
-            id: "bad-catalog",
-            displayName: "Bad Catalog",
-            description: "Test",
-            modelType: .text,
-            baseURL: URL(string: "https://example.com/bad.gguf")!,
-            mmprojURL: nil,
-            baseFileSizeBytes: 16,
-            mmprojFileSizeBytes: nil,
-            baseSHA256: "",  // Invalid SHA-256
-            mmprojSHA256: nil,
-            quantization: "Q4",
-            config: .llama32,
-            license: LicenseInfo(name: "Test", url: URL(string: "https://example.com")!, copyright: "Test")
-        )
-
-        downloadManager.startDownload(for: badModel)
-        guard case .failed(let error) = downloadManager.status(for: badModel).baseState else {
-            return XCTFail("Expected failed state with invalid catalog")
-        }
-        XCTAssertEqual(error, .invalidCatalogMetadata)
-    }
-
-    func testRetryOnceFromCanonicalURLFlagPreventsInfiniteLoops() {
-        let model = ModelRegistry.llama32_3B
-        let task = DownloadTask(model: model, artifact: .base)
-        XCTAssertFalse(task.canonicalRetryAttempted)
-
-        task.canonicalRetryAttempted = true
-        XCTAssertTrue(task.canonicalRetryAttempted)
-    }
-}
 
 // MARK: - Background & Lifecycle Tests
 
@@ -517,168 +384,6 @@ final class BackgroundLifecycleQATests: XCTestCase {
     }
 }
 
-// MARK: - Storage Constraint Tests
-
-/// Tests that exercise low storage, out-of-space, and valid-installation
-/// preservation under adverse storage conditions.
-@MainActor
-final class StorageConstraintQATests: XCTestCase {
-
-    var downloadManager: DownloadManager!
-
-    override func setUp() {
-        super.setUp()
-        downloadManager = DownloadManager()
-    }
-
-    override func tearDown() {
-        for model in ModelRegistry.allModels {
-            downloadManager.cancelDownload(for: model)
-            ModelManagerService.deleteModel(model)
-        }
-        downloadManager = nil
-        super.tearDown()
-    }
-
-    // MARK: Low Storage Detection
-
-    func testAvailableDiskSpaceIsReadable() {
-        let space = downloadManager.availableDiskSpace
-        XCTAssertGreaterThanOrEqual(space, 0, "Available disk space must be non-negative")
-    }
-
-    func testStorageSafetyMarginIsReasonable() {
-        XCTAssertGreaterThan(
-            DownloadManager.storageSafetyMarginBytes,
-            0,
-            "Safety margin must be positive"
-        )
-    }
-
-    func testRequiredDownloadBytesIncludesMarginForTextModel() {
-        let model = ModelRegistry.llama32_3B
-        let required = downloadManager.requiredDownloadBytes(for: model)
-        // Should include the base file size + safety margin.
-        let minimumRequired = model.baseFileSizeBytes + DownloadManager.storageSafetyMarginBytes
-        XCTAssertEqual(required, minimumRequired)
-    }
-
-    func testRequiredDownloadBytesIncludesMarginForVisionModel() {
-        let model = ModelRegistry.gemma4_e2b
-        let required = downloadManager.requiredDownloadBytes(
-            for: model,
-            includeOptionalProjector: true
-        )
-        let minimumRequired = model.baseFileSizeBytes
-            + (model.mmprojFileSizeBytes ?? 0)
-            + DownloadManager.storageSafetyMarginBytes
-        XCTAssertEqual(required, minimumRequired)
-    }
-
-    func testRequiredDownloadBytesExcludesProjectorWhenOptionallySkippedForE2B() {
-        let model = ModelRegistry.gemma4_e2b
-        let required = downloadManager.requiredDownloadBytes(
-            for: model,
-            includeOptionalProjector: false
-        )
-        // When projector is skipped, only base + margin is required.
-        let expected = model.baseFileSizeBytes + DownloadManager.storageSafetyMarginBytes
-        XCTAssertEqual(required, expected)
-    }
-
-    // MARK: Out Of Space Behavior
-
-    func testOutOfSpaceDoesNotCorruptExistingInstallation() throws {
-        let data = TestModelFixtures.gguf()
-        let model = TestModelFixtures.text(data: data)
-        defer { ModelManagerService.deleteModel(model) }
-        try TestModelFixtures.install(data, for: model)
-
-        // Verify the installed model is intact.
-        XCTAssertTrue(ModelManagerService.isBaseDownloaded(model))
-        XCTAssertTrue(ModelManagerService.isFullyDownloaded(model))
-
-        // Simulate a disk space shortage check — should not touch installed files.
-        let task = DownloadTask(model: model, artifact: .base)
-        let stagedData = Data(repeating: 0xBB, count: 32)
-        try stagedData.write(to: task.stagingURL, options: .atomic)
-
-        // If verification fails (SHA mismatch), staging is cleaned, but destination is preserved.
-        let verifyResult = downloadManager.verifyAndPromote(task: task)
-        if case .failure = verifyResult {
-            // Staging should be cleaned, destination untouched.
-            XCTAssertFalse(
-                FileManager.default.fileExists(atPath: task.stagingURL.path),
-                "Failed staging must be cleaned"
-            )
-            // Original installation preserved.
-            XCTAssertTrue(ModelManagerService.isBaseDownloaded(model))
-        }
-    }
-
-    func testDiskSpaceInsufficientDuringVerificationPreservesStaging() throws {
-        let data = TestModelFixtures.gguf(count: 64)
-        let model = TestModelFixtures.text(data: data)
-        defer { ModelManagerService.deleteModel(model) }
-        try data.write(to: DownloadTask(model: model, artifact: .base).stagingURL, options: .atomic)
-
-        // We can't easily simulate actual out-of-space, but we verify the fail path.
-        let task = DownloadTask(model: model, artifact: .base)
-        task.state = .verifying
-        downloadManager.updateStatus(model: model)
-
-        let status = downloadManager.status(for: model)
-        // The verification path requires actual disk space check first.
-        if case .verifying = status.baseState {
-            XCTAssertTrue(status.baseState.isActive)
-        }
-    }
-
-    // MARK: Valid Installation Preservation
-
-    func testValidInstallationSurvivesAdverseStorageCheck() throws {
-        let data = TestModelFixtures.gguf(count: 256)
-        let model = TestModelFixtures.text(data: data)
-        defer { ModelManagerService.deleteModel(model) }
-        try TestModelFixtures.install(data, for: model)
-
-        // Multiple storage checks must not degrade a valid installation.
-        for _ in 0..<5 {
-            XCTAssertTrue(ModelManagerService.isBaseDownloaded(model))
-            XCTAssertTrue(ModelManagerService.isFullyDownloaded(model))
-        }
-    }
-
-    func testE4BTextAndVisionShareBaseArtifactCorrectly() throws {
-        let baseData = TestModelFixtures.gguf(count: 128)
-        let baseModel = TestModelFixtures.text(
-            id: ModelRegistry.gemma4_e4b.id,
-            data: baseData
-        )
-        defer { ModelManagerService.deleteModel(baseModel) }
-        try TestModelFixtures.install(baseData, for: baseModel)
-        // Verify ModelRegistry models share storage ID concept.
-        XCTAssertEqual(
-            ModelRegistry.gemma4_e4b.baseArtifactStorageID,
-            ModelRegistry.gemma4_e4b_text.baseArtifactStorageID
-        )
-    }
-
-    func testSharedBaseArtifactNotDeletedWhenOneVariantRemoved() throws {
-        let path = ModelManagerService.baseModelPath(for: ModelRegistry.gemma4_e4b_text)
-        ModelManagerService.ensureModelsDirectory()
-        try Data("shared-base".utf8).write(to: path, options: .atomic)
-        defer { try? FileManager.default.removeItem(at: path) }
-
-        ModelManagerService.deleteModel(ModelRegistry.gemma4_e4b_text)
-
-        // Base must survive because vision variant also references it.
-        XCTAssertTrue(
-            FileManager.default.fileExists(atPath: path.path),
-            "Shared base artifact must survive text-variant deletion"
-        )
-    }
-}
 
 // MARK: - Repeated Pause/Resume Tests
 
@@ -744,15 +449,15 @@ final class PauseResumeQATests: XCTestCase {
             downloadManager.persistDurableState(for: task)
 
             // Restore.
-            let m = DownloadManager()
-            m.restoreDurableTransfers(models: [model])
-            let s = m.status(for: model)
-            if case .paused(let p) = s.baseState {
-                XCTAssertEqual(p, progress, accuracy: 0.01,
+            let manager = DownloadManager()
+            manager.restoreDurableTransfers(models: [model])
+            let status = manager.status(for: model)
+            if case .paused(let pausedProgress) = status.baseState {
+                XCTAssertEqual(pausedProgress, progress, accuracy: 0.01,
                                "Progress must survive pause/resume cycle at \(progress)")
             }
             // Clean up for next cycle.
-            m.cancelDownload(for: model)
+            manager.cancelDownload(for: model)
             try? Data("resume-1".utf8).write(to: task.resumeDataURL, options: .atomic)
         }
     }

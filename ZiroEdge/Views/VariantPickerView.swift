@@ -45,33 +45,34 @@ struct VariantRow: View {
     var body: some View {
         HStack(spacing: ZiroTheme.Spacing.small) {
             VStack(alignment: .leading, spacing: ZiroTheme.Spacing.xSmall) {
+                // Artifact identity is engineering data — technical voice.
                 Text(artifact.filename)
-                    .font(.subheadline)
+                    .font(ZiroType.technical(.subheadline))
                     .lineLimit(1)
                 HStack(spacing: ZiroTheme.Spacing.small) {
                     QuantizationBadge(label: artifact.quantization)
                     Text(artifact.architecture)
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
+                        .font(ZiroType.technical(.caption))
+                        .foregroundStyle(ZiroTheme.tertiaryText)
                     Text(StorageByteFormatter.string(fromByteCount: artifact.size))
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
+                        .font(ZiroType.technical(.caption))
+                        .foregroundStyle(ZiroTheme.tertiaryText)
                 }
                 if let caption = capability?.caption {
                     Text(caption)
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
+                        .font(ZiroType.caption)
+                        .foregroundStyle(ZiroTheme.tertiaryText)
                         .lineLimit(1)
                 }
                 Text("SHA-256 \(artifact.sha256.prefix(12))…")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    .font(ZiroType.technical(.caption2))
+                    .foregroundStyle(ZiroTheme.tertiaryText)
                     .lineLimit(1)
             }
             Spacer()
             if isSelected {
                 Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(ZiroTheme.accent)
                     .font(.title3)
                     .accessibilityHidden(true)
             }
@@ -86,29 +87,25 @@ struct VariantRow: View {
     }
 }
 
-/// Compact quantization label. Highlights the variant's quality tier.
+/// Compact quantization label. Highlights the variant's quality tier. A thin
+/// wrapper over `ZiroBadge` — the one badge system — with the spec's
+/// quant-tier tone mapping (Q8/F16 → info, Q6 → indigo, Q5 → purple,
+/// Q4 → positive, Q3/Q2 → warning, unknown → neutral) in the technical voice.
 struct QuantizationBadge: View {
     let label: String
 
     var body: some View {
-        Text(label)
-            .font(.caption2.weight(.semibold))
-            .padding(.horizontal, ZiroTheme.Spacing.badge)
-            .padding(.vertical, ZiroTheme.Spacing.micro)
-            .foregroundStyle(qualityTint)
-            .background(qualityTint.opacity(0.12), in: Capsule())
+        ZiroBadge(text: label, tone: qualityTone, monospaced: true)
     }
 
-    private var qualityTint: Color {
+    private var qualityTone: ZiroTone {
         let upper = label.uppercased()
-        // Semantic status tokens: raw .green/.orange/.blue/.purple all fail
-        // 4.5:1 on light backgrounds for caption2 badge text.
-        if upper.contains("Q8") || upper.contains("F16") { return ZiroTheme.infoText }
+        if upper.contains("Q8") || upper.contains("F16") { return .info }
         if upper.contains("Q6") { return .indigo }
-        if upper.contains("Q5") { return ZiroTheme.accentPurpleText }
-        if upper.contains("Q4") { return ZiroTheme.positiveText }
-        if upper.contains("Q3") || upper.contains("Q2") { return ZiroTheme.warningText }
-        return .secondary
+        if upper.contains("Q5") { return .purple }
+        if upper.contains("Q4") { return .positive }
+        if upper.contains("Q3") || upper.contains("Q2") { return .warning }
+        return .neutral
     }
 }
 
@@ -120,10 +117,10 @@ struct EmptyVariantView: View {
         VStack(spacing: ZiroTheme.Spacing.medium) {
             Image(systemName: "questionmark.folder")
                 .font(.largeTitle)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(ZiroTheme.secondaryText)
             Text("No compatible GGUF artifacts found in \(repositoryID).")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .font(ZiroType.supporting)
+                .foregroundStyle(ZiroTheme.secondaryText)
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)

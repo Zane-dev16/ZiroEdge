@@ -357,8 +357,24 @@ final class ModelsViewModel: ObservableObject {
         }
     }
 
+    /// Retry Native Load for an imported model. Guarded like
+    /// ChatViewModel.selectModel: an in-flight load attempt (e.g. the chat's
+    /// deferred load) must settle first — overlapping loads double-drive the
+    /// shared engine and race currentState through both attempts (unload /
+    /// commit churn), the exact concurrency class the r3 fix guarded there.
     func retryImportedModel(_ model: AIModel) async {
         guard model.isImported else { return }
+        while lifecycleManager.activeModel?.id != model.id,
+              lifecycleManager.isLoadAttemptInFlight {
+            do {
+                try await Task.sleep(nanoseconds: 50_000_000)
+            } catch {
+                // Cancelled mid-wait: leave the in-flight attempt as the
+                // sole loader instead of starting a second one.
+                return
+            }
+        }
+        guard lifecycleManager.activeModel?.id != model.id else { return }
         _ = await lifecycleManager.loadModel(model)
     }
 }

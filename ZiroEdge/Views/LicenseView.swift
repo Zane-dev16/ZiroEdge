@@ -52,7 +52,8 @@ struct LicenseView: View {
             Section("Complete Notices") {
                 if let notice = Self.bundledNotice() {
                     Text(notice)
-                        .font(.caption)
+                        .font(ZiroType.caption)
+                        .foregroundStyle(ZiroTheme.secondaryText)
                         .textSelection(.enabled)
                 } else {
                     Label("The bundled notice could not be loaded.", systemImage: "exclamationmark.triangle")
@@ -60,6 +61,10 @@ struct LicenseView: View {
                 }
             }
         }
+        // Warm paper canvas with raised card rows (design spec §3.1).
+        .scrollContentBackground(.hidden)
+        .background(ZiroTheme.pageBackground.ignoresSafeArea())
+        .listRowBackground(ZiroTheme.raisedBackground)
         .navigationTitle("Licenses")
         .navigationBarTitleDisplayMode(.inline)
     }

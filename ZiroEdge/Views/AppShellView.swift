@@ -138,7 +138,18 @@ struct AppShellView: View {
             ModelManagerService.ensureModelsDirectory()
             await conversationListViewModel.loadConversations()
             if CommandLine.arguments.contains("--uitesting") {
+#if DEBUG
+                // Explicit hermetic scenarios (--uitesting-hermetic-needs-download
+                // / --uitesting-hermetic-failed-load) drive their own deterministic
+                // choreography from ChatView's deferred loader; the shell autoload
+                // would double-attempt and could resurface the load-failure alert
+                // after the inline retry row already suppressed it.
+                if !HermeticUITestRuntime.hasExplicitScenario {
+                    await lifecycleManager.autoLoadFirstModel()
+                }
+#else
                 await lifecycleManager.autoLoadFirstModel()
+#endif
             }
 #if DEBUG
             if CommandLine.arguments.contains("--uitesting-sendtest") {
@@ -213,9 +224,10 @@ struct AppShellView: View {
         .overlay(alignment: .bottom) {
             if MemoryDiagnosticRecorder.shared.isEnabled {
                 Text(memoryDiagnosticState)
-                    .font(.caption2)
+                    .font(ZiroType.micro)
+                    .foregroundStyle(ZiroTheme.tertiaryText)
                     .accessibilityIdentifier("memory-diagnostic-state")
-                    .padding(4)
+                    .padding(ZiroTheme.Spacing.xSmall)
             }
         }
 #endif
@@ -264,7 +276,8 @@ struct AppShellView: View {
             viewModel: conversationListViewModel,
             onNewConversation: handleNewConversation,
             onSelectConversation: selectConversation,
-            onOpenRoute: openShellRoute
+            onOpenRoute: openShellRoute,
+            onDeleteConversation: handleSidebarDelete
         )
     }
 
@@ -318,6 +331,22 @@ struct AppShellView: View {
             detailRoutes.removeSubrange(detailRoutes.index(after: existingIndex)...)
         } else {
             detailRoutes.append(route)
+        }
+    }
+
+    /// Sidebar delete (swipe action / context menu → confirm). Cancels an
+    /// in-flight chat stream targeting the deleted conversation first, so its
+    /// terminal journal write settles before the cascade deletes the row
+    /// (PersistenceController.deleteConversation also drops any recovery
+    /// journal left targeting the deleted conversation, and terminal replays
+    /// treat an already-gone row as consumed). Deleting a different
+    /// conversation never disturbs a live stream into another one.
+    private func handleSidebarDelete(_ id: UUID) {
+        Task {
+            if chatViewModel.isStreaming, chatViewModel.streamedConversationID == id {
+                await chatViewModel.cancelStream()
+            }
+            await conversationListViewModel.deleteConversation(id)
         }
     }
 

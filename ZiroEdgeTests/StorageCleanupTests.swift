@@ -254,14 +254,36 @@ final class StorageCleanupTests: XCTestCase {
     }
 
     func testReclaimOrphanedQuarantineFiles() throws {
+        // Quarantined corrupt artifacts are preserved for inspection/repair:
+        // fresh orphans must survive the launch-time sweep (24 h grace).
         ModelMigrationService.ensureManagedDirectories()
-        let orphanQuarantine = ModelManagerService.quarantineDirectory
+        let freshQuarantine = ModelManagerService.quarantineDirectory
             .appendingPathComponent("orphan-quarantine.quarantined")
-        try Data(count: 200).write(to: orphanQuarantine, options: .atomic)
+        try Data(count: 200).write(to: freshQuarantine, options: .atomic)
+
+        _ = downloadManager.reclaimOrphanedStorage()
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: freshQuarantine.path),
+            "A recently quarantined artifact must survive orphan reclamation"
+        )
+
+        // A quarantined file older than the grace period is a true orphan.
+        let staleQuarantine = ModelManagerService.quarantineDirectory
+            .appendingPathComponent("orphan-quarantine-stale.quarantined")
+        try Data(count: 200).write(to: staleQuarantine, options: .atomic)
+        let staleDate = Date().addingTimeInterval(-25 * 60 * 60)
+        try FileManager.default.setAttributes(
+            [.modificationDate: staleDate],
+            ofItemAtPath: staleQuarantine.path
+        )
 
         let reclaimed = downloadManager.reclaimOrphanedStorage()
         XCTAssertGreaterThanOrEqual(reclaimed, 200)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: orphanQuarantine.path))
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: staleQuarantine.path),
+            "Quarantined files past the 24 h grace period must be reclaimed"
+        )
+        XCTAssertTrue(FileManager.default.fileExists(atPath: freshQuarantine.path))
     }
 
     // MARK: - Managed Storage Breakdown

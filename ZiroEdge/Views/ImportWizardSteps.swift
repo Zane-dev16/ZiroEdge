@@ -32,18 +32,18 @@ private struct ImportWizardStepHeader: View {
     var body: some View {
         VStack(alignment: .leading, spacing: ZiroTheme.Spacing.xSmall) {
             Text("Step \(step.rawValue + 1) of \(ImportWizardStep.allCases.count)")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .font(ZiroType.caption)
+                .foregroundStyle(ZiroTheme.secondaryText)
             ProgressView(
                 value: Double(step.rawValue + 1),
                 total: Double(ImportWizardStep.allCases.count)
             )
-            .tint(.accentColor)
+            .tint(ZiroTheme.accent)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, ZiroTheme.Spacing.large)
         .padding(.vertical, ZiroTheme.Spacing.small)
-        .background(ZiroTheme.elevatedBackground)
+        .background(ZiroTheme.raisedBackground)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Import step \(step.rawValue + 1) of \(ImportWizardStep.allCases.count)")
     }
@@ -57,10 +57,14 @@ extension View {
         }
     }
 
-    /// Pins the step's forward action above the safe area.
+    /// Pins the step's forward action above the safe area. The action column
+    /// caps at the standard measure so the button doesn't stretch edge-to-edge
+    /// on iPad.
     func importWizardBottomBar<Actions: View>(@ViewBuilder actions: () -> Actions) -> some View {
         safeAreaInset(edge: .bottom, spacing: 0) {
             actions()
+                .frame(maxWidth: ZiroMeasure.standard)
+                .frame(maxWidth: .infinity)
                 .padding(.horizontal, ZiroTheme.Spacing.large)
                 .padding(.top, ZiroTheme.Spacing.small)
                 .padding(.bottom, ZiroTheme.Spacing.medium)
@@ -96,8 +100,8 @@ struct ImportWizardContinueButton: View {
         VStack(spacing: ZiroTheme.Spacing.small) {
             if !isEnabled, let hint, !hint.isEmpty {
                 Text(hint)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(ZiroType.caption)
+                    .foregroundStyle(ZiroTheme.secondaryText)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -176,12 +180,19 @@ struct ConfigureStepView: View {
                     }
                 }
             } else if viewModel.importAsVision, viewModel.selectedBase != nil {
+                // Defensive: a stale `importAsVision` reaching a repository
+                // with no usable projector (enabled on repo A, then inspecting
+                // repo B) must stay clearable. inspect() now resets the flag
+                // for non-viable repositories, but without a toggle here any
+                // residual path would leave `visionPairingError` permanent and
+                // the Continue gate closed.
                 Section("Vision Unavailable") {
+                    visionToggle
                     Label(
                         viewModel.noVisionPairReason ?? "Vision import is not available for this repository.",
                         systemImage: "eye.slash"
                     )
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(ZiroTheme.secondaryText)
                 }
             }
 
@@ -192,10 +203,14 @@ struct ConfigureStepView: View {
                 )
             }
         }
+        // Warm paper canvas with raised card rows (design spec §3.1).
+        .scrollContentBackground(.hidden)
+        .background(ZiroTheme.pageBackground.ignoresSafeArea())
+        .listRowBackground(ZiroTheme.raisedBackground)
     }
 
     @ViewBuilder
-    private var visionPairContent: some View {
+    private var visionToggle: some View {
         Toggle("Import as vision model", isOn: Binding<Bool>(
             get: { viewModel.importAsVision },
             set: { newValue in
@@ -203,6 +218,11 @@ struct ConfigureStepView: View {
                 viewModel.toggleVisionImport()
             }
         ))
+    }
+
+    @ViewBuilder
+    private var visionPairContent: some View {
+        visionToggle
 
         if viewModel.importAsVision {
             if let pair = viewModel.suggestedPair {
@@ -211,8 +231,8 @@ struct ConfigureStepView: View {
                         ConfidenceBadge(confidence: pair.confidence)
                         Spacer()
                         Text(pair.formattedCombinedSize)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .font(ZiroType.technical(.caption))
+                            .foregroundStyle(ZiroTheme.secondaryText)
                     }
 
                     Divider()
@@ -224,8 +244,8 @@ struct ConfigureStepView: View {
                     ImportArtifactSummaryRow(role: "Vision Projector", icon: "eye", artifact: pair.projector)
 
                     Text(pair.confidenceExplanation)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(ZiroType.caption)
+                        .foregroundStyle(ZiroTheme.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
 
                     if pair.confidence != .high {
@@ -233,7 +253,7 @@ struct ConfigureStepView: View {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .foregroundStyle(ZiroTheme.warningText)
                             Text("This pairing requires explicit confirmation before import.")
-                                .font(.caption)
+                                .font(ZiroType.caption)
                                 .foregroundStyle(ZiroTheme.warningText)
                         }
                     }
@@ -249,7 +269,7 @@ struct ConfigureStepView: View {
                                 systemImage: "checkmark.shield"
                             )
                         }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(ZiroPrimaryButtonStyle())
                     } else {
                         Label("Vision pair confirmed", systemImage: "checkmark.circle.fill")
                             .foregroundStyle(ZiroTheme.positiveText)
@@ -261,7 +281,7 @@ struct ConfigureStepView: View {
                     .announcingOnAppear("Vision pairing failed. \(error)")
             } else {
                 Label("Resolving compatible vision pair…", systemImage: "hourglass")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(ZiroTheme.secondaryText)
             }
         }
     }
@@ -321,18 +341,22 @@ struct ReviewStepView: View {
 
     private func reviewForm(base: HFArtifact) -> some View {
         Form {
+            // Artifact names and byte sizes are engineering data — technical voice.
             Section("Chosen Artifacts") {
-                LabeledContent(
-                    "Base model",
-                    value: "\(base.filename) · \(StorageByteFormatter.string(fromByteCount: base.size))"
-                )
-                if let projector = viewModel.selectedProjector {
-                    LabeledContent(
-                        "Vision projector",
-                        value: "\(projector.filename) · \(StorageByteFormatter.string(fromByteCount: projector.size))"
-                    )
+                LabeledContent("Base model") {
+                    Text("\(base.filename) · \(StorageByteFormatter.string(fromByteCount: base.size))")
+                        .font(ZiroType.technical(.footnote))
                 }
-                LabeledContent("Total download", value: StorageByteFormatter.string(fromByteCount: viewModel.selectedBytes))
+                if let projector = viewModel.selectedProjector {
+                    LabeledContent("Vision projector") {
+                        Text("\(projector.filename) · \(StorageByteFormatter.string(fromByteCount: projector.size))")
+                            .font(ZiroType.technical(.footnote))
+                    }
+                }
+                LabeledContent("Total download") {
+                    Text(StorageByteFormatter.string(fromByteCount: viewModel.selectedBytes))
+                        .font(ZiroType.technical(.footnote))
+                }
             }
 
             Section("Storage") {
@@ -346,11 +370,15 @@ struct ReviewStepView: View {
             if case .failed(let message) = viewModel.phase {
                 Section {
                     Label(message, systemImage: "exclamationmark.triangle.fill")
-                        .foregroundStyle(ZiroTheme.warningText)
+                        .foregroundStyle(ZiroTheme.dangerText)
                         .announcingOnAppear("Import failed. \(message)")
                 }
             }
         }
+        // Warm paper canvas with raised card rows (design spec §3.1).
+        .scrollContentBackground(.hidden)
+        .background(ZiroTheme.pageBackground.ignoresSafeArea())
+        .listRowBackground(ZiroTheme.raisedBackground)
     }
 }
 
@@ -396,8 +424,7 @@ struct TransferStepView: View {
             Button(action: onClose) {
                 Text("Back to Library")
             }
-            .buttonStyle(.bordered)
-            .frame(maxWidth: .infinity)
+            .buttonStyle(ZiroSecondaryButtonStyle())
         }
     }
 
@@ -405,18 +432,19 @@ struct TransferStepView: View {
     private func transferContent(model: AIModel, status: ModelDownloadStatus) -> some View {
         ScrollView {
             VStack(spacing: ZiroTheme.Spacing.large) {
-                ZiroCard {
+                // The transfer card is the wizard's one truly floating card.
+                ZiroCard(showsShadow: true) {
                     VStack(alignment: .leading, spacing: ZiroTheme.Spacing.medium) {
                         HStack(spacing: ZiroTheme.Spacing.small) {
                             Image(systemName: "arrow.down.circle.fill")
                                 .font(.title2)
-                                .foregroundStyle(Color.accentColor)
+                                .foregroundStyle(ZiroTheme.accent)
                             VStack(alignment: .leading, spacing: ZiroTheme.Spacing.micro) {
                                 Text(model.displayName)
-                                    .font(.headline)
+                                    .font(ZiroType.rowTitle)
                                 Text(model.formattedSize)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                    .font(ZiroType.technical(.caption))
+                                    .foregroundStyle(ZiroTheme.secondaryText)
                             }
                         }
                         Divider()
@@ -424,11 +452,13 @@ struct TransferStepView: View {
                     }
                 }
                 Text("You can close this wizard — the transfer continues in the background and can be paused, resumed, or repaired from the Models page.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .font(ZiroType.footnote)
+                    .foregroundStyle(ZiroTheme.secondaryText)
                     .multilineTextAlignment(.center)
             }
-            .padding(ZiroTheme.Spacing.large)
+            .padding(.horizontal, ZiroTheme.Spacing.xLarge)
+            .padding(.vertical, ZiroTheme.Spacing.large)
+            .frame(maxWidth: ZiroMeasure.standard)
             .frame(maxWidth: .infinity)
         }
     }
@@ -442,12 +472,13 @@ struct TransferStepView: View {
                     Text("Downloading")
                 } currentValueLabel: {
                     Text("\(Int(progress * 100))%")
+                        .font(ZiroType.technical(.caption))
                 }
                 .accessibilityLabel("Downloading \(model.displayName)")
                 .accessibilityValue("\(Int(progress * 100)) percent complete")
                 Text("Pause or resume anytime from the Models page.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(ZiroType.caption)
+                    .foregroundStyle(ZiroTheme.secondaryText)
             }
 
         case .pausing(let progress):
@@ -456,8 +487,8 @@ struct TransferStepView: View {
                 VStack(alignment: .leading, spacing: ZiroTheme.Spacing.micro) {
                     Text("Saving resume data…")
                     Text("\(Int(progress * 100))% complete")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(ZiroType.technical(.caption))
+                        .foregroundStyle(ZiroTheme.secondaryText)
                 }
             }
 
@@ -467,8 +498,8 @@ struct TransferStepView: View {
                 VStack(alignment: .leading, spacing: ZiroTheme.Spacing.micro) {
                     Text("Resuming…")
                     Text("\(Int(progress * 100))% complete")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(ZiroType.technical(.caption))
+                        .foregroundStyle(ZiroTheme.secondaryText)
                 }
             }
 
@@ -478,16 +509,17 @@ struct TransferStepView: View {
                     Text("Paused")
                 } currentValueLabel: {
                     Text("\(Int(progress * 100))%")
+                        .font(ZiroType.technical(.caption))
                 }
                 Button("Manage in Library") { onClose() }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(ZiroSecondaryButtonStyle())
             }
 
         case .verifying:
             HStack(spacing: ZiroTheme.Spacing.small) {
                 ProgressView()
                 Text("Verifying download…")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(ZiroTheme.secondaryText)
             }
 
         case .downloaded:
@@ -497,25 +529,25 @@ struct TransferStepView: View {
         case .failed(let error):
             VStack(alignment: .leading, spacing: ZiroTheme.Spacing.small) {
                 Label(error.localizedDescription, systemImage: "exclamationmark.triangle.fill")
-                    .foregroundStyle(ZiroTheme.warningText)
+                    .foregroundStyle(ZiroTheme.dangerText)
                     .announcingOnAppear("Download failed. \(error.localizedDescription)")
                 Button("Manage in Library") { onClose() }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(ZiroSecondaryButtonStyle())
             }
 
         case .cancelled:
             VStack(alignment: .leading, spacing: ZiroTheme.Spacing.small) {
                 Label("Transfer cancelled", systemImage: "xmark.circle")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(ZiroTheme.secondaryText)
                 Button("Manage in Library") { onClose() }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(ZiroSecondaryButtonStyle())
             }
 
         case .notDownloaded:
             HStack(spacing: ZiroTheme.Spacing.small) {
                 ProgressView()
                 Text("Waiting for the transfer to start…")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(ZiroTheme.secondaryText)
             }
         }
     }
@@ -545,7 +577,9 @@ struct DoneStepView: View {
                     }
                 }
             }
-            .padding(ZiroTheme.Spacing.large)
+            .padding(.horizontal, ZiroTheme.Spacing.xLarge)
+            .padding(.vertical, ZiroTheme.Spacing.large)
+            .frame(maxWidth: ZiroMeasure.standard)
             .frame(maxWidth: .infinity)
         }
         .navigationBarBackButtonHidden(true)
@@ -580,7 +614,11 @@ struct DoneStepView: View {
             ZiroCard {
                 VStack(alignment: .leading, spacing: ZiroTheme.Spacing.small) {
                     LabeledContent("Model", value: model.displayName)
-                    LabeledContent("Size", value: model.formattedSize)
+                    // Numeric outcome values read as engineering data — technical voice.
+                    LabeledContent("Size") {
+                        Text(model.formattedSize)
+                            .font(ZiroType.technical(.footnote))
+                    }
                     LabeledContent("Capabilities", value: model.modelType == .vision ? "Text + images" : "Text only")
                 }
             }
@@ -591,8 +629,7 @@ struct DoneStepView: View {
                 .buttonStyle(ZiroPrimaryButtonStyle())
 
                 Button("Add to Library", action: onClose)
-                    .buttonStyle(.bordered)
-                    .frame(maxWidth: .infinity)
+                    .buttonStyle(ZiroSecondaryButtonStyle())
             }
         }
     }
@@ -607,9 +644,19 @@ struct PreflightCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: ZiroTheme.Spacing.small) {
-            LabeledContent("Download storage", value: StorageByteFormatter.string(fromByteCount: storage.requiredBytes))
-            LabeledContent("Safety margin", value: StorageByteFormatter.string(fromByteCount: storage.safetyMarginBytes))
-            LabeledContent("Available storage", value: StorageByteFormatter.string(fromByteCount: storage.availableBytes))
+            // Byte sizes are engineering data — technical voice.
+            LabeledContent("Download storage") {
+                Text(StorageByteFormatter.string(fromByteCount: storage.requiredBytes))
+                    .font(ZiroType.technical(.footnote))
+            }
+            LabeledContent("Safety margin") {
+                Text(StorageByteFormatter.string(fromByteCount: storage.safetyMarginBytes))
+                    .font(ZiroType.technical(.footnote))
+            }
+            LabeledContent("Available storage") {
+                Text(StorageByteFormatter.string(fromByteCount: storage.availableBytes))
+                    .font(ZiroType.technical(.footnote))
+            }
             if !storage.canProceed {
                 Label("Not enough storage. No download can start.", systemImage: "internaldrive.fill.badge.xmark")
                     .foregroundStyle(ZiroTheme.warningText)
@@ -626,14 +673,14 @@ struct RAMAssessmentCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: ZiroTheme.Spacing.small) {
-            LabeledContent(
-                "Estimated RAM",
-                value: StorageByteFormatter.string(fromByteCount: Int64(clamping: assessment.estimatedBytes), countStyle: .memory)
-            )
-            LabeledContent(
-                "Device RAM",
-                value: StorageByteFormatter.string(fromByteCount: Int64(clamping: assessment.physicalBytes), countStyle: .memory)
-            )
+            LabeledContent("Estimated RAM") {
+                Text(StorageByteFormatter.string(fromByteCount: Int64(clamping: assessment.estimatedBytes), countStyle: .memory))
+                    .font(ZiroType.technical(.footnote))
+            }
+            LabeledContent("Device RAM") {
+                Text(StorageByteFormatter.string(fromByteCount: Int64(clamping: assessment.physicalBytes), countStyle: .memory))
+                    .font(ZiroType.technical(.footnote))
+            }
             switch assessment.classification {
             case .likelyFits:
                 Label("Should run within this device's memory.", systemImage: "checkmark.circle.fill")
@@ -665,23 +712,22 @@ struct LicenseRow: View {
     }
 }
 
-/// Confidence badge for a suggested vision pair (import wizard + update flow).
+/// Confidence badge for a suggested vision pair (import wizard + update
+/// flow). A thin wrapper over `ZiroBadge` — the one badge system — mapping
+/// each confidence level to its verified tone and shield imagery.
 struct ConfidenceBadge: View {
     let confidence: VisionPairConfidence
 
     var body: some View {
-        HStack(spacing: ZiroTheme.Spacing.xSmall) {
-            Image(systemName: iconName)
-            Text(confidence.label)
+        ZiroBadge(text: confidence.label, tone: tone, icon: iconName)
+    }
+
+    private var tone: ZiroTone {
+        switch confidence {
+        case .high: .positive
+        case .medium: .warning
+        case .low: .danger
         }
-        .font(.caption)
-        .padding(.horizontal, ZiroTheme.Spacing.small)
-        .padding(.vertical, ZiroTheme.Spacing.xSmall)
-        .background(
-            RoundedRectangle(cornerRadius: ZiroTheme.Radius.badge)
-                .fill(tint.opacity(fillOpacity))
-        )
-        .foregroundStyle(tint)
     }
 
     private var iconName: String {
@@ -689,23 +735,6 @@ struct ConfidenceBadge: View {
         case .high: "checkmark.shield.fill"
         case .medium: "shield"
         case .low: "exclamationmark.shield"
-        }
-    }
-
-    private var tint: Color {
-        // Semantic status tokens: raw .green/.orange/.red fail 4.5:1 on light
-        // backgrounds for badge text (r5 pulled the .low case into tokens).
-        switch confidence {
-        case .high: ZiroTheme.positiveText
-        case .medium: ZiroTheme.warningText
-        case .low: ZiroTheme.warningText
-        }
-    }
-
-    private var fillOpacity: Double {
-        switch confidence {
-        case .high, .medium: 0.15
-        case .low: 0.10
         }
     }
 }
@@ -719,16 +748,17 @@ struct ImportArtifactSummaryRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: ZiroTheme.Spacing.xSmall) {
             Label(role, systemImage: icon)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(ZiroType.caption)
+                .foregroundStyle(ZiroTheme.secondaryText)
+            // Artifact identity and digest are engineering data — technical voice.
             Text(artifact.filename)
-                .font(.subheadline)
+                .font(ZiroType.technical(.subheadline))
             Text("\(artifact.quantization) · \(StorageByteFormatter.string(fromByteCount: artifact.size))")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(ZiroType.technical(.caption))
+                .foregroundStyle(ZiroTheme.secondaryText)
             Text("SHA-256 \(artifact.sha256.prefix(12))…")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
+                .font(ZiroType.technical(.caption2))
+                .foregroundStyle(ZiroTheme.tertiaryText)
         }
         .accessibilityElement(children: .combine)
     }

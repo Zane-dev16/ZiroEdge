@@ -54,7 +54,7 @@ extension ChatView {
                 icon: "externaldrive.badge.exclamationmark",
                 title: "Response not saved yet",
                 message: "The response is safely retained while you choose what to do.",
-                tint: ZiroTheme.warningText
+                tone: .warning
             ) {
                 ViewThatFits(in: .horizontal) {
                     recoveryActions
@@ -72,7 +72,7 @@ extension ChatView {
                 icon: "questionmark.folder.fill",
                 title: "Model unavailable",
                 message: "This conversation used \(missingID), which was removed. Explicitly choose another installed model to continue.",
-                tint: ZiroTheme.warningText
+                tone: .warning
             ) {
                 Button("Choose Model") { navigateToRoute(.models) }
             }
@@ -89,19 +89,19 @@ extension ChatView {
                 dismissibleBanner(
                     icon: "exclamationmark.triangle.fill",
                     message: error,
-                    tint: .red,
+                    tone: .danger,
                     identifier: "errorBanner"
                 ) { viewModel.showError = false }
             }
         }
         if let warning = viewModel.truncationWarning {
-            dismissibleBanner(icon: "text.badge.minus", message: warning, tint: ZiroTheme.warningText) {
+            dismissibleBanner(icon: "text.badge.minus", message: warning, tone: .warning) {
                 viewModel.dismissTruncationWarning()
             }
         }
 
         if let warning = viewModel.visionWarning {
-            dismissibleBanner(icon: "photo.badge.exclamationmark", message: warning, tint: ZiroTheme.warningText) {
+            dismissibleBanner(icon: "photo.badge.exclamationmark", message: warning, tone: .warning) {
                 viewModel.visionWarning = nil
             }
         }
@@ -117,7 +117,7 @@ extension ChatView {
                 icon: "exclamationmark.octagon.fill",
                 title: "Couldn't load \(viewModel.selectedModel?.displayName ?? "model")",
                 message: message,
-                tint: ZiroTheme.warningText
+                tone: .warning
             ) {
                 Button("Retry") { viewModel.retryModelLoad() }
                     .accessibilityIdentifier("modelRetryButton")
@@ -128,12 +128,15 @@ extension ChatView {
                 icon: "memorychip",
                 title: "Model unloaded",
                 message: "\(viewModel.selectedModel?.displayName ?? "The model") was released to protect memory.",
-                tint: ZiroTheme.warningText
+                tone: .warning
             ) {
                 Button("Reload") { viewModel.retryModelLoad() }
                     .accessibilityIdentifier("modelRetryButton")
             }
             .accessibilityIdentifier("modelRetryBanner")
+            .announcingOnAppear(
+                "Model unloaded. \(viewModel.selectedModel?.displayName ?? "The model") was released to protect memory. Reload available."
+            )
         default:
             EmptyView()
         }
@@ -143,7 +146,7 @@ extension ChatView {
         ZiroStatusBanner(
             icon: "exclamationmark.triangle.fill",
             message: message,
-            tint: .red
+            tone: .danger
         ) {
             HStack(spacing: ZiroTheme.Spacing.medium) {
                 Button("Retry") { Task { await viewModel.retryStartup() } }
@@ -158,11 +161,11 @@ extension ChatView {
     func dismissibleBanner(
         icon: String,
         message: String,
-        tint: Color,
+        tone: ZiroTone,
         identifier: String? = nil,
         onDismiss: @escaping () -> Void
     ) -> some View {
-        ZiroStatusBanner(icon: icon, message: message, tint: tint) {
+        ZiroStatusBanner(icon: icon, message: message, tone: tone) {
             Button("Dismiss", action: onDismiss)
         }
         .accessibilityIdentifier(identifier ?? "statusBanner")
@@ -188,14 +191,11 @@ extension ChatView {
                     .textFieldStyle(.plain)
                     .accessibilityIdentifier("chatInput")
                     .accessibilityHint("Enter a message for the local model")
-                    .padding(.horizontal, ZiroTheme.Spacing.large)
-                    .padding(.vertical, ZiroTheme.Spacing.medium)
-                    .background(ZiroTheme.inputBackground)
-                    .clipShape(RoundedRectangle(cornerRadius: ZiroTheme.Radius.card))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: ZiroTheme.Radius.card)
-                            .stroke(ZiroTheme.subtleBorder)
-                    }
+                    // Design-system input well: recessed fill + hairline at
+                    // rest, accent focus ring while typing (the keyboard
+                    // focus indicator). Replaces the hand-rolled
+                    // background/overlay that reused Radius.card here.
+                    .ziroComposerField(isActive: isInputFocused)
                     .lineLimit(1...6)
                     .focused($isInputFocused)
                     .disabled(!chatReady || viewModel.isLoadingConversation)
@@ -228,22 +228,36 @@ extension ChatView {
     /// already render the modelRetryRow banner directly above this row —
     /// repeating those states here showed the same message on screen twice.
     /// This row only speaks when nothing else carries the state: token usage
-    /// while ready and the download nudge.
+    /// while ready, the download nudge, and the user-unload caption (a
+    /// user-initiated unload parks the chat on `.idle` with a dimmed,
+    /// disabled composer and no banner — same visible-hint pattern as the
+    /// disabled-continue hints).
     @ViewBuilder
     var composerStatusBadge: some View {
         if chatReady {
             tokenCountBadge
         } else if viewModel.modelLoadPhase == .needsDownload {
+            // Allow up to two lines: at accessibility text sizes a hard single
+            // line would ellipsize the instruction down to a stub that no
+            // longer states the action the user must take.
             Text("Download a model to start chatting")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+                .font(ZiroType.micro)
+                .foregroundStyle(ZiroTheme.secondaryText)
+                .lineLimit(1...2)
+        } else if viewModel.modelLoadPhase == .idle,
+                  viewModel.lifecycleManager.isUserUnloaded {
+            Text("\(viewModel.selectedModel?.displayName ?? "The model") is unloaded. Reload from the model menu above.")
+                .font(ZiroType.micro)
+                .foregroundStyle(ZiroTheme.secondaryText)
+                .lineLimit(1...2)
         }
     }
 
     var tokenCountBadge: some View {
         Text("~\(viewModel.tokenCount) / \(viewModel.contextWindowSize) tokens")
-            .font(.caption2).foregroundStyle(.secondary).monospacedDigit()
+            // Technical voice: the token counter is engineering data, not UI copy.
+            .font(ZiroType.technical(.caption2))
+            .foregroundStyle(ZiroTheme.secondaryText)
             .accessibilityLabel(
                 "Approximately \(viewModel.tokenCount) of \(viewModel.contextWindowSize) context tokens used"
             )

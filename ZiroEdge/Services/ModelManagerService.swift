@@ -247,7 +247,9 @@ extension ModelManagerService {
     static func availability(for model: AIModel) -> ModelAvailability {
 #if DEBUG
         if HermeticUITestRuntime.isEnabled, model.id == ModelRegistry.llama32_3B.id {
-            return .ready
+            // ready/failedLoad fake a downloaded artifact; needsDownload fakes an
+            // empty library so the chat surfaces the .needsDownload state.
+            return HermeticUITestRuntime.scenario == .needsDownload ? .unavailable : .ready
         }
 #endif
         // Missing or malformed integrity metadata is a catalog configuration error.

@@ -125,6 +125,7 @@ extension DownloadManager: URLSessionDownloadDelegate, URLSessionDataDelegate {
                 persistDurableState(for: task, failed: true)
                 updateStatus(model: task.model)
                 activeTasks.removeValue(forKey: key)
+                stopStuckWatchdogIfIdle()
                 return
             }
             do {
@@ -141,6 +142,7 @@ extension DownloadManager: URLSessionDownloadDelegate, URLSessionDataDelegate {
             }
             updateStatus(model: task.model)
             activeTasks.removeValue(forKey: key)
+            stopStuckWatchdogIfIdle()
         }
     }
     nonisolated func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
@@ -155,8 +157,15 @@ extension DownloadManager: URLSessionDownloadDelegate, URLSessionDataDelegate {
             let priorPct = Int(task.progress * 100)
             task.progress = progress
             task.state = .downloading(progress: progress)
-            updateStatus(model: task.model)
             let pct = Int(progress * 100)
+            // Publish UI-visible status at milestone cadence (mirroring the
+            // durable-state pattern below): per-tick updates re-ran
+            // authoritativeDiskStatus for every sibling artifact on the main
+            // thread. Completion/pause/failure paths always publish a final
+            // updateStatus, so no terminal state can be missed.
+            if pct % 10 == 0 && priorPct / 10 != pct / 10 {
+                updateStatus(model: task.model)
+            }
             if pct % 5 == 0 {
                 DownloadDiagnosticRecorder.shared.record(
                     event: .downloadProgress,
@@ -262,6 +271,7 @@ extension DownloadManager: URLSessionDownloadDelegate, URLSessionDataDelegate {
             }
             updateStatus(model: downloadTask.model)
             activeTasks.removeValue(forKey: key)
+            stopStuckWatchdogIfIdle()
         }
     }
     nonisolated func urlSession(

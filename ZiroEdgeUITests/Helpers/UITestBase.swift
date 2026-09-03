@@ -48,13 +48,32 @@ class UITestBase: XCTestCase {
     /// verifies the persistent column on regular widths).
     @discardableResult
     func openSidebar(timeout: TimeInterval = 8) -> Bool {
-        let sidebarButton = app.buttons["sidebar-button"].firstMatch
-        if sidebarButton.waitForExistence(timeout: 2) {
-            sidebarButton.tap()
-            return true
-        }
+        // iPad persistent column, or a drawer that is already open: the
+        // Conversations title is present without tapping.
         let conversationsTitle = app.staticTexts["Conversations"].firstMatch
-        return conversationsTitle.waitForExistence(timeout: timeout)
+        if conversationsTitle.waitForExistence(timeout: 1) { return true }
+
+        let sidebarButton = app.buttons["sidebar-button"].firstMatch
+        guard sidebarButton.waitForExistence(timeout: 2) else {
+            return conversationsTitle.waitForExistence(timeout: timeout)
+        }
+
+        // The drawer presentation can lag several seconds behind a cold
+        // launch (history-restore work), and the first tap is occasionally
+        // swallowed before the sheet transaction runs — the r2 finding that
+        // resurfaced in r4 as three consecutive sim-dark Settings capture
+        // failures. Verify the drawer actually appeared and re-tap if it
+        // did not, instead of returning true from a fire-and-forget tap.
+        let drawerContent = app.buttons["New Conversation"].firstMatch
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            sidebarButton.tap()
+            if drawerContent.waitForExistence(timeout: 2)
+                || conversationsTitle.waitForExistence(timeout: 1) {
+                return true
+            }
+        } while Date() < deadline
+        return conversationsTitle.exists || drawerContent.exists
     }
 
     /// Open Settings as an in-app page: reveal the sidebar (drawer on iPhone,
@@ -244,7 +263,18 @@ class UITestBase: XCTestCase {
 
         // Tap to focus
         field.tap()
-        guard app.keyboards.firstMatch.waitForExistence(timeout: 3) else { return }
+        // The on-screen keyboard does not reliably appear on headless/CI
+        // simulators (hardware-keyboard bridging varies by host state) — do
+        // not abort when it is missing. XCUIApplication.typeText synthesizes
+        // key events with or without the software keyboard, which is exactly
+        // how the diagnostic chat flows type, so proceed unconditionally.
+        if app.keyboards.firstMatch.waitForExistence(timeout: 2) == false {
+            // Keyboard still down — the first tap may not have taken focus on
+            // a cold launch. Tap once more, then type regardless: typeText is
+            // how the passing diagnostic flows input text on this host.
+            field.tap()
+            _ = app.keyboards.firstMatch.waitForExistence(timeout: 2)
+        }
 
         // Type into the app (keyboard-focused element) — more reliable
         // than field.typeText() for SwiftUI @FocusState-bound TextFields

@@ -156,6 +156,63 @@ final class Batch03StartupANRTests: XCTestCase {
         XCTAssertEqual(ModelManagerService.sha256CacheHitCount, 1, "Second call should be cache hit")
     }
 
+    /// P1-5: computed digests persist in a JSON sidecar keyed by path+mtime+size
+    /// and are reloaded after a cold launch, so installed multi-GB artifacts are
+    /// never re-hashed on the main thread at startup.
+    func testSHA256SidecarServesHashAfterRelaunch() async throws {
+        ModelManagerService.resetSHA256CacheForTests()
+        let bytes = TestModelFixtures.gguf(count: 128)
+        let model = TestModelFixtures.text(data: bytes)
+        defer { ModelManagerService.deleteModel(model) }
+        try TestModelFixtures.install(bytes, for: model)
+        let url = ModelManagerService.baseModelPath(for: model)
+
+        let first = ModelManagerService.computeSHA256(fileURL: url)
+        XCTAssertNotNil(first)
+        XCTAssertEqual(ModelManagerService.sha256ComputeCount, 1)
+
+        // Simulate a cold launch: in-memory stores are dropped while the
+        // sidecar file stays on disk.
+        ModelManagerService.simulateRelaunchForTests()
+
+        let second = ModelManagerService.computeSHA256(fileURL: url)
+        XCTAssertEqual(first, second, "Relaunched hash must match the persisted digest")
+        XCTAssertEqual(ModelManagerService.sha256ComputeCount, 1, "Sidecar entry must serve the hash without recomputing")
+        XCTAssertEqual(ModelManagerService.sha256CacheHitCount, 1)
+    }
+
+    /// Stale sidecar entries must not resurrect old digests: a changed mtime
+    /// or size invalidates the entry even after a relaunch.
+    func testSHA256SidecarInvalidatesWhenFileChangesAfterRelaunch() async throws {
+        ModelManagerService.resetSHA256CacheForTests()
+        let bytes1 = TestModelFixtures.gguf(count: 128)
+        let model = TestModelFixtures.text(data: bytes1)
+        defer { ModelManagerService.deleteModel(model) }
+        try TestModelFixtures.install(bytes1, for: model)
+        let url = ModelManagerService.baseModelPath(for: model)
+
+        let hash1 = ModelManagerService.computeSHA256(fileURL: url)
+        XCTAssertEqual(ModelManagerService.sha256ComputeCount, 1)
+
+        // Ensure mtime will change (filesystem granularity is 1s on some volumes)
+        try? await Task.sleep(nanoseconds: 1_100_000_000)
+
+        // Overwrite with different content (same size but different bytes -> mtime changes)
+        var bytes2 = TestModelFixtures.gguf(count: 128)
+        // Flip a byte to change hash without changing size
+        if bytes2.count > 40 {
+            bytes2[40] ^= 0xFF
+        }
+        try bytes2.write(to: url, options: .atomic)
+
+        ModelManagerService.simulateRelaunchForTests()
+
+        let hash2 = ModelManagerService.computeSHA256(fileURL: url)
+        XCTAssertNotNil(hash2)
+        XCTAssertNotEqual(hash1, hash2, "Hash should change when file content changes")
+        XCTAssertEqual(ModelManagerService.sha256ComputeCount, 2, "Modified file must recompute after relaunch")
+    }
+
     func testSHA256CacheInvalidatesWhenFileChanges() async throws {
         ModelManagerService.resetSHA256CacheForTests()
         let bytes1 = TestModelFixtures.gguf(count: 128)

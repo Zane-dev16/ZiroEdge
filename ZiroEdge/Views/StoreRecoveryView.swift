@@ -28,47 +28,45 @@ struct StoreRecoveryView: View {
                     if let diagnosticsURL {
                         ShareLink(item: diagnosticsURL) {
                             Label("Share Diagnostics", systemImage: "square.and.arrow.up")
-                                .frame(maxWidth: .infinity)
                         }
-                        .buttonStyle(.bordered)
-                        .controlSize(.large)
+                        .buttonStyle(ZiroSecondaryButtonStyle())
                     } else {
                         Button(action: onExportDiagnostics) {
                             Label("Export Diagnostics", systemImage: "doc.badge.gearshape")
-                                .frame(maxWidth: .infinity)
                         }
-                        .buttonStyle(.bordered)
-                        .controlSize(.large)
+                        .buttonStyle(ZiroSecondaryButtonStyle())
                     }
 
                     Button(action: onReset) {
                         Label("Recover Local Store", systemImage: "wrench.and.screwdriver")
-                            .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.large)
+                    .buttonStyle(ZiroSecondaryButtonStyle())
                     .accessibilityHint("Creates a verified recovery copy before offering a reset")
                 }
-                .frame(maxWidth: 360)
+                .frame(maxWidth: ZiroMeasure.narrow)
 
                 if let diagnosticsExportError {
                     ZiroStatusBanner(
                         icon: "exclamationmark.triangle.fill",
                         message: diagnosticsExportError,
-                        tint: .red
+                        tone: .danger
                     )
-                    .frame(maxWidth: 520)
+                    // The only transient banner in the app that mounted
+                    // without an announcement — VoiceOver users otherwise
+                    // get zero feedback that their export failed.
+                    .announcingOnAppear(diagnosticsExportError)
+                    .frame(maxWidth: ZiroMeasure.standard)
                 }
 
                 DisclosureGroup("Technical Details", isExpanded: $showsDetails) {
                     Text(failure.sanitizedDiagnostic)
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.secondary)
+                        .font(ZiroType.technical(.caption))
+                        .foregroundStyle(ZiroTheme.secondaryText)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.top, ZiroTheme.Spacing.small)
                 }
-                .frame(maxWidth: 520)
+                .frame(maxWidth: ZiroMeasure.standard)
                 .accessibilityHint("Shows a sanitized error code with no conversation content")
             }
             .padding(.horizontal, ZiroTheme.Spacing.xLarge)
@@ -103,21 +101,24 @@ struct StoreResetConfirmationView: View {
                     icon: "checkmark.shield.fill",
                     title: "Your recovery copy is protected",
                     message: "\(artifact.manifest.count) local history file\(artifact.manifest.count == 1 ? "" : "s") copied and verified byte-for-byte.",
-                    tint: ZiroTheme.positiveText
+                    tone: .positive
                 )
-                .frame(maxWidth: 520)
+                .frame(maxWidth: ZiroMeasure.standard)
 
                 VStack(spacing: ZiroTheme.Spacing.medium) {
+                    // In-page destructive confirmations use the destructive
+                    // token style (spec §8.8) — system red stays reserved for
+                    // dialogs.
                     Button("Reset and Start Fresh", role: .destructive, action: onConfirm)
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.large)
+                        .buttonStyle(ZiroDestructiveButtonStyle())
                         .accessibilityHint("Deletes the unreadable original after preserving the recovery copy")
                     Button("Cancel", action: onCancel)
-                        .buttonStyle(.bordered)
-                        .controlSize(.large)
+                        .buttonStyle(ZiroSecondaryButtonStyle())
                 }
+                .frame(maxWidth: ZiroMeasure.standard)
             }
-            .padding(ZiroTheme.Spacing.xxLarge)
+            .padding(.horizontal, ZiroTheme.Spacing.xLarge)
+            .padding(.vertical, ZiroTheme.Spacing.xxLarge)
             .frame(maxWidth: .infinity)
         }
         .background(ZiroTheme.pageBackground)
@@ -153,24 +154,33 @@ struct StoreOperationProgressView: View {
                     Image(systemName: symbol).symbolEffect(.pulse)
                 }
             }
-            .font(.largeTitle)
-            .foregroundStyle(Color.accentColor)
+            .font(.largeTitle.weight(.medium))
+            .foregroundStyle(ZiroTheme.accent)
             .accessibilityHidden(true)
             ProgressView().controlSize(.large)
             VStack(spacing: ZiroTheme.Spacing.small) {
-                Text(title).font(.title2.bold())
-                Text(message).font(.body).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                Text(title)
+                    .font(ZiroType.title)
+                    .foregroundStyle(ZiroTheme.primaryText)
+                Text(message)
+                    .font(ZiroType.body)
+                    .foregroundStyle(ZiroTheme.secondaryText)
+                    .multilineTextAlignment(.center)
                 if let elapsed {
                     Text("Working securely · \(elapsed)s")
-                        .font(.caption).foregroundStyle(.tertiary).monospacedDigit()
+                        .font(ZiroType.caption)
+                        .foregroundStyle(ZiroTheme.tertiaryText)
+                        .monospacedDigit()
                 } else {
                     Text("Working securely")
-                        .font(.caption).foregroundStyle(.tertiary)
+                        .font(ZiroType.caption)
+                        .foregroundStyle(ZiroTheme.tertiaryText)
                 }
             }
         }
-        .padding(ZiroTheme.Spacing.xxLarge)
-        .frame(maxWidth: 520)
+        .padding(.horizontal, ZiroTheme.Spacing.xLarge)
+        .padding(.vertical, ZiroTheme.Spacing.xxLarge)
+        .frame(maxWidth: ZiroMeasure.standard)
         .accessibilityElement(children: .combine)
     }
 }

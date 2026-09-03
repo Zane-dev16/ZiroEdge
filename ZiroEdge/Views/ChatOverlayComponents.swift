@@ -18,10 +18,20 @@ import SwiftUI
 struct ChatHeaderPill: View {
     let phase: ModelLoadPhase
     let modelName: String?
+    /// True while a user-initiated unload (Settings → Unload Model) has
+    /// parked the chat on `.idle` with a named model. Without it that state
+    /// reads identically to `.ready` over VoiceOver while the composer sits
+    /// dimmed and disabled.
+    var isUserUnloaded: Bool = false
     let availableModels: [AIModel]
     let onSelectModel: (AIModel) -> Void
     let onBrowseModels: () -> Void
     let onRetryLoad: () -> Void
+
+    /// Width cap scales with Dynamic Type (relative to the pill's headline
+    /// font) so the anti-overflow clamp doesn't shrink the title slot below
+    /// legibility at accessibility sizes. Identical 240pt at default size.
+    @ScaledMetric(relativeTo: .headline) private var pillMaxWidth: CGFloat = 240
 
     var body: some View {
         menu
@@ -64,16 +74,23 @@ struct ChatHeaderPill: View {
         HStack(spacing: ZiroTheme.Spacing.xSmall) {
             statusIndicator
             Text(pillTitle)
-                .font(.headline)
+                .font(ZiroType.rowTitle)
                 .lineLimit(1)
+                .allowsTightening(true)
                 .foregroundStyle(titleTint)
             Image(systemName: "chevron.up.chevron.down")
                 .font(.caption2)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(ZiroTheme.secondaryText)
         }
+        // Hard width cap: without one, Menu labels size to their ideal width,
+        // so long model names stretch the capsule under the leading/trailing
+        // toolbar buttons and the toolbar clips it mid-glyph at both ends.
+        // The cap keeps the capsule inside the principal slot and lets the
+        // title truncate with an ellipsis instead.
+        .frame(maxWidth: pillMaxWidth)
         .padding(.horizontal, ZiroTheme.Spacing.medium)
         .padding(.vertical, ZiroTheme.Spacing.xSmall)
-        .background(ZiroTheme.inputBackground, in: Capsule())
+        .background(ZiroTheme.wellBackground, in: Capsule())
     }
 
     @ViewBuilder
@@ -90,8 +107,10 @@ struct ChatHeaderPill: View {
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(ZiroTheme.warningText)
         case .needsDownload, .idle:
+            // Quiet-state dot: tertiary metadata token instead of an
+            // opacity-dimmed system color.
             Circle()
-                .fill(Color.secondary.opacity(0.5))
+                .fill(ZiroTheme.tertiaryText)
                 .frame(width: 7, height: 7)
         }
     }
@@ -116,11 +135,11 @@ struct ChatHeaderPill: View {
 
     private var titleTint: Color {
         switch phase {
-        case .ready: return Color.primary
+        case .ready: return ZiroTheme.primaryText
         // Semantic status tokens: raw .orange fails 4.5:1 on light backgrounds.
         case .failed, .evicted: return ZiroTheme.warningText
-        case .needsDownload, .idle: return Color.secondary
-        case .loading: return Color.primary
+        case .needsDownload, .idle: return ZiroTheme.secondaryText
+        case .loading: return ZiroTheme.primaryText
         }
     }
 
@@ -148,10 +167,10 @@ struct ChatHeaderPill: View {
     /// Matches the historical picker-label family used by UI test helpers
     /// (`readModelPickerLabel`, `selectChatModel`). State folds into the label
     /// ("Chat model, X, loading" / "…, failed to load" / "…, unloaded, reload
-    /// available") so VoiceOver hears it from the pill itself — the orange
-    /// warning indicator and phase are otherwise invisible after the one-shot
-    /// transition announcement, and revisiting the pill would read like a
-    /// normal ready state.
+    /// available" / "…, unloaded, choose a model to reload") so VoiceOver
+    /// hears it from the pill itself — the orange warning indicator and phase
+    /// are otherwise invisible after the one-shot transition announcement, and
+    /// revisiting the pill would read like a normal ready state.
     private var accessibilityText: String {
         let name = modelName ?? "Model"
         switch phase {
@@ -161,7 +180,15 @@ struct ChatHeaderPill: View {
             return "Chat model, \(name), failed to load"
         case .evicted:
             return "Chat model, \(name), unloaded, reload available"
-        case .ready, .idle, .needsDownload:
+        case .idle:
+            // User-initiated unload: the label must distinguish the parked
+            // state from `.ready`, which projects the same "Chat model, X"
+            // tail otherwise.
+            if isUserUnloaded {
+                return "Chat model, \(name), unloaded, choose a model to reload"
+            }
+            return "Chat model, \(pillTitle)"
+        case .ready, .needsDownload:
             return "Chat model, \(pillTitle)"
         }
     }
@@ -180,6 +207,7 @@ struct ConversationSystemPromptEditor: View {
             Form {
                 Section {
                     TextEditor(text: $prompt)
+                        .font(ZiroType.body)
                         .frame(minHeight: 180)
                         .accessibilityLabel("Conversation instructions")
                 } header: {
@@ -191,12 +219,17 @@ struct ConversationSystemPromptEditor: View {
                 if !defaultPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Section("Default Instructions") {
                         Text(defaultPrompt)
-                            .foregroundStyle(.secondary)
+                            .font(ZiroType.body)
+                            .foregroundStyle(ZiroTheme.secondaryText)
                             .textSelection(.enabled)
                         Button("Use Default") { Task { await onUseDefault() } }
                     }
                 }
             }
+            // Warm paper canvas with raised card rows (design spec §3.1).
+            .scrollContentBackground(.hidden)
+            .background(ZiroTheme.pageBackground.ignoresSafeArea())
+            .listRowBackground(ZiroTheme.raisedBackground)
             .navigationTitle("Conversation Instructions")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -231,14 +264,19 @@ struct ThinkingIndicator: View {
 
     private func thinkingRow(text: String) -> some View {
         HStack {
+            // minWidth (not fixed width): a fixed 96pt frame turns the bubble
+            // into a tall sliver with wrapped/truncated text at accessibility
+            // Dynamic Type sizes — hug the content instead and let the
+            // min-width only steady the dots animation at the default size.
             Text(text)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .frame(width: 96, alignment: .leading)
+                .font(ZiroType.supporting)
+                .foregroundStyle(ZiroTheme.secondaryText)
+                .frame(minWidth: 96, alignment: .leading)
                 .padding(.horizontal, ZiroTheme.Spacing.large)
                 .padding(.vertical, ZiroTheme.Spacing.medium)
-                .background(ZiroTheme.elevatedBackground)
-                .clipShape(RoundedRectangle(cornerRadius: ZiroTheme.Radius.bubble))
+                // Assistant bubble treatment: raised surface + hairline,
+                // continuous corners at the bubble radius.
+                .ziroMessageBubble(.assistant)
             Spacer()
         }
         .padding(.horizontal, ZiroTheme.Spacing.large)

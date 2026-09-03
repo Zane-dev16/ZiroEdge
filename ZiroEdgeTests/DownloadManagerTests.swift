@@ -307,7 +307,12 @@ final class DownloadManagerTests: XCTestCase {
             config: .llama32,
             license: LicenseInfo(name: "Test", url: URL(string: "https://example.com")!, copyright: "Test")
         )
-        XCTAssertTrue(downloadManager.hasSufficientStorage(for: tinyModel))
+        // Hermetic disk space: the gate reads the real host volume, so a
+        // nearly-full disk would veto even this 1-byte model. Injecting
+        // plentiful space isolates the gate/margin logic from host state
+        // (real-volume reads are covered by testAvailableDiskSpaceIsPositive).
+        let manager = DownloadManager(availableDiskSpaceProvider: { .max })
+        XCTAssertTrue(manager.hasSufficientStorage(for: tinyModel))
     }
 
 }
@@ -598,17 +603,22 @@ extension DownloadManagerTests {
         task.state = .failed(error: .networkError)
         task.isPaused = true  // Failed but resumable
         task.progress = 0.25
-        downloadManager.activeTasks[task.storageID] = task
-        downloadManager.updateStatus(model: model)
+        // Hermetic disk space: resume rechecks real host free space and would
+        // refuse to resume (flipping the task to diskSpaceInsufficient) on a
+        // nearly-full volume. Inject plentiful space so the resume transition
+        // under test is deterministic.
+        let manager = DownloadManager(availableDiskSpaceProvider: { .max })
+        manager.activeTasks[task.storageID] = task
+        manager.updateStatus(model: model)
 
         // Resume should transition to resuming state
-        downloadManager.resumeDownload(for: model)
+        manager.resumeDownload(for: model)
 
-        let status = downloadManager.status(for: model)
+        let status = manager.status(for: model)
         // Should be resuming or downloading (transition may be instant for chunked)
         XCTAssertTrue(status.isDownloading || status.baseState == .resuming(progress: 0.25))
 
-        downloadManager.cancelDownload(for: model)
+        manager.cancelDownload(for: model)
     }
 
     func testDisplayStateAggregatesPausedAcrossArtifacts() {

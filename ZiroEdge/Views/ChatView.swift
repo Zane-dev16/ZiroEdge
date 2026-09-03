@@ -18,6 +18,19 @@ struct ChatView: View {
 
     @FocusState var isInputFocused: Bool
     @State private var hasScrolledUp = false
+    // Composer hit targets: scale with Dynamic Type so glyphs never overflow
+    // their frames at accessibility sizes, while meeting the repo's 44×44
+    // minimum hit-target standard at the default size.
+    @ScaledMetric(relativeTo: .title3) private var composerControlSide: CGFloat = 44
+    @ScaledMetric(relativeTo: .title) private var sendControlSide: CGFloat = 44
+    @ScaledMetric(relativeTo: .title3) private var imageRemoveControlSide: CGFloat = 44
+    // Pending-attachment thumbnail: decorative image size that grows with
+    // Dynamic Type (design-system §6.2 — Radius.small corners, no shadow).
+    @ScaledMetric(relativeTo: .body) private var pendingImageSide: CGFloat = 68
+    /// Pull-back distance that keeps the remove glyph anchored on the
+    /// thumbnail corner as its hit-target frame scales with Dynamic Type:
+    /// half the frame minus the 8pt glyph margin (14pt at the 44pt default).
+    private var imageRemoveCornerInset: CGFloat { imageRemoveControlSide / 2 - 8 }
     @State private var selectedPhotos: [PhotosPickerItem] = []
     @State private var canPasteImage = UIPasteboard.general.hasImages
     @State private var showSystemPromptEditor = false
@@ -84,7 +97,8 @@ struct ChatView: View {
             PhotosPicker(selection: $selectedPhotos, maxSelectionCount: 10, matching: .images) {
                 Image(systemName: "photo.on.rectangle")
                     .font(.title3)
-                    .frame(width: 32, height: 40)
+                    .frame(width: composerControlSide, height: composerControlSide)
+                    .contentShape(Rectangle())
             }
             .accessibilityLabel("Add photos")
             .accessibilityHint("Attach up to 10 images to this message")
@@ -102,7 +116,16 @@ struct ChatView: View {
                     if await viewModel.pasteImage() { refreshPasteboardState() }
                 }
             } label: {
-                Image(systemName: "doc.on.clipboard").font(.title3).frame(width: 32, height: 40)
+                Image(systemName: "doc.on.clipboard")
+                    .font(.title3)
+                    // Match sendTint's disabled treatment: the HStack-level
+                    // accent tint below keeps plain buttons full-color when
+                    // disabled, so the paste glyph must dim itself explicitly.
+                    // `tertiaryText` is the quiet-metadata token — the closest
+                    // verified "disabled voice" in the design system.
+                    .foregroundStyle(canPasteImage ? Color.accentColor : ZiroTheme.tertiaryText)
+                    .frame(width: composerControlSide, height: composerControlSide)
+                    .contentShape(Rectangle())
             }
             .disabled(!canPasteImage)
             .accessibilityLabel("Paste image")
@@ -120,7 +143,8 @@ struct ChatView: View {
             Image(systemName: viewModel.isStreaming ? "stop.circle.fill" : "arrow.up.circle.fill")
                 .font(.title)
                 .foregroundStyle(sendTint)
-                .frame(width: 38, height: 42)
+                .frame(width: sendControlSide, height: sendControlSide)
+                .contentShape(Rectangle())
         }
         .disabled(sendDisabled)
         .accessibilityLabel(viewModel.isStreaming ? "Stop generating" : "Send message")
@@ -133,7 +157,7 @@ struct ChatView: View {
     }
 
     private var sendTint: Color {
-        (canSend && chatReady) || viewModel.isStreaming ? Color.accentColor : Color.secondary.opacity(0.45)
+        (canSend && chatReady) || viewModel.isStreaming ? Color.accentColor : ZiroTheme.tertiaryText
     }
 
     var imagePreviewRow: some View {
@@ -144,16 +168,27 @@ struct ChatView: View {
                         ZStack(alignment: .topTrailing) {
                             Image(uiImage: image)
                                 .resizable().scaledToFill()
-                                .frame(width: 68, height: 68)
-                                .clipShape(RoundedRectangle(cornerRadius: ZiroTheme.Radius.control))
+                                .frame(width: pendingImageSide, height: pendingImageSide)
+                                .clipShape(RoundedRectangle(cornerRadius: ZiroTheme.Radius.small, style: .continuous))
                                 .accessibilityLabel("Attached image \(index + 1)")
                             Button { viewModel.removeImage(at: index) } label: {
                                 Image(systemName: "xmark.circle.fill")
                                     .font(.title3).foregroundStyle(.white)
-                                    .shadow(radius: 2)
+                                    // Depth without a shadow (shadows only ever
+                                    // accompany a hairline): the hairline-strong
+                                    // edge keeps the white disc legible over
+                                    // bright photo content in both appearances.
+                                    .overlay(Circle().stroke(ZiroTheme.hairlineStrong, lineWidth: 1))
+                                    .frame(width: imageRemoveControlSide, height: imageRemoveControlSide)
+                                    .contentShape(Rectangle())
                             }
                             .accessibilityLabel("Remove attached image \(index + 1)")
-                            .offset(x: 5, y: -5)
+                            // The scaled 44×44 hit target centers the glyph in
+                            // a frame whose top-trailing corner is pinned to
+                            // the thumbnail's; the inset keeps the glyph itself
+                            // anchored on the corner instead of pulled half a
+                            // frame inside by the enlarged hit area.
+                            .offset(x: imageRemoveCornerInset, y: -imageRemoveCornerInset)
                         }
                     }
                 }
@@ -202,7 +237,9 @@ extension ChatView {
 
                     Color.clear.frame(height: 1).id("bottomAnchor")
                 }
-                .frame(maxWidth: 760)
+                // Transcript column: the widest allowed content cap (760),
+                // centered by the full-width frame — ZiroMeasure.full.
+                .frame(maxWidth: ZiroMeasure.full)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, ZiroTheme.Spacing.medium)
                 .background {
@@ -228,7 +265,7 @@ extension ChatView {
                         .transition(reduceMotion ? .opacity : .scale(scale: 0.85).combined(with: .opacity))
                 }
             }
-            .animation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.8), value: hasScrolledUp)
+            .ziroAnimation(ZiroMotion.appear, value: hasScrolledUp)
             .onChange(of: viewModel.messages.count) { _, _ in throttledScrollToBottom(proxy) }
             .onChange(of: viewModel.streamingText) { _, _ in
                 guard !hasScrolledUp else { return }
@@ -242,11 +279,24 @@ extension ChatView {
                     // with isStreaming constantly true and torn down the
                     // moment this flips false, so it can never announce its
                     // own finish — post the announcement from this choke
-                    // point instead.
-                    UIAccessibility.post(
-                        notification: .announcement,
-                        argument: "Assistant response complete"
-                    )
+                    // point instead. The recorded end reason branches the
+                    // wording: only a natural completion may say "complete";
+                    // a stop says "stopped"; an error stays silent because
+                    // its banner announces the failure itself.
+                    switch viewModel.lastStreamEndReason {
+                    case .completed:
+                        UIAccessibility.post(
+                            notification: .announcement,
+                            argument: "Assistant response complete"
+                        )
+                    case .stopped:
+                        UIAccessibility.post(
+                            notification: .announcement,
+                            argument: "Response stopped"
+                        )
+                    case .failed, nil:
+                        break
+                    }
                 }
             }
         }
@@ -256,37 +306,59 @@ extension ChatView {
         VStack(spacing: ZiroTheme.Spacing.large) {
             ProgressView()
             Text("Loading conversation…")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .font(ZiroType.supporting)
+                .foregroundStyle(ZiroTheme.secondaryText)
         }
         .frame(maxWidth: .infinity, minHeight: 280)
         .accessibilityElement(children: .combine)
     }
 
+    /// The brand moment (design system §8.1): mark over the ember glow,
+    /// wordmark, title, privacy message, working sample-prompt chips, and —
+    /// only when nothing is installed — the catalog CTA.
     var emptyState: some View {
-        // A.2: with no models installed, the hero gains a direct CTA into the
-        // catalog (same shell route the header pill's Browse action uses).
-        VStack(spacing: ZiroTheme.Spacing.large) {
-            ZiroHero(
-                symbol: "bubble.left.and.bubble.right",
-                title: "Start a conversation",
-                message: "Ask anything below. Your messages and the model's response stay on this device.",
-                tint: .accentColor
-            )
+        ZiroEmptyState(
+            title: "Start a conversation",
+            message: "Ask anything below. Your messages and the model's response stay on this device.",
+            suggestions: viewModel.availableModels.isEmpty ? [] : Self.samplePrompts,
+            onSuggestion: { suggestion in
+                // Reuses the existing send flow: the prompt lands in the
+                // composer (trailing space so typing continues naturally)
+                // and the field takes focus. No new ViewModel API.
+                let existing = viewModel.inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+                viewModel.inputText = existing.isEmpty
+                    ? suggestion + " "
+                    : existing + " " + suggestion + " "
+                isInputFocused = true
+            }
+        ) {
+            // A.2: with no models installed, the empty state gains a direct
+            // CTA into the catalog (same shell route the header pill's
+            // Browse action uses). Chips are withheld in that state — the
+            // composer is disabled with nothing to load, so the guided
+            // prompts could not actually work.
             if viewModel.availableModels.isEmpty {
                 Button {
                     navigateToRoute(.models)
                 } label: {
                     Label("Browse Models", systemImage: "arrow.down.circle")
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(ZiroPrimaryButtonStyle())
                 .accessibilityIdentifier("browse-models-button")
             }
         }
         .frame(maxWidth: .infinity)
-        .padding(.horizontal, ZiroTheme.Spacing.xxLarge)
+        .padding(.horizontal, ZiroTheme.Spacing.xLarge)
         .padding(.top, ZiroTheme.Spacing.heroTop)
     }
+
+    /// Guided starting points rendered by `ZiroEmptyState`'s chip row
+    /// (wraps across lines at any Dynamic Type size via ZiroFlowLayout).
+    private static let samplePrompts = [
+        "Explain a concept simply",
+        "Help me draft a reply",
+        "Summarize my notes"
+    ]
 
     // MARK: Scrolling
 
@@ -296,8 +368,8 @@ extension ChatView {
                 .font(.body.weight(.bold))
                 .padding(ZiroTheme.Spacing.medium)
                 .foregroundStyle(ZiroTheme.accentForeground)
-                .background(Color.accentColor, in: Circle())
-                .shadow(color: .black.opacity(0.18), radius: 6, y: 3)
+                .background(ZiroTheme.accent, in: Circle())
+                .ziroShadow(.floating)
         }
         .accessibilityLabel("Jump to latest message")
     }
@@ -314,7 +386,7 @@ extension ChatView {
                 proxy.scrollTo("bottomAnchor", anchor: .bottom)
             }
         }
-        if reduceMotion { scroll() } else { withAnimation(.easeOut(duration: 0.22), scroll) }
+        if reduceMotion { scroll() } else { withAnimation(ZiroMotion.stream, scroll) }
         hasScrolledUp = false
     }
 
@@ -366,6 +438,7 @@ extension ChatView {
             ChatHeaderPill(
                 phase: viewModel.modelLoadPhase,
                 modelName: viewModel.selectedModel?.displayName,
+                isUserUnloaded: viewModel.lifecycleManager.isUserUnloaded,
                 availableModels: viewModel.availableModels,
                 onSelectModel: { model in Task { await viewModel.selectModel(model) } },
                 onBrowseModels: { navigateToRoute(.models) },

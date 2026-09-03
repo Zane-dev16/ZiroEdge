@@ -158,6 +158,23 @@ struct DownloadDiagnosticSummary: Codable, Sendable {
     }
 }
 
+// MARK: - Log Rotation
+
+/// Size-based rotation for append-only diagnostic logs: once the live file
+/// exceeds `byteLimit`, it is renamed to `<name>.old` (replacing any previous
+/// rotation) so disk usage stays bounded. Shared by the app diagnostic log,
+/// the download diagnostics recorder, and the memory recorder.
+enum DiagnosticLogRotation {
+    static func rotateIfNeeded(url: URL, byteLimit: Int64) {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let size = (attrs[.size] as? NSNumber)?.int64Value,
+              size > byteLimit else { return }
+        let rotated = url.appendingPathExtension("old")
+        try? FileManager.default.removeItem(at: rotated)
+        try? FileManager.default.moveItem(at: url, to: rotated)
+    }
+}
+
 // MARK: - Redaction
 
 enum DownloadDiagnosticRedactor {
@@ -204,6 +221,11 @@ enum DownloadDiagnosticRedactor {
 /// Callers receive value-type payloads and never access recorder storage.
 final class DownloadDiagnosticRecorder: @unchecked Sendable {
     static let shared = DownloadDiagnosticRecorder()
+
+    /// Live NDJSON log cap; older bytes rotate to `.old` (one deep).
+    static let logRotationBytes: Int64 = 2_048 * 1_024
+    /// Upper bound on bytes read by `exportSummary` (log tail only).
+    static let exportTailBytes: Int64 = 1_048_576
 
     private let lock = NSLock()
     private let encoder: JSONEncoder
@@ -328,6 +350,7 @@ final class DownloadDiagnosticRecorder: @unchecked Sendable {
                 return
             }
             let url = Self.logURL
+            DiagnosticLogRotation.rotateIfNeeded(url: url, byteLimit: Self.logRotationBytes)
             if let handle = try? FileHandle(forWritingTo: url) {
                 defer { try? handle.close() }
                 try handle.seekToEnd()
@@ -350,6 +373,8 @@ final class DownloadDiagnosticRecorder: @unchecked Sendable {
     /// Produce a sanitized summary: app/catalog version, artifact states,
     /// expected/actual sizes, verification outcomes, and recent failures.
     /// No raw URLs, paths, credentials, or conversation data is included.
+    /// Only the tail of the log is read so a multi-megabyte NDJSON file cannot
+    /// stall an export.
     func exportSummary() -> DownloadDiagnosticSummary? {
         lock.lock()
         defer { lock.unlock() }
@@ -360,9 +385,22 @@ final class DownloadDiagnosticRecorder: @unchecked Sendable {
         }
         defer { try? handle.close() }
 
-        guard let data = try? handle.readToEnd(),
-              let text = String(data: data, encoding: .utf8) else {
+        let fileSize = (try? handle.seekToEnd()) ?? 0
+        let sizeBytes = Int64(bitPattern: fileSize)
+        let readOffset = max(0, sizeBytes - Self.exportTailBytes)
+        // Always seek back: seekToEnd left the handle at EOF, so a log smaller
+        // than the tail window (readOffset == 0) would otherwise read 0 bytes
+        // and export an empty summary.
+        try? handle.seek(toOffset: UInt64(readOffset))
+        let byteCount = Int(sizeBytes - readOffset)
+        guard byteCount > 0 else { return nil }
+        let data = handle.readData(ofLength: byteCount)
+        guard var text = String(data: data, encoding: .utf8) else {
             return nil
+        }
+        // A tail window can start mid-line; drop the partial first line.
+        if readOffset > 0, let firstNewline = text.firstIndex(of: "\n") {
+            text.removeSubrange(text.startIndex...firstNewline)
         }
 
         let lines = text.components(separatedBy: "\n").filter { !$0.isEmpty }

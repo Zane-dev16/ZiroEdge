@@ -35,11 +35,27 @@ enum ModelLoadPhase: Equatable {
 @MainActor
 final class ChatViewModel: ObservableObject {
 
+    /// Terminal reason for the most recent generation, recorded wherever
+    /// `isStreaming` is set false. `completed` is a natural end; `stopped` is
+    /// user/internal cancellation; `failed` is an error termination (its
+    /// banner announces itself, so the completion cue stays silent).
+    enum StreamEndReason {
+        case completed
+        case stopped
+        case failed
+    }
+
     // MARK: - Published State
 
     @Published var messages: [ChatMessagePayload] = []
     @Published var inputText: String = ""
     @Published var isStreaming: Bool = false
+    /// Why the most recent stream ended. Drives the VoiceOver end-of-stream
+    /// cue (ChatView's onChange(of: isStreaming)): every termination funnels
+    /// through the same isStreaming flip, so without a recorded reason a
+    /// user-initiated Stop or an error would announce a false "complete".
+    /// Not published — read alongside the isStreaming flip in the view.
+    private(set) var lastStreamEndReason: StreamEndReason?
     @Published var errorMessage: String?
     @Published var showError: Bool = false
     @Published var streamingText: String = ""
@@ -121,7 +137,9 @@ final class ChatViewModel: ObservableObject {
 
     private let persistence: any PersistenceProviding
     private let inferenceService: any InferenceServiceProtocol
-    private let sessionActor: ChatSessionActor
+    /// Read-shared with the persistence-recovery extension in
+    /// ChatPersistenceRecovery.swift.
+    let sessionActor: ChatSessionActor
     /// Read-shared with the deferred-load extensions in ChatModelLoading.swift.
     let lifecycleManager: ModelLifecycleManager
     private let downloadStatusProvider: any ModelDownloadStatusProvider
@@ -229,11 +247,23 @@ final class ChatViewModel: ObservableObject {
     /// so they are pinned to that profile. Controlled-workload diagnostics
     /// route through `lifecycleManager.autoLoadFirstModel()` instead and never
     /// consult this method.
+    /// Unconsented experimental imports are excluded: `availableModels`
+    /// deliberately includes them for picker discoverability, but the deferred
+    /// auto-loader (launch autoload, `beginNewDraft`, Start-Chatting) must not
+    /// silently load and enable chatting on a model `selectModel` would have
+    /// gated behind the first-use consent dialog. They stay picker-only until
+    /// consent is granted.
     func preferredAutoLoadCandidate() -> AIModel? {
-        let downloaded = availableModels
+        let downloaded = availableModels.filter { model in
+            !(model.runtimeEligibility == .experimental
+                && model.isImported
+                && !ExperimentalModelConsent.isGranted(for: model))
+        }
+        #if DEBUG
         if HermeticUITestRuntime.isEnabled {
             return downloaded.first { $0.id == ModelRegistry.llama32_3B.id }
         }
+        #endif
         if let lastID = UserDefaults.standard.string(forKey: DefaultsKeys.lastUsedModelID),
            let lastModel = downloaded.first(where: { $0.id == lastID }) {
             return lastModel
@@ -255,6 +285,9 @@ final class ChatViewModel: ObservableObject {
 
         let previousSelection = selectedModel
         selectedModel = model
+        // Explicit selection consumes a prior user-unload intent (Settings →
+        // Unload Model): the user is naming a model to work with again.
+        lifecycleManager.consumeUserUnloadIntent()
 
         // An automatic load may already be in flight — e.g. the appear-time
         // deferred load racing a conversation opened from the drawer during
@@ -318,6 +351,10 @@ final class ChatViewModel: ObservableObject {
     func beginNewDraft() {
         clearActiveConversation()
         isDraftConversation = true
+        // Starting a fresh draft consumes a prior user-unload intent (Settings
+        // → Unload Model): nominating a display candidate here is a deliberate
+        // step toward loading again.
+        lifecycleManager.consumeUserUnloadIntent()
         conversationListViewModel?.selectedConversationID = nil
         if selectedModel == nil, let candidate = preferredAutoLoadCandidate() {
             selectedModel = candidate
@@ -549,7 +586,10 @@ extension ChatViewModel {
         }
 
         guard !text.isEmpty || hasImages else { return nil }
-        guard !isLoadingConversation else { return nil }
+        guard !isLoadingConversation else {
+            surfaceSendBlockedDuringConversationLoad()
+            return nil
+        }
 
         if selectedModel == nil { autoSelectModel() }
         guard let selectedModel else { needsModelRedirect = true; return nil }
@@ -579,6 +619,22 @@ extension ChatViewModel {
             return await materializeDraftForSend()
         }
         return conversationID
+    }
+
+    /// A send that lands while a conversation is still loading is dropped —
+    /// surface it through the transient warning banner instead of failing
+    /// silently. The load path clears transient banners when it settles, so
+    /// the message is posted after the in-flight load finishes.
+    private func surfaceSendBlockedDuringConversationLoad() {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            while self.isLoadingConversation {
+                do { try await Task.sleep(nanoseconds: 50_000_000) } catch { return }
+            }
+            // A stream started after the load means the retry already happened.
+            guard !self.isStreaming else { return }
+            self.truncationWarning = "The conversation was still loading, so your message wasn't sent. Try again now that it's open."
+        }
     }
 
     func sendMessage() async {
@@ -652,12 +708,13 @@ extension ChatViewModel {
 
     /// Shared completion/reset of a generation slot; both success and error
     /// closures funnel through this.
-    private func finishGeneration(_ generationID: UUID) {
+    private func finishGeneration(_ generationID: UUID, reason: StreamEndReason) {
         streamingFlushTask?.cancel()
         flushStreamingChunks()
         activeGenerationID = nil
         isStreaming = false
         streamedConversationID = nil
+        lastStreamEndReason = reason
     }
 
     private func startStreaming(
@@ -674,14 +731,26 @@ extension ChatViewModel {
         let onComplete: @Sendable () -> Void = { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self, self.activeGenerationID == generationID else { return }
-                self.finishGeneration(generationID)
-                let trimmed = self.streamingText.trimmingCharacters(in: .newlines)
-                if !trimmed.isEmpty {
-                    self.messages.append(ChatMessagePayload(role: .assistant, content: trimmed))
+                self.finishGeneration(generationID, reason: .completed)
+                // endStreamingMessage persisted the assistant row before
+                // onComplete ran — including whitespace-only replies that a
+                // trimmed-empty check would skip. Mirror the persisted row
+                // content so a user-unloaded transcript never loses a response
+                // that exists on disk (the non-unloaded path reloads it anyway).
+                let persistedReply = self.streamingText
+                if !persistedReply.isEmpty {
+                    self.messages.append(ChatMessagePayload(role: .assistant, content: persistedReply))
                 }
+                let trimmed = persistedReply.trimmingCharacters(in: .newlines)
                 self.streamingText = ""
                 self.resetStreamingBuffer()
-                await self.loadConversation(conversationID)
+                // A user-initiated unload (Settings → Unload Model) cancels
+                // the engine stream and lands here: reloading the transcript
+                // would selectModel the just-unloaded model back. The
+                // in-memory append above already mirrors the persisted row.
+                if !self.lifecycleManager.isUserUnloaded {
+                    await self.loadConversation(conversationID)
+                }
                 if isFirstExchange && !firstUserMessage.isEmpty {
                     await self.generateTitleIfNeeded(
                         conversationID: conversationID, userMessage: firstUserMessage, assistantResponse: trimmed
@@ -692,7 +761,7 @@ extension ChatViewModel {
         let onError: @Sendable (Error) -> Void = { [weak self] error in
             Task { @MainActor [weak self] in
                 guard let self, self.activeGenerationID == generationID else { return }
-                self.finishGeneration(generationID)
+                self.finishGeneration(generationID, reason: .failed)
                 self.hasPersistenceRecovery = await self.sessionActor.recoveryHandle != nil
                 if !self.hasPersistenceRecovery {
                     self.streamingText = ""
@@ -700,7 +769,11 @@ extension ChatViewModel {
                 }
                 self.errorMessage = error.localizedDescription; self.showError = true
                 UINotificationFeedbackGenerator().notificationOccurred(.error)
-                if !self.hasPersistenceRecovery { await self.loadConversation(conversationID) }
+                // Same user-unload guard as onComplete: an unload-driven
+                // cancellation must not reload the just-unloaded model.
+                if !self.hasPersistenceRecovery, !self.lifecycleManager.isUserUnloaded {
+                    await self.loadConversation(conversationID)
+                }
             }
         }
 
@@ -732,65 +805,33 @@ extension ChatViewModel {
         streamingFlushTask?.cancel()
         flushStreamingChunks()
         await sessionActor.cancel()
+        lastStreamEndReason = .stopped
         isStreaming = false
         hasPersistenceRecovery = await sessionActor.recoveryHandle != nil
         if !hasPersistenceRecovery {
             streamingText = ""
             resetStreamingBuffer()
-            if let conversationID = activeConversationID { await loadConversation(conversationID) }
-        }
-    }
-
-    func retryPersistenceRecovery() async {
-        switch await sessionActor.retryRecoverySave() {
-        case .success:
-            hasPersistenceRecovery = false
-            streamingText = ""
-            resetStreamingBuffer()
-            errorMessage = nil
-            showError = false
-            if let activeConversationID { await loadConversation(activeConversationID) }
-        case .failure(let failure):
-            errorMessage = failure.localizedDescription
-            showError = true
-        }
-    }
-
-    func exportPersistenceRecovery() async {
-        switch await sessionActor.exportRecovery() {
-        case .success(let data):
-            do {
-                let url = FileManager.default.temporaryDirectory
-                    .appendingPathComponent("ZiroEdge-partial-response-\(UUID().uuidString).json")
-                try data.write(to: url, options: .atomic)
-                recoveryExportURL = url
-            } catch {
-                errorMessage = PersistenceFailure.map(error, operation: .export).localizedDescription
-                showError = true
+            // An unload-driven cancel must not reload the just-unloaded model
+            // (same intent guard as the completion path).
+            if let conversationID = activeConversationID, !lifecycleManager.isUserUnloaded {
+                await loadConversation(conversationID)
             }
-        case .failure(let failure):
-            errorMessage = failure.localizedDescription
-            showError = true
         }
     }
 
-    func discardPersistenceRecovery() async {
-        switch await sessionActor.discardRecovery() {
-        case .success:
-            hasPersistenceRecovery = false
-            streamingText = ""
-            resetStreamingBuffer()
-            recoveryExportURL = nil
-            if let activeConversationID { await loadConversation(activeConversationID) }
-        case .failure(let failure):
-            errorMessage = failure.localizedDescription
-            showError = true
-        }
+    /// Banner/buffer seams for the persistence-recovery surface in
+    /// ChatPersistenceRecovery.swift: the `private(set)` recovery state and
+    /// the private streaming buffer are only mutable in this file.
+    func releasePersistenceRecovery() {
+        hasPersistenceRecovery = false
+        recoveryExportURL = nil
+        streamingText = ""
+        resetStreamingBuffer()
     }
 
-    func presentBackgroundPersistenceFailure(_ failure: PersistenceFailure) {
-        errorMessage = failure.localizedDescription
-        showError = true
+    /// Stage an exported partial-response file for the share sheet.
+    func stageRecoveryExport(_ url: URL) {
+        recoveryExportURL = url
     }
 
     var effectiveSystemPrompt: String? {
@@ -834,6 +875,12 @@ extension ChatViewModel {
         ) {
         case .success(let newID):
             await loadConversation(newID)
+            // Mirror draft materialization/sendtest: refresh the sidebar and
+            // select the new branch so the highlighted row matches the
+            // visible transcript. The shell's onChange load is a no-op here
+            // because activeConversationID already == newID.
+            await conversationListViewModel?.loadConversations()
+            conversationListViewModel?.selectedConversationID = newID
         case .failure(let failure):
             errorMessage = failure.localizedDescription
             showError = true

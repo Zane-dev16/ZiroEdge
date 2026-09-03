@@ -411,3 +411,52 @@ final class ChatFlowDiagnosticTest: XCTestCase {
         print("[FULLFLOW] === PASSED — response: \(response) ===")
     }
 }
+
+/// Hermetic UI-test scenario parsing (see HermeticUITestRuntime). The runtime
+/// flags seed deterministic chat states without real downloads; these tests
+/// pin the launch-argument contract the UI harness relies on.
+final class HermeticUITestScenarioTests: XCTestCase {
+
+    func testDefaultScenarioIsReady() {
+        XCTAssertEqual(HermeticUITestRuntime.scenario([]), .ready)
+        XCTAssertEqual(HermeticUITestRuntime.scenario(["--uitesting"]), .ready)
+        XCTAssertEqual(HermeticUITestRuntime.scenario(["--uitesting", "--uitesting-hermetic-model"]), .ready)
+    }
+
+    func testExplicitScenarioFlags() {
+        XCTAssertEqual(
+            HermeticUITestRuntime.scenario(["--uitesting", "--uitesting-hermetic-needs-download"]),
+            .needsDownload
+        )
+        XCTAssertEqual(
+            HermeticUITestRuntime.scenario(["--uitesting", "--uitesting-hermetic-failed-load"]),
+            .failedLoad
+        )
+    }
+
+    func testNeedsDownloadTakesPrecedenceOverFailedLoad() {
+        XCTAssertEqual(
+            HermeticUITestRuntime.scenario([
+                "--uitesting-hermetic-failed-load", "--uitesting-hermetic-needs-download"
+            ]),
+            .needsDownload
+        )
+    }
+
+    func testIsEnabledMatchesHermeticPrefix() {
+        XCTAssertTrue(HermeticUITestRuntime.isEnabled(["--uitesting-hermetic-model"]))
+        XCTAssertTrue(HermeticUITestRuntime.isEnabled(["--uitesting-hermetic-needs-download"]))
+        XCTAssertTrue(HermeticUITestRuntime.isEnabled(["--uitesting-hermetic-failed-load"]))
+        XCTAssertFalse(HermeticUITestRuntime.isEnabled(["--uitesting"]))
+        XCTAssertFalse(HermeticUITestRuntime.isEnabled(["--uitesting-sendtest"]))
+        XCTAssertFalse(HermeticUITestRuntime.isEnabled([]))
+    }
+
+    func testHasExplicitScenarioOnlyForNonDefaultModes() {
+        // hasExplicitScenario reads process arguments; drive it indirectly by
+        // asserting the underlying comparison it is defined on.
+        XCTAssertNotEqual(HermeticUITestRuntime.scenario(["--uitesting-hermetic-needs-download"]), .ready)
+        XCTAssertNotEqual(HermeticUITestRuntime.scenario(["--uitesting-hermetic-failed-load"]), .ready)
+        XCTAssertEqual(HermeticUITestRuntime.scenario(["--uitesting-hermetic-model"]), .ready)
+    }
+}

@@ -37,11 +37,14 @@ final class Batch02PendingImagesRaceTests: XCTestCase {
         }
         private var recorded: [Call] = []
         private var loadedID: String?
+        private var cannedChunks: [String] = ["Canned ", "response"]
         let streamingDelay: Duration
 
         init(streamingDelay: Duration = .milliseconds(350)) {
             self.streamingDelay = streamingDelay
         }
+
+        func setCannedChunks(_ chunks: [String]) { cannedChunks = chunks }
 
         var isModelLoaded: Bool { loadedID != nil }
         var loadedModelID: String? { loadedID }
@@ -66,9 +69,11 @@ final class Batch02PendingImagesRaceTests: XCTestCase {
         func calls() -> [Call] { recorded }
 
         private func cannedStream() -> AsyncThrowingStream<String, Error> {
-            AsyncThrowingStream { continuation in
-                continuation.yield("Canned ")
-                continuation.yield("response")
+            let chunks = cannedChunks
+            return AsyncThrowingStream { continuation in
+                for chunk in chunks {
+                    continuation.yield(chunk)
+                }
                 continuation.finish()
             }
         }
@@ -87,6 +92,8 @@ final class Batch02PendingImagesRaceTests: XCTestCase {
         let viewModel: ChatViewModel
         let persistence: PersistenceController
         let inference: DelayedRecordingInferenceService
+        let session: ChatSessionActor
+        let lifecycle: ModelLifecycleManager
         let root: URL
     }
 
@@ -120,7 +127,14 @@ final class Batch02PendingImagesRaceTests: XCTestCase {
             downloadStatusProvider: status,
             modelProvider: { [visionModel] }
         )
-        return Harness(viewModel: viewModel, persistence: persistence, inference: inference, root: root)
+        return Harness(
+            viewModel: viewModel,
+            persistence: persistence,
+            inference: inference,
+            session: session,
+            lifecycle: lifecycle,
+            root: root
+        )
     }
 
     private func waitForCompletion(_ viewModel: ChatViewModel, timeout: Duration = .seconds(4)) async throws {
@@ -135,6 +149,83 @@ final class Batch02PendingImagesRaceTests: XCTestCase {
             }
             try await Task.sleep(for: .milliseconds(20))
         }
+    }
+
+    private func waitForStreamingEnd(_ viewModel: ChatViewModel, timeout: Duration = .seconds(4)) async throws {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while viewModel.isStreaming {
+            guard clock.now < deadline else {
+                let msg = "Timed out. streaming=\(viewModel.isStreaming) "
+                    + "messages=\(viewModel.messages.map(\.content))"
+                throw NSError(domain: "Batch02", code: 1,
+                              userInfo: [NSLocalizedDescriptionKey: msg])
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+    }
+
+    /// P2-10: `tokenCount` must accumulate real generated tokens (one per
+    /// streamed yield), not flush batches.
+    func testSessionActorTokenCountCountsYields() async throws {
+        let harness = try await makeHarness(streamingDelay: .milliseconds(50))
+        let viewModel = harness.viewModel
+        let persistence = harness.persistence
+        let session = harness.session
+        let root = harness.root
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let visionModel = ModelRegistry.gemma4_e2b
+        let conversationID = try await persistence.createConversation(title: "Token Count", modelID: visionModel.id)
+        await viewModel.loadConversation(conversationID)
+
+        viewModel.inputText = "count my tokens"
+        await viewModel.sendMessage()
+        try await waitForCompletion(viewModel)
+
+        // The mock yields exactly two chunks; each is one decode step.
+        let tokenCount = await session.tokenCount
+        XCTAssertEqual(tokenCount, 2, "tokenCount must count yielded tokens, not flush batches")
+    }
+
+    /// P2-6: a whitespace-only assistant reply is persisted by
+    /// endStreamingMessage, so the in-memory transcript must mirror the
+    /// persisted row (user-unloaded conversations never reload from disk —
+    /// the old trimmed-empty check silently dropped the reply).
+    func testWhitespaceOnlyReplyMirrorsPersistedRowWhenUserUnloaded() async throws {
+        let harness = try await makeHarness(streamingDelay: .milliseconds(350))
+        let viewModel = harness.viewModel
+        let persistence = harness.persistence
+        let inference = harness.inference
+        let lifecycle = harness.lifecycle
+        let root = harness.root
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let whitespaceReply = "  \n\t"
+        await inference.setCannedChunks([whitespaceReply])
+
+        let visionModel = ModelRegistry.gemma4_e2b
+        let conversationID = try await persistence.createConversation(title: "Whitespace", modelID: visionModel.id)
+        await viewModel.loadConversation(conversationID)
+
+        viewModel.inputText = "hello"
+        await viewModel.sendMessage()
+        XCTAssertTrue(viewModel.isStreaming)
+
+        // User-initiated unload mid-generation: the stub stream completes
+        // naturally afterwards, so onComplete runs with isUserUnloaded set.
+        _ = await lifecycle.unloadCurrentModel(userInitiated: true)
+        try await waitForStreamingEnd(viewModel)
+
+        let lastContent = viewModel.messages.last?.content
+        XCTAssertEqual(
+            lastContent,
+            whitespaceReply,
+            "Whitespace-only reply persisted by endStreamingMessage must be mirrored in the transcript"
+        )
+        // And the persisted row carries the same bytes.
+        let persisted = await persistence.fetchMessages(conversationID: conversationID)
+        XCTAssertEqual(persisted.last?.content, whitespaceReply)
     }
 
     override func tearDown() {

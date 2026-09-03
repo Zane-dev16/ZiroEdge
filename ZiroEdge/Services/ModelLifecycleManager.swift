@@ -62,6 +62,20 @@ final class ModelLifecycleManager: ObservableObject {
     @Published private(set) var insufficientMemoryMessage: String?
     @Published var showLoadFailure = false
     @Published private(set) var loadFailureMessage: String?
+    /// Set when the user explicitly unloaded the active model (Settings →
+    /// Unload Model). The deferred auto-loader treats this as intent that must
+    /// not be silently reversed by the next appear-time kick: while set it
+    /// refuses automatic loads, and the flag clears when the user selects a
+    /// model, starts a fresh draft, or explicitly retries. Programmatic
+    /// unloads (memory-pressure/background eviction, diagnostics, delete,
+    /// update promotion) never set it so eviction recovery keeps working.
+    @Published private(set) var isUserUnloaded = false
+
+    /// Clears the user-unload intent when the user deliberately re-engages a
+    /// model: selecting one, starting a fresh draft, or an explicit retry.
+    func consumeUserUnloadIntent() {
+        isUserUnloaded = false
+    }
 
     // MARK: - Dependencies
 
@@ -292,9 +306,19 @@ final class ModelLifecycleManager: ObservableObject {
     }
 
     /// Unload the current model, freeing memory. Persistence failures are surfaced.
+    /// Pass `userInitiated: true` only for explicit user actions (Settings →
+    /// Unload Model); those record `isUserUnloaded` so the deferred auto-loader
+    /// does not reload the model behind the user's back.
     @discardableResult
-    func unloadCurrentModel() async -> Bool {
+    func unloadCurrentModel(userInitiated: Bool = false) async -> Bool {
         let unloadStarted = ContinuousClock.now
+        if userInitiated { isUserUnloaded = true }
+        // Cancel any in-flight stream first, mirroring cancelAndUnloadForSafety:
+        // the engine actor's decode loop runs as one non-suspending job, so a
+        // queued unload would otherwise wait out the whole generation (up to
+        // maxTokens) before freeing memory — tokens kept streaming and the
+        // Settings Active-Model section kept showing the model after unload.
+        await inferenceService.cancelCurrentStream()
         await inferenceService.unloadModel()
         let previousModel = activeModel
         activeModel = nil

@@ -192,8 +192,10 @@ actor PersistenceController {
 
     /// In-memory compatibility initializer for previews and legacy tests only.
     /// It never falls back to a disk store and never terminates the process.
-    /// BATCH-03: avoids blocking the MainActor by using a synchronous in-memory add
-    /// when called on the main thread; the semaphore path remains for background callers.
+    /// BATCH-03: avoids blocking the MainActor. In-memory stores complete a
+    /// synchronous coordinator add in microseconds; the previous semaphore +
+    /// re-entrant-run-loop dance is gone (re-entering the run loop from an
+    /// initializer can pump unrelated work re-entrantly).
     init(inMemory: Bool) {
         precondition(inMemory, "Use await PersistenceController.open() for disk-backed stores")
         let controller = PersistenceController(configuration: .inMemory, faultInjector: NoopPersistenceFaultInjector())
@@ -201,25 +203,21 @@ actor PersistenceController {
         self.faultInjector = controller.faultInjector
         self.recoveryJournalURL = nil
         self.recoveryPendingURL = nil
-        // For in-memory stores, a synchronous add is sufficient and avoids the semaphore ANR.
-        // This completes in microseconds without touching disk.
-        if Thread.isMainThread {
-            do {
-                try container.persistentStoreCoordinator.addPersistentStore(ofType: NSInMemoryStoreType, configurationName: nil, at: nil, options: nil)
-                return
-            } catch {
-                // Fall through to RunLoop-aware semaphore path
-            }
-            let semaphore = DispatchSemaphore(value: 0)
-            container.loadPersistentStores { _, _ in semaphore.signal() }
-            // Spin the runloop instead of hard-blocking the MainActor executor
-            while semaphore.wait(timeout: .now() + 0.01) == .timedOut {
-                RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.01))
-            }
-        } else {
-            let semaphore = DispatchSemaphore(value: 0)
-            container.loadPersistentStores { _, _ in semaphore.signal() }
-            semaphore.wait()
+        do {
+            try container.persistentStoreCoordinator.addPersistentStore(
+                ofType: NSInMemoryStoreType,
+                configurationName: nil,
+                at: nil,
+                options: nil
+            )
+        } catch {
+            // In-memory adds cannot fail in practice; fail loudly in DEBUG so
+            // regressions surface immediately instead of silently degrading.
+            #if DEBUG
+            preconditionFailure("In-memory store add failed: \(error)")
+            #else
+            logger.error("In-memory store add failed: \(error.localizedDescription, privacy: .public)")
+            #endif
         }
     }
 
@@ -278,9 +276,20 @@ actor PersistenceController {
 
     @discardableResult
     func deleteConversation(id: UUID) -> Result<Void, PersistenceFailure> {
-        mutateConversation(id: id, operation: "deleteConversation") { context, conversation in
+        let result = mutateConversation(id: id, operation: "deleteConversation") { context, conversation in
             context.delete(conversation)
         }
+        // The cascade removed the streaming message row, but a recovery journal
+        // targeting the deleted conversation would survive in memory and on
+        // disk: every terminal replay (Retry/Discard) and the next launch's
+        // recoverIncompleteStreams() would fail .notFound against the gone
+        // row, wedging recovery (stuck "Response not saved yet" banner,
+        // StoreRecoveryView loop on open). A conversation delete is terminal —
+        // drop any journal that points into the deleted conversation.
+        if case .success = result, let journal = recoveryJournal, journal.conversationID == id {
+            clearRecoveryState(messageID: journal.messageID)
+        }
+        return result
     }
 
     @discardableResult
@@ -730,7 +739,17 @@ extension PersistenceController {
             request.predicate = NSPredicate(format: "id == %@", journal.messageID as CVarArg)
             request.fetchLimit = 1
             do {
-                guard let message = try context.fetch(request).first else { return .failure(.notFound()) }
+                guard let message = try context.fetch(request).first else {
+                    // Belt-and-braces: the target row is already gone — e.g.
+                    // the conversation holding the streaming message was
+                    // deleted mid-stream. There is nothing left to repair, and
+                    // reporting .notFound here would wedge recovery forever
+                    // (every retry/discard replay and the launch-time
+                    // recoverIncompleteStreams() pass would fail identically).
+                    // Treat the journal as consumed: the success path below
+                    // then clears recovery state for terminal journals.
+                    return .success(())
+                }
                 message.content = journal.targetContent
                 message.isStreaming = journal.terminalState == .streaming
                 switch Self.saveContext(context, faultInjector: injector) {

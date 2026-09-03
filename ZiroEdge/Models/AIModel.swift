@@ -7,9 +7,49 @@
 import Foundation
 
 #if DEBUG
+/// Deterministic hermetic runtime for UI tests and review launches. Seeded by
+/// `--uitesting-hermetic*` launch arguments (DEBUG builds only) so the chat,
+/// composer, sidebar, and wizard flows run without any real model download.
 enum HermeticUITestRuntime {
+    /// Any `--uitesting-hermetic*` launch argument enables the runtime.
     static var isEnabled: Bool {
-        CommandLine.arguments.contains("--uitesting-hermetic-model")
+        isEnabled(CommandLine.arguments)
+    }
+
+    static func isEnabled(_ arguments: [String]) -> Bool {
+        arguments.contains { $0.hasPrefix("--uitesting-hermetic") }
+    }
+
+    /// Which deterministic state the runtime presents:
+    /// - `.ready` (`--uitesting-hermetic-model`, default): llama32_3B reads as
+    ///   downloaded and load fakes success — the "ready to chat" state.
+    /// - `.needsDownload` (`--uitesting-hermetic-needs-download`): llama32_3B
+    ///   reads as not-downloaded so the chat parks on `.needsDownload` — the
+    ///   empty-library state (disabled composer, "No model yet" pill).
+    /// - `.failedLoad` (`--uitesting-hermetic-failed-load`): llama32_3B reads
+    ///   as downloaded but every load attempt throws — the load-failure state
+    ///   (warning pill + inline retry banner).
+    enum Scenario: Equatable {
+        case ready
+        case needsDownload
+        case failedLoad
+    }
+
+    static var scenario: Scenario {
+        scenario(CommandLine.arguments)
+    }
+
+    static func scenario(_ arguments: [String]) -> Scenario {
+        if arguments.contains("--uitesting-hermetic-needs-download") { return .needsDownload }
+        if arguments.contains("--uitesting-hermetic-failed-load") { return .failedLoad }
+        return .ready
+    }
+
+    /// True when a non-default scenario flag was passed explicitly. Shell-level
+    /// autoloads defer to ChatView's deferred loader in these modes so the
+    /// failure/empty choreography stays deterministic and alert-free.
+    static var hasExplicitScenario: Bool {
+        scenario != .ready
     }
 }
 #endif

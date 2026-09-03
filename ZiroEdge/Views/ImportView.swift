@@ -107,6 +107,12 @@ struct ImportFlowView: View {
 struct SourceStepView: View {
     @ObservedObject var viewModel: ImportViewModel
     @Environment(\.dismiss) private var dismiss
+    /// Tracks the repository field's focus so the input well can raise its
+    /// accent ring (the keyboard focus indicator).
+    @FocusState private var repositoryFieldFocused: Bool
+
+    /// Source-choice icon squares: 44×44 min, scaling with Dynamic Type.
+    @ScaledMetric(relativeTo: .title3) private var sourceIconSide: CGFloat = 44
 
     var body: some View {
         ScrollView {
@@ -122,8 +128,12 @@ struct SourceStepView: View {
                 }
                 privacyNotice
             }
-            .padding(ZiroTheme.Spacing.large)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            // Single-column wizard form: xLarge screen padding, standard
+            // measure cap centered on wide devices.
+            .padding(.horizontal, ZiroTheme.Spacing.xLarge)
+            .padding(.vertical, ZiroTheme.Spacing.large)
+            .frame(maxWidth: ZiroMeasure.standard)
+            .frame(maxWidth: .infinity)
         }
         .scrollDismissesKeyboard(.interactively)
         .navigationTitle("Import Model")
@@ -139,7 +149,11 @@ struct SourceStepView: View {
                 title: "Inspect Repository",
                 systemImage: "magnifyingglass",
                 isEnabled: canInspect,
-                hint: "Enter a repository to inspect.",
+                // While inspecting, the input card's "Resolving…" spinner is
+                // the gate explanation — a static "enter a repository"
+                // caption (also spoken as the disabled button's hint) would
+                // state the wrong reason.
+                hint: viewModel.phase == .inspecting ? nil : "Enter a repository to inspect.",
                 action: { Task { await viewModel.inspect() } }
             )
         }
@@ -159,20 +173,26 @@ struct SourceStepView: View {
         VStack(alignment: .leading, spacing: ZiroTheme.Spacing.medium) {
             ZiroCard {
                 HStack(spacing: ZiroTheme.Spacing.medium) {
+                    // Source icon in the spec's accent-tinted rounded square.
                     Image(systemName: "globe")
                         .font(.title2)
-                        .foregroundStyle(Color.accentColor)
+                        .foregroundStyle(ZiroTheme.accent)
+                        .frame(width: sourceIconSide, height: sourceIconSide)
+                        .background(
+                            ZiroTheme.accentContainer,
+                            in: RoundedRectangle(cornerRadius: ZiroTheme.Radius.small, style: .continuous)
+                        )
                         .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: ZiroTheme.Spacing.micro) {
                         Text("Hugging Face Repository")
-                            .font(.headline)
+                            .font(ZiroType.rowTitle)
                         Text("Public GGUF repositories, pinned to an immutable revision.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .font(ZiroType.caption)
+                            .foregroundStyle(ZiroTheme.secondaryText)
                     }
                     Spacer()
                     Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(Color.accentColor)
+                        .foregroundStyle(ZiroTheme.accent)
                         .accessibilityLabel("Selected")
                 }
                 .accessibilityElement(children: .combine)
@@ -182,21 +202,23 @@ struct SourceStepView: View {
                 HStack(spacing: ZiroTheme.Spacing.medium) {
                     Image(systemName: "doc")
                         .font(.title2)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(ZiroTheme.secondaryText)
+                        .frame(width: sourceIconSide, height: sourceIconSide)
+                        .background(
+                            ZiroTheme.accentContainer,
+                            in: RoundedRectangle(cornerRadius: ZiroTheme.Radius.small, style: .continuous)
+                        )
                         .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: ZiroTheme.Spacing.micro) {
                         HStack(spacing: ZiroTheme.Spacing.xSmall) {
                             Text("Local GGUF File")
-                                .font(.headline)
-                            Text("Coming soon")
-                                .font(.caption2.weight(.semibold))
-                                .padding(.horizontal, ZiroTheme.Spacing.badge)
-                                .padding(.vertical, ZiroTheme.Spacing.micro)
-                                .background(Color.secondary.opacity(0.12), in: Capsule())
+                                .font(ZiroType.rowTitle)
+                            // The one badge system — neutral stub tone.
+                            ZiroBadge(text: "Coming soon", tone: .neutral)
                         }
                         Text("Import a model file stored on this device.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .font(ZiroType.caption)
+                            .foregroundStyle(ZiroTheme.secondaryText)
                     }
                     Spacer()
                 }
@@ -211,12 +233,17 @@ struct SourceStepView: View {
         ZiroCard {
             VStack(alignment: .leading, spacing: ZiroTheme.Spacing.medium) {
                 Text("Repository")
-                    .font(.subheadline.weight(.semibold))
+                    .font(ZiroType.supporting.weight(.semibold))
                 TextField("owner/repository or URL", text: $viewModel.repositoryInput)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .keyboardType(.URL)
                     .submitLabel(.go)
+                    .focused($repositoryFieldFocused)
+                    // Design-system input well: recessed fill + hairline at
+                    // rest, accent focus ring while typing (the keyboard
+                    // focus indicator).
+                    .ziroComposerField(isActive: repositoryFieldFocused)
                     .onSubmit {
                         if canInspect { Task { await viewModel.inspect() } }
                     }
@@ -224,8 +251,8 @@ struct SourceStepView: View {
                     HStack(spacing: ZiroTheme.Spacing.small) {
                         ProgressView()
                         Text("Resolving an immutable revision…")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+                            .font(ZiroType.footnote)
+                            .foregroundStyle(ZiroTheme.secondaryText)
                     }
                 }
             }
@@ -236,19 +263,20 @@ struct SourceStepView: View {
         ZiroCard {
             VStack(alignment: .leading, spacing: ZiroTheme.Spacing.small) {
                 Label("Import Rejected", systemImage: "exclamationmark.triangle.fill")
-                    .font(.subheadline.weight(.semibold))
-                    // Contrast token: raw .red sits ~3.6:1 on light cards.
-                    .foregroundStyle(ZiroTheme.warningText)
+                    .font(ZiroType.supporting.weight(.semibold))
+                    // Hard rejection → the danger token (warning reads as
+                    // recoverable; per spec this card is danger).
+                    .foregroundStyle(ZiroTheme.dangerText)
                 Text(message)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .font(ZiroType.footnote)
+                    .foregroundStyle(ZiroTheme.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
                 Button {
                     Task { await viewModel.retryInspection() }
                 } label: {
                     Label("Retry Inspection", systemImage: "arrow.clockwise")
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(ZiroSecondaryButtonStyle())
             }
         }
         .accessibilityElement(children: .contain)
@@ -256,12 +284,10 @@ struct SourceStepView: View {
 
     private var privacyNotice: some View {
         VStack(alignment: .leading, spacing: ZiroTheme.Spacing.xSmall) {
-            Label("Privacy", systemImage: "lock.shield")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+            ZiroSectionHeader(title: "Privacy", systemImage: "lock.shield")
             Text("Only repository inspection and selected artifact downloads contact Hugging Face. Prompts, images, conversations, and inference stay on this device.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+                .font(ZiroType.footnote)
+                .foregroundStyle(ZiroTheme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -301,9 +327,16 @@ struct ArtifactStepView: View {
 
     private func artifactForm(review: HFRepositoryReview) -> some View {
         Form {
+            // Pinned provenance values are engineering identifiers — technical voice.
             Section("Pinned Source") {
-                LabeledContent("Repository", value: review.repositoryID)
-                LabeledContent("Revision", value: String(review.revision.prefix(12)))
+                LabeledContent("Repository") {
+                    Text(review.repositoryID)
+                        .font(ZiroType.technical(.footnote))
+                }
+                LabeledContent("Revision") {
+                    Text(String(review.revision.prefix(12)))
+                        .font(ZiroType.technical(.footnote))
+                }
                 LabeledContent("License") {
                     Link(review.licenseName, destination: review.licenseURL)
                 }
@@ -327,5 +360,9 @@ struct ArtifactStepView: View {
                 }
             }
         }
+        // Warm paper canvas with raised card rows (design spec §3.1).
+        .scrollContentBackground(.hidden)
+        .background(ZiroTheme.pageBackground.ignoresSafeArea())
+        .listRowBackground(ZiroTheme.raisedBackground)
     }
 }

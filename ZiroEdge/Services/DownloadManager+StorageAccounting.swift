@@ -40,16 +40,22 @@ extension DownloadManager {
             }
         }
 
-        let directories: [(URL, String)] = [
-            (ModelManagerService.stagingDirectory, "staging"),
-            (ModelManagerService.resumeDirectory, "resume"),
-            (ModelManagerService.quarantineDirectory, "quarantine")
+        // Quarantined corrupt artifacts are preserved deliberately
+        // (ModelManagerService.quarantineInvalidArtifact) so users can inspect
+        // or repair them; a launch-time sweep that deleted them immediately
+        // would defeat that purpose. Give quarantine the same 24 h grace the
+        // installed-artifact sweep uses before reclaiming true orphans.
+        let quarantineGraceInterval: TimeInterval = 24 * 60 * 60
+        let directories: [(URL, String, TimeInterval)] = [
+            (ModelManagerService.stagingDirectory, "staging", 0),
+            (ModelManagerService.resumeDirectory, "resume", 0),
+            (ModelManagerService.quarantineDirectory, "quarantine", quarantineGraceInterval)
         ]
 
-        for (directory, label) in directories {
+        for (directory, label, graceInterval) in directories {
             guard let enumerator = fileManager.enumerator(
                 at: directory,
-                includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey]
+                includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey, .contentModificationDateKey]
             ) else { continue }
 
             for case let fileURL as URL in enumerator {
@@ -57,6 +63,10 @@ extension DownloadManager {
                     continue
                 }
                 guard !knownPaths.contains(canonicalPath(fileURL)) else { continue }
+                if graceInterval > 0 {
+                    let modified = (try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? Date()
+                    guard Date().timeIntervalSince(modified) > graceInterval else { continue }
+                }
 
                 let size = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
                 do {

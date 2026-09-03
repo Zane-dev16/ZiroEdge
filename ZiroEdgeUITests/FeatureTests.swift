@@ -91,10 +91,28 @@ final class FeatureTests: UITestBase {
     }
 
     func testChatStreamingStop() throws {
+        // Launch the test's own hermetic app like the sibling tests: the
+        // validation simulator holds no verified real model, so the bare
+        // `--uitesting` app parks on `.needsDownload` with a permanently
+        // disabled composer and waitForModelLoaded below can never pass.
+        // The seeded in-memory model reaches `.ready`, so streaming starts
+        // deterministically and the stop affordance is exercisable.
+        let chatApp = XCUIApplication()
+        chatApp.launchArguments = ["--uitesting", "--uitesting-hermetic-model"]
+        chatApp.launch()
+        app = chatApp
+
         let navigated = selectOrCreateConversation()
         guard navigated else {
             throw XCTSkip("Could not open or create a conversation")
         }
+
+        // The composer's TextField is disabled until the model is resident
+        // (`.disabled(!chatReady || …)`), so tapping it before readiness cannot
+        // take keyboard focus and the send would be a no-op. Wait for the
+        // header pill to report a loaded model before typing.
+        XCTAssertTrue(waitForModelLoaded(timeout: 30),
+                      "Model did not reach the ready phase — composer stays disabled")
 
         let namedInput = app.textFields["Message ZiroEdge..."].firstMatch
         let input = namedInput.exists ? namedInput : app.textFields.firstMatch

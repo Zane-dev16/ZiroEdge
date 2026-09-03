@@ -15,6 +15,10 @@ struct SidebarView: View {
     /// Library row tap (Models / Settings). The shell dismisses the drawer
     /// (compact) and pushes the destination onto the shared detail stack.
     var onOpenRoute: (ShellRoute) -> Void = { _ in }
+    /// Confirmed-delete handoff. The shell owns the whole delete so it can
+    /// cancel an in-flight chat stream targeting the doomed conversation
+    /// first, before the list model's delete cascades the streaming row.
+    var onDeleteConversation: (UUID) -> Void = { _ in }
 
     @State private var conversationToRename: ConversationPayload?
     @State private var renameText: String = ""
@@ -27,7 +31,7 @@ struct SidebarView: View {
                 Button(action: onNewConversation) {
                     Label("New Conversation", systemImage: "square.and.pencil")
                         .font(.body.weight(.semibold))
-                        .foregroundStyle(Color.accentColor)
+                        .foregroundStyle(ZiroTheme.accent)
                 }
                 .accessibilityHint("Creates a private on-device chat")
             }
@@ -35,7 +39,7 @@ struct SidebarView: View {
             if let error = viewModel.errorMessage {
                 Section {
                     Label(error, systemImage: "exclamationmark.triangle")
-                        .font(.subheadline)
+                        .font(ZiroType.supporting)
                         .foregroundStyle(ZiroTheme.warningText)
                         // The row mounts silently otherwise; VoiceOver users
                         // only find it by browsing the list.
@@ -45,7 +49,7 @@ struct SidebarView: View {
 
             conversationSections
 
-            Section("Library") {
+            Section {
                 Button {
                     onOpenRoute(.models)
                 } label: {
@@ -56,6 +60,8 @@ struct SidebarView: View {
                 } label: {
                     Label("Settings", systemImage: "gearshape")
                 }
+            } header: {
+                ZiroSectionHeader(title: "Library", systemImage: "books.vertical")
             }
         }
         .listStyle(.sidebar)
@@ -81,7 +87,8 @@ struct SidebarView: View {
         .alert("Delete Conversation?", isPresented: $showDeleteConfirmation) {
             Button("Delete", role: .destructive) {
                 if let conversation = conversationToDelete {
-                    Task { await viewModel.deleteConversation(conversation.id) }
+                    conversationToDelete = nil
+                    onDeleteConversation(conversation.id)
                 }
             }
             Button("Cancel", role: .cancel) {
@@ -172,21 +179,23 @@ struct ConversationRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: ZiroTheme.Spacing.xSmall) {
             Text(conversation.title)
-                .font(.body)
+                .font(ZiroType.body)
+                .foregroundStyle(ZiroTheme.primaryText)
                 .lineLimit(1)
 
             HStack(spacing: ZiroTheme.Spacing.small) {
+                // The message count is engineering metadata — technical voice.
                 Text("\(conversation.messageCount) messages")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(ZiroType.technical(.caption))
+                    .foregroundStyle(ZiroTheme.secondaryText)
 
                 Text("·")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .font(ZiroType.caption)
+                    .foregroundStyle(ZiroTheme.tertiaryText)
 
                 Text(ConversationListViewModel.formattedDate(conversation.updatedAt))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(ZiroType.caption)
+                    .foregroundStyle(ZiroTheme.secondaryText)
             }
         }
         .padding(.vertical, ZiroTheme.Spacing.xSmall)

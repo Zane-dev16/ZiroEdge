@@ -172,5 +172,6 @@ extension DownloadManager {
         updateStatus(model: task.model)
         activeTasks.removeValue(forKey: key)
         clearTransferProgress(key)
+        stopStuckWatchdogIfIdle()
     }
 }

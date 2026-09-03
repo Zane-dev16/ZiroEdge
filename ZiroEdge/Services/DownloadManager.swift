@@ -463,6 +463,7 @@ extension DownloadManager {
         } else if activeTasks[baseKey] != nil {
             activeTasks.removeValue(forKey: baseKey)
             clearTransferProgress(baseKey)
+            stopStuckWatchdogIfIdle()
         }
 
         if mmprojNeedsRetry {
@@ -474,6 +475,7 @@ extension DownloadManager {
         } else if activeTasks[mmprojKey] != nil {
             activeTasks.removeValue(forKey: mmprojKey)
             clearTransferProgress(mmprojKey)
+            stopStuckWatchdogIfIdle()
         }
 
         updateStatus(model: model)
@@ -574,6 +576,15 @@ extension DownloadManager {
         if let stuckTimer {
             RunLoop.main.add(stuckTimer, forMode: .common)
         }
+    }
+    /// Stops the stuck-transfer watchdog once nothing is downloading. Without
+    /// this the repeating timer fires every 30 s for the rest of the app's
+    /// lifetime after the last transfer ends. No-op while tasks are active;
+    /// safe to call from every task-completion path.
+    func stopStuckWatchdogIfIdle() {
+        guard activeTasks.isEmpty else { return }
+        stuckTimer?.invalidate()
+        stuckTimer = nil
     }
     func artifactTaskKey(model: AIModel, artifact: ArtifactType) -> String { DownloadTask(model: model, artifact: artifact).storageID }
     @discardableResult
@@ -692,6 +703,7 @@ extension DownloadManager {
             activeTasks.removeValue(forKey: key)
             updateStatus(model: task.model)
         }
+        stopStuckWatchdogIfIdle()
     }
 
     /// Restore durable state for a single transfer. Used by the bulk restore

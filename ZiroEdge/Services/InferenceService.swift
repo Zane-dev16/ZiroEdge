@@ -36,13 +36,15 @@ protocol InferenceServiceProtocol: Sendable {
 
     /// Ensures no generation holds the engine before a new chat decode starts.
     /// Chat preempts the current holder (cancels it and waits for release).
-    func ensureIdleForNewChat() async
+    /// Throws `generationBusy` when the holder did not release in time so the
+    /// caller surfaces feedback instead of silently queueing.
+    func ensureIdleForNewChat() async throws
 }
 
 extension InferenceServiceProtocol {
     /// Default no-op so test doubles that don't model cross-generation
     /// arbitration compile unchanged.
-    func ensureIdleForNewChat() async {}
+    func ensureIdleForNewChat() async throws {}
 }
 
 // MARK: - Inference Service
@@ -144,11 +146,24 @@ actor InferenceService: InferenceServiceProtocol {
         pendingUnload = nil
         // Unload any existing model first.
         unloadInternal()
+        // `unloadInternal` just spawned the teardown task for the previously
+        // resident engine. Await it before native construction: overlapping the
+        // old engine's `llama_backend_free()` with new engine construction
+        // doubles RAM and races global llama.cpp teardown against init.
+        await pendingUnload?.value
+        pendingUnload = nil
 
         logger.info("Loading model: \(model.id, privacy: .public) from \(baseURL.path, privacy: .public)")
 
 #if DEBUG
         if HermeticUITestRuntime.isEnabled, model.id == ModelRegistry.llama32_3B.id {
+            // --uitesting-hermetic-failed-load: deterministic native-load failure
+            // for the chat error state. Thrown before any load-safety bookkeeping
+            // so retries replay the failure instead of tripping the two-strikes
+            // profile disable.
+            if HermeticUITestRuntime.scenario == .failedLoad {
+                throw InferenceError.nativeFailure(kind: .contextCreation, diagnostic: "hermetic-load-failure")
+            }
             guard let profile = MemoryProfileRegistry.profile(for: model) else {
                 throw InferenceError.nativeFailure(kind: .contextCreation, diagnostic: "fixture-profile-missing")
             }
@@ -381,9 +396,15 @@ extension InferenceService {
         // message only; repeating them for later turns would mismatch the bitmap array.
         let imageMarkers = images.map { _ in "<__media__>" }.joined(separator: "\n")
         var templateMessages = chatTemplateMessages(messages: messages, systemPrompt: systemPrompt)
-        if !imageMarkers.isEmpty,
-           let firstUserIndex = templateMessages.firstIndex(where: { $0.role == "user" }) {
-            templateMessages[firstUserIndex].content = imageMarkers + "\n" + templateMessages[firstUserIndex].content
+        if !imageMarkers.isEmpty {
+            if let firstUserIndex = templateMessages.firstIndex(where: { $0.role == "user" }) {
+                templateMessages[firstUserIndex].content = imageMarkers + "\n" + templateMessages[firstUserIndex].content
+            } else {
+                // No user turn in history (e.g. a vision continuation): dropping
+                // the markers while the bitmaps still reach the engine would
+                // mismatch mtmd's input/template pairing. Synthesize the turn.
+                templateMessages.append((role: "user", content: imageMarkers))
+            }
         }
 
         // Convert sampling config to SwiftLlama format.
@@ -599,10 +620,23 @@ extension InferenceService {
     }
 
 #if DEBUG
+    /// Hermetic chat reply for `--uitesting-hermetic-model`.
+    /// Streams a few chunks with a small inter-chunk delay (~2s total) instead of
+    /// yielding everything at once: the UI tests that exercise the streaming
+    /// stop affordance need an observable `isStreaming` window, and an
+    /// instant-complete stream makes the stop button race-exist for only a few
+    /// milliseconds (testChatStreamingStop flip-flopped on snapshot timing).
     private static func hermeticResponse() -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
-            continuation.yield("OK")
-            continuation.finish()
+            let chunks = ["The", " color", " blue", " is", " a", " calm", " deep", " hue."]
+            let task = Task {
+                for chunk in chunks {
+                    do { try await Task.sleep(nanoseconds: 250_000_000) } catch { break }
+                    continuation.yield(chunk)
+                }
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
         }
     }
 #endif
@@ -612,11 +646,13 @@ extension InferenceService {
     /// Chat preemption policy: before a new chat decode starts, cancel any
     /// holder (title generation, a stale reply) and wait for it to release the
     /// engine. The engine's cancellation flag stops its decode loop at the next
-    /// token boundary, so this settles quickly.
-    func ensureIdleForNewChat() async {
-        await generationGate.cancelAndAwaitRelease { [weak self] in
+    /// token boundary, so this settles quickly. A holder that never releases
+    /// throws `generationBusy` rather than silently queueing the new chat.
+    func ensureIdleForNewChat() async throws {
+        let released = await generationGate.cancelAndAwaitRelease { [weak self] in
             await self?.cancelCurrentStream()
         }
+        guard released else { throw InferenceError.generationBusy }
     }
 
     func cancelCurrentStream() async {
@@ -627,7 +663,9 @@ extension InferenceService {
         guard let eng = engine else { return }
 
         let cancellationTask = Task {
-            await eng.cancel()
+            // `LlamaEngine.cancel()` is nonisolated and synchronous — no
+            // await needed from outside the engine actor.
+            eng.cancel()
         }
         pendingCancellation = cancellationTask
         await cancellationTask.value

@@ -9,15 +9,24 @@ struct ZiroEdgeApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @StateObject private var runtime = AppRuntime()
+    /// Hoisted to the App so App body re-evaluations reuse one instance. Built
+    /// inline in `rootView`, every runtime publish re-pointed AppShellView's
+    /// `@ObservedObject` at a fresh manager, resetting/dismissing onboarding
+    /// mid-flow.
+    @StateObject private var onboardingManager = OnboardingManager()
 
     static let diagnosticLogURL: URL =
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("download-diagnostic.log")
 
+    /// Live diagnostic log is capped; older bytes move to `.old` (one deep).
+    private static let diagnosticLogRotationBytes: Int64 = 1_048_576
+
     static func diagnosticLog(_ message: String) {
         let ts = ISO8601DateFormatter().string(from: Date())
         let line = "[\(ts)] \(sanitizedDiagnosticMessage(message))\n"
         let url = diagnosticLogURL
+        DiagnosticLogRotation.rotateIfNeeded(url: url, byteLimit: diagnosticLogRotationBytes)
         if let handle = try? FileHandle(forWritingTo: url) {
             handle.seekToEndOfFile()
             handle.write(Data(line.utf8))
@@ -92,7 +101,7 @@ struct ZiroEdgeApp: App {
                     : "Preparing your private conversations on this device."
             )
         case .ready(let services):
-            AppShellView(services: services, onboardingManager: OnboardingManager())
+            AppShellView(services: services, onboardingManager: onboardingManager)
                 .overlay(alignment: .top) {
                     if let message = runtime.postResetMessage {
                         ZiroStatusBanner(
@@ -123,7 +132,7 @@ struct ZiroEdgeApp: App {
                     symbol: "lock.trianglebadge.exclamationmark",
                     title: "Model loading is blocked",
                     message: message,
-                    tint: .orange
+                    tint: ZiroTheme.warningText
                 )
                 Button("Retry Safety Storage") { runtime.retry() }
                     .buttonStyle(ZiroPrimaryButtonStyle())

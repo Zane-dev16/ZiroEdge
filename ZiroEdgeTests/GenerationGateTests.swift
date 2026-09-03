@@ -118,6 +118,35 @@ final class GenerationGateTests: XCTestCase {
         XCTAssertEqual(cancellerRuns.count, 0, "idle gate must not invoke the canceller")
     }
 
+    /// P1-3: a cancelled waiter must return promptly. The old `try? await
+    /// Task.sleep` swallowed CancellationError and hot-spinned a cooperative
+    /// thread until the full timeout elapsed.
+    func testCancelAndAwaitReleaseReturnsPromptlyWhenTaskCancelled() async throws {
+        let gate = GenerationGate()
+        let holderID = try await hold(gate)
+
+        let waiter = Task {
+            await gate.cancelAndAwaitRelease(timeoutNs: 2_000_000_000) { /* holder never releases */ }
+        }
+        // Let the waiter enter its poll loop, then cancel it.
+        try await Task.sleep(nanoseconds: 150_000_000)
+        waiter.cancel()
+        let start = Date()
+        let released = await waiter.value
+        let elapsed = Date().timeIntervalSince(start)
+
+        XCTAssertFalse(released, "holder never released, so the cancelled wait reports false")
+        XCTAssertLessThan(
+            elapsed,
+            1.0,
+            "cancellation must break the poll loop instead of spinning until the timeout"
+        )
+        // Leave the gate idle for other tests.
+        if await gate.heldBy() != nil {
+            await gate.release(holderID)
+        }
+    }
+
     // MARK: - Concurrency
 
     func testConcurrentAcquirersExactlyOneWinnerOutOfN() async {

@@ -241,6 +241,7 @@ final class MemoryDiagnosticRecorder: @unchecked Sendable {
 
             print("[ZIRO-MEMORY] \(line)")
             let url = Self.logURL
+            DiagnosticLogRotation.rotateIfNeeded(url: url, byteLimit: Self.logRotationBytes)
             if let handle = try? FileHandle(forWritingTo: url) {
                 defer { try? handle.close() }
                 try handle.seekToEnd()
@@ -271,6 +272,9 @@ final class MemoryDiagnosticRecorder: @unchecked Sendable {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("memory-diagnostic.jsonl")
     }
+
+    /// Live JSONL log cap; older bytes rotate to `.old` (one deep).
+    static let logRotationBytes: Int64 = 2_048 * 1_024
 
     static var logURLIfPresent: URL? {
         FileManager.default.fileExists(atPath: logURL.path) ? logURL : nil
