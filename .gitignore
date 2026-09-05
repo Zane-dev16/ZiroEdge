@@ -77,3 +77,6 @@ docs/release-evidence/
 
 # Companion docs (outside repo scope)
 ../ziroedge-docs/
+
+# Generated App Store screenshots (produced by capture scripts, don't commit)
+ziroedge-docs/app-store-screenshots/
