@@ -284,4 +284,140 @@ final class FeatureTests: UITestBase {
             capture("model_picker_closed")
         }
     }
+
+    // MARK: - Hermetic States (offline, no real download)
+
+    /// Empty-library state without a real download: the hermetic runtime
+    /// makes llama32_3B read as not-downloaded, so the chat parks on
+    /// `ModelLoadPhase.needsDownload` (disabled composer, "No model yet"
+    /// pill, "Browse Models" CTA). Sidebar navigation stays reachable.
+    func testHermeticNeedsDownloadEmptyState() throws {
+        let chatApp = XCUIApplication()
+        chatApp.launchArguments = ["--uitesting", "--uitesting-hermetic-needs-download"]
+        chatApp.launch()
+        app = chatApp
+
+        let input = app.textFields["chatInput"].firstMatch
+        guard input.waitForExistence(timeout: 15) else {
+            XCTFail("Chat surface did not render under --uitesting-hermetic-needs-download")
+            return
+        }
+
+        let pill = app.buttons["No model yet"].firstMatch
+        XCTAssertTrue(pill.waitForExistence(timeout: 15),
+                      "Header pill should read 'No model yet' in the needsDownload scenario")
+
+        let hint = app.staticTexts.containing(
+            NSPredicate(format: "label CONTAINS 'Download a model to start chatting'")
+        ).firstMatch
+        XCTAssertTrue(hint.waitForExistence(timeout: 10),
+                      "Composer hint should nudge toward downloading a model")
+        XCTAssertFalse(input.isEnabled,
+                        "Composer must stay disabled with no model resident")
+
+        let browseByID = app.buttons["browse-models-button"].firstMatch
+        let browseByLabel = app.buttons["Browse Models"].firstMatch
+        XCTAssertTrue(browseByID.waitForExistence(timeout: 5)
+                        || browseByLabel.waitForExistence(timeout: 5),
+                      "Empty state should offer a Browse Models CTA")
+        capture("hermetic_needs_download")
+
+        XCTAssertTrue(openSidebar(timeout: 8),
+                      "Sidebar drawer must stay reachable in the empty state without network")
+        capture("hermetic_needs_download_sidebar")
+    }
+
+    /// Load-failure state without a real download: the hermetic runtime
+    /// reports llama32_3B as downloaded but every load attempt throws, so
+    /// the chat shows the warning pill + inline retry banner. Retry replays
+    /// deterministically (thrown before load-safety bookkeeping, so the
+    /// two-strikes profile disable never trips).
+    func testHermeticFailedLoadShowsRetry() throws {
+        let chatApp = XCUIApplication()
+        chatApp.launchArguments = ["--uitesting", "--uitesting-hermetic-failed-load"]
+        chatApp.launch()
+        app = chatApp
+
+        let input = app.textFields["chatInput"].firstMatch
+        guard input.waitForExistence(timeout: 15) else {
+            XCTFail("Chat surface did not render under --uitesting-hermetic-failed-load")
+            return
+        }
+
+        let banner = app.descendants(matching: .any)["modelRetryBanner"].firstMatch
+        XCTAssertTrue(banner.waitForExistence(timeout: 30),
+                      "Inline retry banner should appear for the hermetic load failure")
+        capture("hermetic_failed_load")
+
+        let failedPill = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS[c] 'failed to load'")
+        ).firstMatch
+        XCTAssertTrue(failedPill.waitForExistence(timeout: 10),
+                      "Header pill should announce the failed-to-load state")
+
+        let retry = app.descendants(matching: .any)["modelRetryButton"].firstMatch
+        guard retry.waitForExistence(timeout: 5) else {
+            XCTFail("Retry button missing inside the hermetic failure banner")
+            return
+        }
+        retry.tap()
+        XCTAssertTrue(banner.waitForExistence(timeout: 15),
+                      "Retry must replay the deterministic failure without crashing")
+        capture("hermetic_failed_load_retry")
+    }
+
+    /// Wizard navigation without network: `--uitesting-hermetic-import`
+    /// short-circuits `ImportViewModel.inspect()` with a canned review, so
+    /// Source -> Artifacts is reachable offline. Combined with
+    /// `--uitesting-hermetic-model` the chat stays ready in the background.
+    func testHermeticImportWizardOffline() throws {
+        let chatApp = XCUIApplication()
+        chatApp.launchArguments = [
+            "--uitesting",
+            "--uitesting-hermetic-model",
+            "--uitesting-hermetic-import",
+        ]
+        chatApp.launch()
+        app = chatApp
+
+        guard openModels(timeout: 15) else {
+            XCTFail("Failed to open Models page under hermetic flags")
+            return
+        }
+        let importButton = app.buttons.containing(
+            NSPredicate(format: "label BEGINSWITH 'Import from Hugging Face'")
+        ).firstMatch
+        guard importButton.waitForExistence(timeout: 5) else {
+            XCTFail("'Import from Hugging Face' button not visible on the Models page")
+            return
+        }
+        importButton.tap()
+
+        let repoField = app.textFields["owner/repository or URL"].firstMatch
+        guard repoField.waitForExistence(timeout: 8) else {
+            XCTFail("Import wizard Source step did not render")
+            return
+        }
+        repoField.tap()
+        repoField.typeText("any/fixture-repo")
+        capture("hermetic_wizard_source")
+
+        let inspect = app.buttons["Inspect Repository"].firstMatch
+        guard inspect.waitForExistence(timeout: 3), inspect.isEnabled else {
+            XCTFail("Inspect Repository gate did not open for the hermetic fixture")
+            return
+        }
+        inspect.tap()
+
+        let pinnedSource = app.staticTexts["Pinned Source"].firstMatch
+        XCTAssertTrue(pinnedSource.waitForExistence(timeout: 15),
+                      "Hermetic inspection should reach the Artifacts step offline")
+        let fixtureRepo = app.staticTexts.containing(
+            NSPredicate(format: "label CONTAINS 'hermetic-fixture'")
+        ).firstMatch
+        XCTAssertTrue(fixtureRepo.waitForExistence(timeout: 5),
+                      "Artifacts step should show the canned hermetic fixture repo")
+        app.swipeDown()
+        capture("hermetic_wizard_artifacts")
+    }
 }
