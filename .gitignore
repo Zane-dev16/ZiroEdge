@@ -67,5 +67,13 @@ test-output/
 # Release evidence (machine-generated per-machine records, don't commit)
 docs/release-evidence/
 
+# Agent scratch / local notes (machine-local, never publish)
+.hermes/
+.pi-subagents/
+
+# Local diagnostic baselines (machine-generated, don't commit)
+.dd-baseline/
+.dd-integration/
+
 # Companion docs (outside repo scope)
 ../ziroedge-docs/
