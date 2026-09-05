@@ -9,25 +9,31 @@ import SwiftUI
 
 // MARK: - Brand Mark
 
-/// ZiroEdge's brand mark: the ZE logo asset (white monogram on black),
-/// presented as a continuous rounded tile with a hairline edge. One asset
-/// (`AppLogo` imageset) backs the app icon motif and every in-app surface
+/// ZiroEdge's brand mark: the ZE logo asset (white monogram with
+/// transparency), rendered as a template glyph in the adaptive primary text
+/// color so it floats on the surrounding surface — warm ink on paper in
+/// light mode, warm white on graphite in dark mode — with no baked tile.
+/// One asset (`AppLogo` imageset, transparent) backs every in-app surface
 /// (empty state, onboarding bar, galleries), so a logo swap is a single
-/// asset replacement. Static by construction (no animation) so it is
-/// Reduce Motion safe everywhere.
+/// asset replacement. The app icon (`AppIcon`, opaque) is a separate asset
+/// and is untouched. Static by construction (no animation) so it is Reduce
+/// Motion safe everywhere.
 struct ZiroBrandMark: View {
     var size: CGFloat = 64
 
     var body: some View {
         Image("AppLogo")
+            // Template rendering uses the asset's alpha as a mask and tints
+            // with the adaptive foreground: the transparent PNG has no baked
+            // background, so the glyph blends into whatever surface sits
+            // behind it instead of drawing the app-icon-style black box.
+            // `.fit` (not `.fill`) so the full monogram stays visible — the
+            // artwork occupies a centered subset of the square asset.
+            .renderingMode(.template)
             .resizable()
-            .aspectRatio(contentMode: .fill)
+            .aspectRatio(contentMode: .fit)
             .frame(width: size, height: size)
-            .clipShape(RoundedRectangle(cornerRadius: size * 0.26, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: size * 0.26, style: .continuous)
-                    .stroke(ZiroTheme.hairlineStrong, lineWidth: 1)
-            )
+            .foregroundStyle(ZiroTheme.primaryText)
             .accessibilityHidden(true)
     }
 }
