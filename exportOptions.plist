@@ -4,8 +4,9 @@
 <dict>
 	<key>method</key>
 	<string>app-store-connect</string>
+	<!-- Template only: substitute your Apple Team ID locally; never commit the real ID. -->
 	<key>teamID</key>
-	<string>36V92GAJBT</string>
+	<string>YOUR_TEAM_ID</string>
 	<key>signingStyle</key>
 	<string>automatic</string>
 	<key>uploadSymbols</key>

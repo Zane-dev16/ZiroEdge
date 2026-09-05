@@ -49,7 +49,8 @@ targets:
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: "5.0"
         CODE_SIGN_STYLE: Automatic
-        DEVELOPMENT_TEAM: 36V92GAJBT
+        # Substitute your Apple Team ID locally (or via xcodegen); never commit the real ID.
+        DEVELOPMENT_TEAM: YOUR_TEAM_ID
         TARGETED_DEVICE_FAMILY: "1,2"
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_FILE: Config/Info.plist
@@ -73,7 +74,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.zanish-labs.ziroedge.tests
         SWIFT_VERSION: "5.0"
         GENERATE_INFOPLIST_FILE: YES
-        DEVELOPMENT_TEAM: 36V92GAJBT
+        DEVELOPMENT_TEAM: YOUR_TEAM_ID
         CODE_SIGN_STYLE: Automatic
     dependencies:
       - target: ZiroEdge
@@ -90,7 +91,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.zanish-labs.ziroedge.uitests
         SWIFT_VERSION: "5.0"
         GENERATE_INFOPLIST_FILE: YES
-        DEVELOPMENT_TEAM: 36V92GAJBT
+        DEVELOPMENT_TEAM: YOUR_TEAM_ID
         CODE_SIGN_STYLE: Automatic
     dependencies:
       - target: ZiroEdge

@@ -7,6 +7,7 @@ set -euo pipefail
 # Prerequisites:
 #   - Apple Developer account with App Store Connect access
 #   - App Store Connect API key at ~/.appstoreconnect/private_keys/AuthKey_{KEY_ID}.p8
+#   - APPLE_TEAM_ID env var set to your Apple Developer Team ID (never commit the real ID)
 #   - Or: Xcode automatically manages signing
 #
 # Usage:
@@ -96,8 +97,13 @@ archive() {
 # ---------------------------------------------------------------------------
 create_export_options() {
     echo ">> Creating export options..."
+    local TEAM_ID="${APPLE_TEAM_ID:-YOUR_TEAM_ID}"
+    if [[ "$TEAM_ID" == "YOUR_TEAM_ID" ]]; then
+        echo "ERROR: set APPLE_TEAM_ID to your Apple Developer Team ID (never commit the real ID)."
+        exit 1
+    fi
     mkdir -p "$BUILD_DIR"
-    cat > "$EXPORT_OPTIONS_PLIST" << 'PLIST'
+    cat > "$EXPORT_OPTIONS_PLIST" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -105,7 +111,7 @@ create_export_options() {
     <key>method</key>
     <string>app-store</string>
     <key>teamID</key>
-    <string>36V92GAJBT</string>
+    <string>${TEAM_ID}</string>
     <key>uploadSymbols</key>
     <true/>
     <key>uploadBitcode</key>
