@@ -140,13 +140,13 @@
 <header>
   <span class="badge">Privacy Policy</span>
   <h1>ZiroEdge</h1>
-  <p class="updated">Last Updated: July 2026</p>
+  <p class="updated">Last Updated: September 2026</p>
 </header>
 
 <main>
 
   <div class="highlight">
-    <strong>ZiroEdge is a privacy-first application.</strong> We believe you should be able to use AI without giving up your data. This policy explains how ZiroEdge handles information — which is to say, it doesn't collect any.
+    <strong>ZiroEdge does not collect your data.</strong> There is no account, no tracking, and no advertising. Your conversations and files stay on your device. This page lists the few outside connections the app makes and what leaves your phone in each case.
   </div>
 
   <section>
@@ -154,9 +154,9 @@
     <p><strong>ZiroEdge does not collect, store, transmit, or share any personal information.</strong></p>
     <ul>
       <li>No account is required to use the app</li>
-      <li>No analytics, crash reporting, or telemetry are included</li>
-      <li>No usage data is sent anywhere</li>
-      <li>No advertising SDKs or tracking frameworks are used</li>
+      <li>No third-party analytics, telemetry, or advertising SDKs are included</li>
+      <li>No usage data is sent anywhere by the app itself</li>
+      <li>Crash and hang summaries arrive through Apple only, and only if you opted in (see Diagnostics below)</li>
     </ul>
   </section>
 
@@ -164,15 +164,25 @@
     <h2>On-Device Processing</h2>
     <p>All AI inference runs entirely on your device. When you send a message to ZiroEdge:</p>
     <ul>
-      <li>The model processes your input locally using your device's CPU</li>
-      <li>No data is transmitted to external servers during inference</li>
-      <li>No internet connection is required for chatting (after models are downloaded)</li>
+      <li>The model processes your input locally on your device</li>
+      <li>Nothing you type is transmitted to external servers during inference</li>
+      <li>Chatting needs no internet connection once your models are downloaded</li>
     </ul>
   </section>
 
   <section>
     <h2>Conversation Storage</h2>
-    <p>Your conversations are stored locally on your device using Apple's Core Data framework. They are not uploaded to any server, cloud service, or external database. You can delete conversations at any time from within the app.</p>
+    <p>Your conversations are stored locally on your device using Apple's Core Data framework. They are not uploaded to any server, cloud service, or external database.</p>
+    <ul>
+      <li>Delete a single message or a whole conversation at any time in the app</li>
+      <li>Export a conversation as a Markdown file if you want a copy outside the app</li>
+      <li>Deleting the app removes all locally stored conversations and model files</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Photos and Images</h2>
+    <p>Vision models can look at images you pick from your photo library through the system photo picker. ZiroEdge never opens your library directly and uploads nothing. Picked images are stored locally alongside the conversation that uses them and are deleted with it.</p>
   </section>
 
   <section>
@@ -180,8 +190,18 @@
     <p>ZiroEdge downloads AI model files (GGUF format) from Hugging Face, a public model repository. These downloads:</p>
     <ul>
       <li>Only occur when you explicitly choose to download a model</li>
-      <li>No personal or usage data is sent during the download</li>
-      <li>Model files are stored locally on your device</li>
+      <li>Contact only Hugging Face servers to fetch repository listings and model files</li>
+      <li>Send no personal or usage data; model files are stored locally on your device</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Diagnostics and Crash Reports</h2>
+    <p>ZiroEdge contains no third-party crash SDK. It does receive Apple crash and hang diagnostics through MetricKit, which works as follows:</p>
+    <ul>
+      <li>Reports reach Apple only if you turned on sharing diagnostics with developers in your iOS settings</li>
+      <li>On your next launch, the app saves a short summary of each report into its local diagnostic log</li>
+      <li>That log never uploads. The only way it leaves your device is if you tap Export Diagnostics and send it yourself</li>
     </ul>
   </section>
 
@@ -189,18 +209,19 @@
     <h2>Third-Party Services</h2>
     <p>ZiroEdge integrates with:</p>
     <ul>
-      <li><strong>Hugging Face</strong> (huggingface.co) — for model file downloads only. No user data is shared.</li>
-      <li><strong>llama.cpp</strong> — the open-source inference engine running locally. No network access.</li>
+      <li><strong>Hugging Face</strong> (huggingface.co), for model file downloads only. No user data is shared.</li>
+      <li><strong>llama.cpp</strong>, the open-source inference engine running locally on your device. No network access.</li>
+      <li><strong>Apple diagnostics</strong>, as described above. Controlled by your iOS settings, not by us.</li>
     </ul>
   </section>
 
   <section>
     <h2>Your Rights</h2>
-    <p>Since ZiroEdge collects no data:</p>
+    <p>Since ZiroEdge collects no data, there is nothing to request a copy of and nothing held about you on any server. What you control on your device:</p>
     <ul>
-      <li>There is no data to access, correct, or delete beyond what's on your device</li>
-      <li>Deleting the app removes all locally stored conversations and model files</li>
-      <li>You have full control over your data because it never leaves your device</li>
+      <li>Read, export, or delete your conversations and messages at any time</li>
+      <li>Turn Apple diagnostic sharing on or off in iOS Settings at any time</li>
+      <li>Deleting the app removes everything it stored</li>
     </ul>
   </section>
 
@@ -211,7 +232,7 @@
 
   <section>
     <h2>Changes to This Policy</h2>
-    <p>This privacy policy may be updated. Changes will be reflected in the app and on our website.</p>
+    <p>This privacy policy may be updated as the app changes. The current version is always at this address, and the revision date at the top shows when it last changed.</p>
   </section>
 
   <hr>
@@ -224,7 +245,7 @@
 </main>
 
 <footer>
-  <p>ZiroEdge — Your conversations stay on your device, where they belong.</p>
+  <p>ZiroEdge by Zanish Labs. Your conversations stay on your device.</p>
 </footer>
 
 </body>
