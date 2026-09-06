@@ -15,6 +15,11 @@ struct ZiroEdgeApp: App {
     /// mid-flow.
     @StateObject private var onboardingManager = OnboardingManager()
 
+    /// Canonical privacy policy URL. Single source of truth so
+    /// Scripts/verify-privacy-policy.py and SettingsPage never drift.
+    static let privacyPolicyURLString = "https://zane-dev16.github.io/ZiroEdge/privacy.html"
+    static let privacyPolicyURL = URL(string: privacyPolicyURLString) ?? URL(fileURLWithPath: "/")
+
     static let diagnosticLogURL: URL =
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("download-diagnostic.log")
@@ -59,6 +64,9 @@ struct ZiroEdgeApp: App {
             rootView
                 .task {
                     guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
+                    // Receive-only: Apple-held crash/hang reports land in the
+                    // local log. Nothing uploads; Export stays the only exit.
+                    MetricKitIntake.shared.start()
                     if MemoryDiagnosticRecorder.shared.isEnabled {
                         if CommandLine.arguments.contains("--memory-diagnostic-reset") {
                             MemoryDiagnosticRecorder.shared.resetLog()
