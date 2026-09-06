@@ -38,7 +38,7 @@ ZiroEdge performs **all AI inference locally on the device** using llama.cpp, an
 3. **Start a conversation:** Once downloaded, tap "New Conversation." The model loads into memory (this may take a few seconds on first load).
 4. **Chat:** Type a message and tap send. The model streams its response token by token with markdown rendering.
 5. **Test offline:** Enable airplane mode after the model is loaded. Chat continues to work.
-6. **Vision (if testing Gemma vision models):** Tap the camera/photo button in the chat bar, select an image, and ask a question about it.
+6. **Vision (if testing Gemma vision models):** Tap the photo button in the chat bar, pick an image from your library, and ask a question about it.
 
 ### 6. Required Device Capabilities
 
