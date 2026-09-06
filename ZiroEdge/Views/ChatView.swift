@@ -45,7 +45,6 @@ struct ChatView: View {
     var body: some View {
         VStack(spacing: 0) {
             messageList
-            Divider()
             banners
             modelRetryRow
             inputBar
@@ -247,17 +246,26 @@ extension ChatView {
                         emptyState
                     }
 
-                    ForEach(viewModel.messages, id: \.id) { message in
+                    ForEach(Array(viewModel.messages.enumerated()), id: \.element.id) { index, message in
+                        if let divider = dayDividerText(at: index) {
+                            DayDivider(label: divider)
+                        }
                         messageRow(message)
                     }
 
                     if viewModel.canRetryLastResponse && !viewModel.messages.isEmpty {
+                        // Quiet text button under the failed turn — not a
+                        // full-width capsule in the transcript.
                         Button {
                             Task { await viewModel.retryLastResponse() }
                         } label: {
                             Label("Retry response", systemImage: "arrow.clockwise")
+                                .font(ZiroType.footnote.weight(.semibold))
+                                .foregroundStyle(Color.accentColor)
                         }
-                        .buttonStyle(ZiroSecondaryButtonStyle())
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .frame(minHeight: 44)
+                        .padding(.horizontal, ZiroTheme.Spacing.large)
                         .padding(.vertical, ZiroTheme.Spacing.small)
                         .accessibilityHint("Generates a new response to your last message")
                     }
@@ -352,12 +360,9 @@ extension ChatView {
         .accessibilityElement(children: .combine)
     }
 
-    /// The brand moment (design system §8.1): mark over the accent glow,
-    /// wordmark, title, privacy message, working sample-prompt cards, and —
-    /// only when nothing is installed — the catalog CTA.
-    /// Centered hello moment (dark-navy taste): greeting title, privacy
-    /// message, working sample-prompt cards, and — only when nothing is
-    /// installed — the catalog CTA.
+    /// Centered hello moment: greeting title, one subtle privacy caption,
+    /// working sample-prompt cards, and — only when nothing is installed —
+    /// the catalog CTA (no Browse Models wall when a model is ready).
     var emptyState: some View {
         ZiroEmptyState(
             title: "Hello, Ask Me Anything",
@@ -430,6 +435,30 @@ extension ChatView {
     var canSend: Bool {
         !viewModel.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !viewModel.pendingImages.isEmpty
     }
+
+    // MARK: Day Dividers
+
+    /// Day-separator label for the message at `index`, or nil when the
+    /// message continues the previous message's day. Messages without a
+    /// timestamp never open a divider — they join the running day.
+    private func dayDividerText(at index: Int) -> String? {
+        let messages = viewModel.messages
+        guard messages.indices.contains(index),
+              let date = messages[index].createdAt else { return nil }
+        if index > 0,
+           let previous = messages[index - 1].createdAt,
+           Calendar.current.isDate(previous, inSameDayAs: date) {
+            return nil
+        }
+        return Self.dayDividerFormatter.string(from: date)
+    }
+
+    private static let dayDividerFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        return formatter
+    }()
 
     func scrollToBottom(_ proxy: ScrollViewProxy) {
         let scroll = {
@@ -546,6 +575,45 @@ extension ChatView {
             if let url = viewModel.recoveryExportURL { ShareLink("Share", item: url) }
             Button("Discard", role: .destructive) { Task { await viewModel.discardPersistenceRecovery() } }
         }
+    }
+}
+
+// MARK: - Day Divider
+
+/// Lightweight centered day separator for the transcript: a single
+/// `tertiaryText`/`micro` label flanked by dashed hairline rules. Static by
+/// construction (Reduce Motion safe); never carded.
+private struct DayDivider: View {
+    let label: String
+
+    var body: some View {
+        HStack(spacing: ZiroTheme.Spacing.small) {
+            DashedRule()
+            Text(label)
+                .font(ZiroType.micro)
+                .foregroundStyle(ZiroTheme.tertiaryText)
+                .fixedSize()
+            DashedRule()
+        }
+        .padding(.horizontal, ZiroTheme.Spacing.large)
+        .padding(.vertical, ZiroTheme.Spacing.small)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(label)
+    }
+}
+
+/// 1pt dashed hairline that stretches to fill its container.
+private struct DashedRule: View {
+    var body: some View {
+        GeometryReader { proxy in
+            Path { path in
+                path.move(to: CGPoint(x: 0, y: 0.5))
+                path.addLine(to: CGPoint(x: proxy.size.width, y: 0.5))
+            }
+            .stroke(ZiroTheme.hairline, style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
+        }
+        .frame(height: 1)
+        .accessibilityHidden(true)
     }
 }
 

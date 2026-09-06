@@ -228,15 +228,134 @@ struct MarkdownRenderer {
 
     private static func renderCodeBlock(_ code: String, language: String) -> AttributedString {
         var result = AttributedString("\n")
-        var codeAttr = AttributedString(code)
-        codeAttr.font = .system(.body, design: .monospaced)
-        // Dark card treatment: the recessed-well token (navy `#1A2340` in
-        // dark mode) instead of systemGray6, which renders light-gray on the
-        // navy canvas. Body text keeps its inherited (contrast-verified)
-        // foreground on top of it.
-        codeAttr.backgroundColor = ZiroTheme.wellBackground
-        result.append(codeAttr)
+        // Single recessed-well card (navy `#1A2340` in dark mode) instead of
+        // systemGray6, which renders light-gray on the navy canvas. The fence
+        // language is parsed but stays out of the text — the transcript
+        // renders no block header or copy button, so a language label would
+        // be orphan chrome. Syntax tint is tasteful and dark-mode safe:
+        // keywords in infoText blue, literals in warningText orange, comments
+        // in positiveText green — all contrast-verified ZiroTheme tokens on
+        // the well. Base stays primaryText; the monospaced body style scales
+        // with Dynamic Type and carries no animation (Reduce Motion safe).
+        result.append(renderTintedCode(code))
         result.append(AttributedString("\n\n"))
+        return result
+    }
+
+    /// Lightweight code tint on the well card: keywords blue, strings/numbers
+    /// orange, line/block comments green. ZiroTheme tokens only (no raw hues)
+    /// so light/dark contrast stays verified. Strings win over comment
+    /// markers and comments win over keywords by scan order, so `http://`
+    /// inside a string never leaks green.
+    private static func renderTintedCode(_ code: String) -> AttributedString {
+        var result = AttributedString()
+        let mono = Font.system(.body, design: .monospaced)
+        let well = ZiroTheme.wellBackground
+        let base = ZiroTheme.primaryText
+        let keywordColor = ZiroTheme.infoText
+        let literalColor = ZiroTheme.warningText
+        let commentColor = ZiroTheme.positiveText
+        let keywords: Set<String> = [
+            "let", "var", "func", "return", "if", "else", "elif",
+            "for", "while", "in", "import", "from", "struct",
+            "class", "enum", "extension", "guard", "switch", "case",
+            "break", "continue", "try", "catch", "throw", "throws",
+            "async", "await", "self", "nil", "true", "false",
+            "True", "False", "None", "def", "lambda", "const",
+            "new", "do", "public", "private", "static"
+        ]
+        func makeRun(_ text: String, color: Color) -> AttributedString {
+            var run = AttributedString(text)
+            run.font = mono
+            run.backgroundColor = well
+            run.foregroundColor = color
+            return run
+        }
+        var index = code.startIndex
+        while index < code.endIndex {
+            let remaining = code[index...]
+            // Line comment: // to end of line.
+            if remaining.hasPrefix("//") {
+                let end = code[index...].firstIndex(where: { $0 == "\n" }) ?? code.endIndex
+                result.append(makeRun(String(code[index..<end]), color: commentColor))
+                index = end
+                continue
+            }
+            // Block comment: /* … */ (unclosed runs to end).
+            if remaining.hasPrefix("/*") {
+                if let close = code[index...].range(of: "*/") {
+                    let end = close.upperBound
+                    result.append(makeRun(String(code[index..<end]), color: commentColor))
+                    index = end
+                } else {
+                    result.append(makeRun(String(code[index...]), color: commentColor))
+                    break
+                }
+                continue
+            }
+            // Hash comment (#python/#shell): only at line start or after
+            // whitespace so `#available` attributes don't go green.
+            if code[index] == "#" {
+                let atStart = index == code.startIndex
+                let prevIsSpace = !atStart && code[code.index(before: index)].isWhitespace
+                if atStart || prevIsSpace {
+                    let end = code[index...].firstIndex(where: { $0 == "\n" }) ?? code.endIndex
+                    result.append(makeRun(String(code[index..<end]), color: commentColor))
+                    index = end
+                    continue
+                }
+            }
+            // String literal: "…" '…' `…` with backslash escapes, same-line
+            // only so an unmatched quote can't wash the rest orange.
+            if code[index] == "\"" || code[index] == "'" || code[index] == "`" {
+                let quote = code[index]
+                var end = code.index(after: index)
+                var closed = false
+                while end < code.endIndex {
+                    let ch = code[end]
+                    if ch == "\\" {
+                        end = code.index(after: end)
+                        if end < code.endIndex { end = code.index(after: end) }
+                        continue
+                    }
+                    if ch == quote { closed = true; end = code.index(after: end); break }
+                    if ch == "\n" { break }
+                    end = code.index(after: end)
+                }
+                if closed {
+                    result.append(makeRun(String(code[index..<end]), color: literalColor))
+                    index = end
+                } else {
+                    result.append(makeRun(String(code[index]), color: base))
+                    index = code.index(after: index)
+                }
+                continue
+            }
+            // Number literal: digit-led run (hex/dots/underscores included).
+            if code[index].isNumber {
+                var end = code.index(after: index)
+                while end < code.endIndex && (code[end].isLetter || code[end].isNumber || code[end] == "_" || code[end] == ".") {
+                    end = code.index(after: end)
+                }
+                result.append(makeRun(String(code[index..<end]), color: literalColor))
+                index = end
+                continue
+            }
+            // Identifier or keyword.
+            if code[index].isLetter || code[index] == "_" {
+                var end = code.index(after: index)
+                while end < code.endIndex && (code[end].isLetter || code[end].isNumber || code[end] == "_") {
+                    end = code.index(after: end)
+                }
+                let word = String(code[index..<end])
+                result.append(makeRun(word, color: keywords.contains(word) ? keywordColor : base))
+                index = end
+                continue
+            }
+            // Punctuation / whitespace / newline: quiet base on the well.
+            result.append(makeRun(String(code[index]), color: base))
+            index = code.index(after: index)
+        }
         return result
     }
 
@@ -244,6 +363,7 @@ struct MarkdownRenderer {
         var attr = AttributedString(code)
         attr.font = .system(.body, design: .monospaced)
         attr.backgroundColor = ZiroTheme.wellBackground
+        attr.foregroundColor = ZiroTheme.primaryText
         return attr
     }
 

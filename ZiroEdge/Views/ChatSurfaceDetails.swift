@@ -176,16 +176,18 @@ extension ChatView {
     /// True once the selected model is loaded and accepting work.
     var chatReady: Bool { viewModel.modelLoadPhase == .ready }
 
-    /// Composer stack: status/hint row, image previews, then the rounded
-    /// input well — the always-visible attachment cluster, the message
-    /// field, and send riding one well-elevation fill with a hairline rest
-    /// state and an accent focus ring. The well uses `Radius.control` (not
-    /// `Radius.card`): it is a text field, and the radius scale assigns
-    /// text fields/controls to `control` (design system §6.2, matching
-    /// `ziroComposerField`). The text field and send stay disabled until
-    /// the model is resident; the attachment cluster disables itself (with
-    /// a spoken reason) until a vision-capable model is resident, but never
-    /// leaves the row — see `attachmentButtons`.
+    /// Composer stack: the single compact model-picker pill, image
+    /// previews, then the one rounded input well — the always-visible
+    /// attachment cluster, the message field, and send riding one
+    /// well-elevation fill with a hairline rest state and an accent focus
+    /// ring. The well uses `Radius.control` (not `Radius.card`): it is a
+    /// text field, and the radius scale assigns text fields/controls to
+    /// `control` (design system §6.2, matching `ziroComposerField`). The
+    /// text field and send stay disabled until the model is resident; the
+    /// attachment cluster disables itself (with a spoken reason) until a
+    /// vision-capable model is resident, but never leaves the row — see
+    /// `attachmentButtons`. No top hairline, no stacked pills: the picker
+    /// row above is the sole pill.
     var inputBar: some View {
         VStack(spacing: ZiroTheme.Spacing.xSmall) {
             statusOrTokenHintRow
@@ -222,16 +224,14 @@ extension ChatView {
         }
         .padding(.top, ZiroTheme.Spacing.small)
         .background(ZiroTheme.pageBackground)
-        .overlay(alignment: .top) {
-            Rectangle()
-                .fill(ZiroTheme.hairline)
-                .frame(height: 1)
-        }
     }
 
-    /// Composer top row: the Claude-style model picker leading, token/status
-    /// hint trailing. The picker is the single identity surface (same phases,
-    /// menu, and VoiceOver labels the toolbar pill used to carry).
+    /// Composer top row: the single compact model-picker pill — the sole
+    /// identity surface (same phases, menu, and VoiceOver labels the
+    /// toolbar pill used to carry). The token counter and the
+    /// download/unload captions are gone: the counter was permanent
+    /// engineering text, and both captions duplicated states the picker
+    /// title already carries ("No model yet" / "… unloaded").
     var statusOrTokenHintRow: some View {
         HStack {
             ComposerModelPicker(
@@ -244,48 +244,7 @@ extension ChatView {
                 onRetryLoad: { viewModel.retryModelLoad() }
             )
             Spacer(minLength: 0)
-            composerStatusBadge
         }
         .padding(.horizontal, ZiroTheme.Spacing.large)
-    }
-
-    /// Composer status row. The composer picker is the single authoritative
-    /// loading indicator (spinner + "Name…" title), and `.failed`/`.evicted`
-    /// already render the modelRetryRow banner directly above this row —
-    /// repeating those states here showed the same message on screen twice.
-    /// This row only speaks when nothing else carries the state: token usage
-    /// while ready, the download nudge, and the user-unload caption (a
-    /// user-initiated unload parks the chat on `.idle` with a dimmed,
-    /// disabled composer and no banner — same visible-hint pattern as the
-    /// disabled-continue hints).
-    @ViewBuilder
-    var composerStatusBadge: some View {
-        if chatReady {
-            tokenCountBadge
-        } else if viewModel.modelLoadPhase == .needsDownload {
-            // Allow up to two lines: at accessibility text sizes a hard single
-            // line would ellipsize the instruction down to a stub that no
-            // longer states the action the user must take.
-            Text("Download a model to start chatting")
-                .font(ZiroType.micro)
-                .foregroundStyle(ZiroTheme.secondaryText)
-                .lineLimit(1...2)
-        } else if viewModel.modelLoadPhase == .idle,
-                  viewModel.lifecycleManager.isUserUnloaded {
-            Text("\(viewModel.selectedModel?.displayName ?? "The model") is unloaded. Reload from the model menu.")
-                .font(ZiroType.micro)
-                .foregroundStyle(ZiroTheme.secondaryText)
-                .lineLimit(1...2)
-        }
-    }
-
-    var tokenCountBadge: some View {
-        Text("~\(viewModel.tokenCount) / \(viewModel.contextWindowSize) tokens")
-            // Technical voice: the token counter is engineering data, not UI copy.
-            .font(ZiroType.technical(.caption2))
-            .foregroundStyle(ZiroTheme.secondaryText)
-            .accessibilityLabel(
-                "Approximately \(viewModel.tokenCount) of \(viewModel.contextWindowSize) context tokens used"
-            )
     }
 }

@@ -84,10 +84,6 @@ struct ZiroCapabilityCard: View {
                 RoundedRectangle(cornerRadius: ZiroTheme.Radius.control, style: .continuous)
                     .fill(ZiroTheme.raisedBackground)
             )
-            .overlay(
-                RoundedRectangle(cornerRadius: ZiroTheme.Radius.control, style: .continuous)
-                    .stroke(ZiroTheme.hairline)
-            )
         }
         .buttonStyle(ZiroCapabilityCardStyle())
     }
@@ -111,13 +107,14 @@ private struct ZiroCapabilityCardStyle: ButtonStyle {
     }
 }
 
-/// The chat empty state and other full-viewport resting moments. Composition
-/// (top to bottom): the brand mark over a soft accent glow, the ZIROEDGE
-/// wordmark, the title, the privacy message, optional guided starting-point
-/// cards (reference-style `ZiroCapabilityCard` rows when `suggestionItems`
-/// is set, legacy `ZiroSuggestionChip` flow for plain `suggestions`), and
-/// optional actions. Everything is centered, capped at
-/// `ZiroMeasure.standard`, and fully static (Reduce Motion safe).
+/// The chat empty state and other full-viewport resting moments.
+/// Composition (top to bottom): the centered greeting title, one subtle
+/// privacy caption, optional guided starting-point cards
+/// (reference-style `ZiroCapabilityCard` rows when `suggestionItems` is
+/// set, legacy `ZiroSuggestionChip` flow for plain `suggestions`), and
+/// optional actions. No brand mark, glow, or wordmark — the greeting is
+/// the moment. Everything is centered, capped at `ZiroMeasure.standard`,
+/// and fully static (Reduce Motion safe).
 struct ZiroEmptyState<Actions: View>: View {
     let title: String
     let message: String
@@ -127,8 +124,6 @@ struct ZiroEmptyState<Actions: View>: View {
     var suggestionItems: [ZiroSuggestion] = []
     var onSuggestion: ((String) -> Void)? = nil
     @ViewBuilder var actions: () -> Actions
-
-    @ScaledMetric(relativeTo: .largeTitle) private var markSize: CGFloat = 68
 
     init(
         title: String,
@@ -148,31 +143,13 @@ struct ZiroEmptyState<Actions: View>: View {
 
     var body: some View {
         VStack(spacing: ZiroTheme.Spacing.xLarge) {
-            ZiroBrandMark(size: markSize)
-                .background(
-                    Circle()
-                        .fill(
-                            RadialGradient(
-                                colors: [Color.accentColor.opacity(0.16), Color.accentColor.opacity(0)],
-                                center: .center,
-                                startRadius: markSize * 0.2,
-                                endRadius: markSize * 1.15
-                            )
-                        )
-                        .frame(width: markSize * 2.2, height: markSize * 2.2)
-                )
-
             VStack(spacing: ZiroTheme.Spacing.small) {
-                Text("ZIROEDGE")
-                    .font(.caption.weight(.bold))
-                    .tracking(1.4)
-                    .foregroundStyle(ZiroTheme.secondaryText)
                 Text(title)
                     .font(ZiroType.title)
                     .multilineTextAlignment(.center)
                     .foregroundStyle(ZiroTheme.primaryText)
                 Text(message)
-                    .font(.subheadline)
+                    .font(.footnote)
                     .foregroundStyle(ZiroTheme.secondaryText)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)

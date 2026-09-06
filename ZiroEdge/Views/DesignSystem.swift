@@ -887,9 +887,9 @@ struct ZiroProgressRing: View {
 // MARK: - Message Bubble Treatment
 
 /// The two bubble treatments. User: full accent fill (label uses
-/// `accentForeground`). Assistant: raised surface + hairline — the model's
-/// voice is a calm card, not a shout. The streaming cursor and thinking
-/// indicator live with the bubble views in the app layer.
+/// `accentForeground`) — the single blue bubble. Assistant: plain canvas
+/// text on the page, no fill and no stroke (reference minimalism: only the
+/// user's voice is a bubble).
 enum ZiroBubbleRole {
     case user
     case assistant
@@ -907,24 +907,12 @@ extension View {
                 in: RoundedRectangle(cornerRadius: ZiroTheme.Radius.bubble, style: .continuous)
             )
         case .assistant:
-            // P2 evaluation (keep the fill): stripping this to `.clear`
-            // was considered so assistant text sits directly on the page.
-            // Rejected — the retained transcript captures show the empty
-            // transcript only, so no screenshot comparison supports the
-            // change, and the raised + hairline card is load-bearing: it is
-            // the "calm card" voice distinct from user bubbles and the
-            // page, it carries the thinking indicator and streaming bubble,
-            // and `primaryText` on it is contrast-verified (15.21 dark /
-            // 17.65 light on the raised surface). Revisit only with side-by-side transcript
-            // captures in both appearances.
-            self.background(
-                ZiroTheme.raisedBackground,
-                in: RoundedRectangle(cornerRadius: ZiroTheme.Radius.bubble, style: .continuous)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: ZiroTheme.Radius.bubble, style: .continuous)
-                    .stroke(ZiroTheme.hairline)
-            )
+            // Plain canvas text: no fill, no hairline. The assistant's
+            // voice sits directly on the page; the user's accent bubble is
+            // the only bubble on the transcript. (Formerly a raised +
+            // hairline "calm card" — removed in the defluff pass so the
+            // transcript matches the plain-text reference.)
+            self
         }
     }
 }

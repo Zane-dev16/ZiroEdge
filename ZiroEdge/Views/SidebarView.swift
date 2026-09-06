@@ -43,6 +43,7 @@ struct SidebarView: View {
             conversationSections
         }
         .listStyle(.sidebar)
+        .listSectionSpacing(ZiroTheme.Spacing.small)
         .scrollContentBackground(.hidden)
         .background(ZiroTheme.pageBackground)
         .navigationBarTitleDisplayMode(.inline)
@@ -102,10 +103,6 @@ struct SidebarView: View {
                     .background(
                         ZiroTheme.accentContainer,
                         in: RoundedRectangle(cornerRadius: ZiroTheme.Radius.small, style: .continuous)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: ZiroTheme.Radius.small, style: .continuous)
-                            .stroke(ZiroTheme.hairline)
                     )
                 VStack(alignment: .leading, spacing: 0) {
                     Text("ZiroEdge")
@@ -253,9 +250,10 @@ struct SidebarView: View {
                 } header: {
                     if let title = group.title {
                         Text(title)
-                            .font(.caption.weight(.semibold))
+                            .font(ZiroType.micro)
                             .textCase(.uppercase)
-                            .foregroundStyle(ZiroTheme.secondaryText)
+                            .tracking(0.5)
+                            .foregroundStyle(ZiroTheme.tertiaryText)
                     }
                 }
             }
@@ -269,6 +267,12 @@ struct SidebarView: View {
         )
             .tag(conversation.id)
             .contentShape(Rectangle())
+            .listRowInsets(EdgeInsets(
+                top: ZiroTheme.Spacing.xSmall,
+                leading: ZiroTheme.Spacing.medium,
+                bottom: ZiroTheme.Spacing.xSmall,
+                trailing: ZiroTheme.Spacing.medium
+            ))
             .onTapGesture {
                 onSelectConversation(conversation.id)
             }
@@ -303,8 +307,9 @@ struct SidebarView: View {
 struct ConversationRow: View {
     let conversation: ConversationPayload
     /// Selected rows (sidebar `List(selection:)`) tint to the accent
-    /// container with an accent edge — the custom card fill replaces the
-    /// system selection wash, so selection must be projected explicitly.
+    /// container with a 2pt accent edge — the quiet row itself carries no
+    /// fill and no stroke, so selection is projected explicitly and only
+    /// when selected (card OR hairline, never both at rest).
     var isSelected: Bool = false
 
     var body: some View {
@@ -319,18 +324,14 @@ struct ConversationRow: View {
                 )
                 .accessibilityHidden(true)
 
-            VStack(alignment: .leading, spacing: ZiroTheme.Spacing.micro) {
-                Text(conversation.title)
-                    .font(ZiroType.body.weight(.medium))
-                    .foregroundStyle(ZiroTheme.primaryText)
-                    .lineLimit(1)
-
-                // The message count is engineering metadata — technical voice.
-                Text("\(conversation.messageCount) messages")
-                    .font(ZiroType.technical(.caption))
-                    .foregroundStyle(ZiroTheme.secondaryText)
-                    .lineLimit(1)
-            }
+            // Title flexes; the trailing timestamp is fixed-width and wins
+            // every truncation fight.
+            Text(conversation.title)
+                .font(ZiroType.body.weight(.medium))
+                .foregroundStyle(ZiroTheme.primaryText)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .layoutPriority(0)
 
             Spacer(minLength: ZiroTheme.Spacing.small)
 
@@ -338,18 +339,20 @@ struct ConversationRow: View {
                 .font(ZiroType.caption)
                 .foregroundStyle(ZiroTheme.tertiaryText)
                 .lineLimit(1)
+                .fixedSize()
+                .layoutPriority(1)
         }
-        .padding(ZiroTheme.Spacing.medium)
+        .padding(.horizontal, ZiroTheme.Spacing.medium)
+        .padding(.vertical, ZiroTheme.Spacing.small)
         .frame(maxWidth: .infinity)
         .background(
-            RoundedRectangle(cornerRadius: ZiroTheme.Radius.card, style: .continuous)
-                .fill(isSelected ? ZiroTheme.accentContainer : ZiroTheme.raisedBackground)
+            RoundedRectangle(cornerRadius: ZiroTheme.Radius.small, style: .continuous)
+                .fill(isSelected ? ZiroTheme.accentContainer : Color.clear)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: ZiroTheme.Radius.card, style: .continuous)
-                .stroke(isSelected ? Color.accentColor : ZiroTheme.hairline, lineWidth: isSelected ? 1.5 : 1)
+            RoundedRectangle(cornerRadius: ZiroTheme.Radius.small, style: .continuous)
+                .stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 2)
         )
-        .padding(.vertical, ZiroTheme.Spacing.micro)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilitySummary)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
@@ -454,12 +457,18 @@ struct ChatsView: View {
         return scope == .recent ? isRecent : !isRecent
     }
 
-    /// One archive row: card treatment with rename/delete affordances.
+    /// One archive row: quiet treatment with rename/delete affordances.
     /// Delete funnels through the shell so an in-flight stream is cancelled
     /// first (mirrors the sidebar row).
     private func archiveRow(_ conversation: ConversationPayload) -> some View {
         ConversationRow(conversation: conversation)
             .contentShape(Rectangle())
+            .listRowInsets(EdgeInsets(
+                top: ZiroTheme.Spacing.xSmall,
+                leading: ZiroTheme.Spacing.medium,
+                bottom: ZiroTheme.Spacing.xSmall,
+                trailing: ZiroTheme.Spacing.medium
+            ))
             .onTapGesture {
                 onSelectConversation(conversation.id)
             }
@@ -487,11 +496,11 @@ struct ChatsView: View {
             }
     }
 
-    /// Archive scope filter: capsule pills (not the system segmented
-    /// control) so the selected scope reads in the accent container with a
-    /// hairline edge, matching the chip/pill language elsewhere. Each pill
-    /// is a 44pt-minimum-height button that grows with Dynamic Type; the
-    /// selected pill carries `.isSelected` for VoiceOver.
+    /// Archive scope filter: quiet capsule pills (no accent fill/stroke —
+    /// the selected scope reads in the recessed-well fill with primary
+    /// text). Each pill keeps the 44pt-minimum-height touch floor and grows
+    /// with Dynamic Type; the selected pill carries `.isSelected` for
+    /// VoiceOver.
     private var archiveScopePills: some View {
         HStack(spacing: ZiroTheme.Spacing.small) {
             ForEach(ArchiveScope.allCases, id: \.self) { item in
@@ -500,13 +509,13 @@ struct ChatsView: View {
                 } label: {
                     Text(item.rawValue)
                         .font(.subheadline.weight(.medium))
-                        .foregroundStyle(item == scope ? Color.accentColor : ZiroTheme.secondaryText)
+                        .foregroundStyle(item == scope ? ZiroTheme.primaryText : ZiroTheme.secondaryText)
                         .frame(maxWidth: .infinity, minHeight: 44)
                         .background(
-                            Capsule().fill(item == scope ? ZiroTheme.accentContainer : .clear)
+                            Capsule().fill(item == scope ? ZiroTheme.wellBackground : .clear)
                         )
                         .overlay(
-                            Capsule().stroke(item == scope ? Color.accentColor : ZiroTheme.hairline, lineWidth: 1)
+                            Capsule().stroke(item == scope ? ZiroTheme.hairline : Color.clear, lineWidth: 1)
                         )
                         .contentShape(Capsule())
                 }
@@ -559,13 +568,15 @@ struct ChatsView: View {
                             } header: {
                                 if let title = section.title {
                                     Text(title)
-                                        .font(.caption.weight(.semibold))
+                                        .font(ZiroType.micro)
                                         .textCase(.uppercase)
-                                        .foregroundStyle(ZiroTheme.secondaryText)
+                                        .tracking(0.5)
+                                        .foregroundStyle(ZiroTheme.tertiaryText)
                                 }
                             }
                         }
                     }
+                    .listSectionSpacing(ZiroTheme.Spacing.small)
                     .scrollContentBackground(.hidden)
                     .background(ZiroTheme.pageBackground)
                 }

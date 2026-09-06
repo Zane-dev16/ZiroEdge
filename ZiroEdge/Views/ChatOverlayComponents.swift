@@ -288,19 +288,14 @@ struct ThinkingIndicator: View {
 
     private func thinkingRow(text: String) -> some View {
         HStack {
-            // minWidth (not fixed width): a fixed 96pt frame turns the bubble
-            // into a tall sliver with wrapped/truncated text at accessibility
-            // Dynamic Type sizes — hug the content instead and let the
-            // min-width only steady the dots animation at the default size.
+            // Quiet status line on the page — no bubble, no card. The
+            // min-width only steadies the dots animation at the default
+            // size; the text itself is plain secondary copy.
             Text(text)
                 .font(ZiroType.supporting)
                 .foregroundStyle(ZiroTheme.secondaryText)
                 .frame(minWidth: 96, alignment: .leading)
-                .padding(.horizontal, ZiroTheme.Spacing.large)
-                .padding(.vertical, ZiroTheme.Spacing.medium)
-                // Assistant bubble treatment: raised surface + hairline,
-                // continuous corners at the bubble radius.
-                .ziroMessageBubble(.assistant)
+                .padding(.vertical, ZiroTheme.Spacing.small)
             Spacer()
         }
         .padding(.horizontal, ZiroTheme.Spacing.large)

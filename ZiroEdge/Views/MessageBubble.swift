@@ -1,9 +1,9 @@
 // MessageBubble.swift
 // ZiroEdge — Privacy-first local AI assistant
 //
-// Individual message bubble. User messages right-aligned on the accent fill,
-// assistant messages left-aligned on the raised surface with markdown
-// rendering — both via the design system's `ziroMessageBubble` treatment.
+// Individual message row. User messages right-aligned in the single blue
+// accent bubble; assistant messages left-aligned as plain canvas text on
+// the page (no card, no hairline).
 
 import SwiftUI
 
@@ -70,6 +70,9 @@ struct MessageBubble: View {
                         .ziroMessageBubble(.user)
                         .accessibilityLabel("You said: \(message.content)")
                 } else {
+                    // Plain canvas text on the page — no card, no hairline.
+                    // `ziroMessageBubble(.assistant)` is the plain identity
+                    // treatment; only `.user` draws a bubble.
                     VStack(alignment: .leading, spacing: 0) {
                         if isStreaming {
                             // The growing transcript must never re-bind this
@@ -92,9 +95,7 @@ struct MessageBubble: View {
                                 .accessibilityLabel("Assistant said: \(displayContent)")
                         }
                     }
-                    .padding(.horizontal, ZiroTheme.Spacing.large)
-                    .padding(.vertical, ZiroTheme.Spacing.medium)
-                    .ziroMessageBubble(.assistant)
+                    .padding(.vertical, ZiroTheme.Spacing.small)
                 }
 
                 // Action buttons. Assistant rows offer copy/branch/delete;
