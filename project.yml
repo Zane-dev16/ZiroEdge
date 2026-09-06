@@ -3,7 +3,7 @@ options:
   bundleIdPrefix: com.zanish-labs
   deploymentTarget:
     iOS: "18.0"
-  xcodeVersion: "15.0"
+  xcodeVersion: "26.6"
   generateEmptyDirectories: true
   groupSortPosition: top
 
@@ -55,6 +55,7 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_FILE: Config/Info.plist
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: "UIInterfaceOrientationPortrait"
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
     dependencies:
