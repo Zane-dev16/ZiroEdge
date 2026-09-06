@@ -303,7 +303,13 @@ final class FeatureTests: UITestBase {
             return
         }
 
-        let pill = app.buttons["No model yet"].firstMatch
+        // Overhaul IA: the header pill is a single VoiceOver element whose
+        // accessibility label is "Chat model, <title>" (PLAN §B.3), so the
+        // visible "No model yet" title reads as "Chat model, No model yet".
+        // Match via CONTAINS to cover both the label family and legacy exact.
+        let pill = app.buttons.containing(
+            NSPredicate(format: "label CONTAINS 'No model yet'")
+        ).firstMatch
         XCTAssertTrue(pill.waitForExistence(timeout: 15),
                       "Header pill should read 'No model yet' in the needsDownload scenario")
 
