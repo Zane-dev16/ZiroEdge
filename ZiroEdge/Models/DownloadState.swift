@@ -79,6 +79,7 @@ enum DownloadError: Sendable, Error, Hashable {
     case rangeMismatch(expectedOffset: Int64, actualOffset: Int64?)
     case sizeMismatch(expected: Int64, actual: Int64)
     case structureInvalid(reason: String)
+    case missingMmprojURL(modelID: String)
 
     var localizedDescription: String {
         switch self {
@@ -113,6 +114,8 @@ enum DownloadError: Sendable, Error, Hashable {
             return "Size mismatch: expected \(expected) bytes, got \(actual) bytes"
         case .structureInvalid(let reason):
             return "Invalid file structure: \(reason)"
+        case .missingMmprojURL(let modelID):
+            return "Vision projector URL is missing for model '\(modelID)'"
         }
     }
 }

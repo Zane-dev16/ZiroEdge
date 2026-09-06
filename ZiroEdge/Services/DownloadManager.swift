@@ -780,12 +780,22 @@ extension DownloadManager {
             state: "downloading",
             expectedBytes: task.expectedBytes
         )
+        let canonicalURL: URL
+        do {
+            canonicalURL = try task.trySourceURL()
+        } catch {
+            task.state = .failed(error: .missingMmprojURL(modelID: model.id))
+            updateStatus(model: model)
+            activeTasks.removeValue(forKey: key)
+            logger.error("Missing mmproj URL for model: \(model.id, privacy: .public)")
+            return
+        }
         if skipCDNResolution {
-            transfer(task: task, key: key, downloadURL: task.sourceURL)
+            transfer(task: task, key: key, downloadURL: canonicalURL)
             return
         }
         task.resolutionTask = resolveCDNURL(
-            task.sourceURL,
+            canonicalURL,
             modelID: model.id,
             artifact: artifact.label
         ) { [weak self, weak task] resolvedURL in
@@ -794,7 +804,7 @@ extension DownloadManager {
                   !task.isCancelled,
                   !task.isPaused else { return }
             task.resolutionTask = nil
-            self.transfer(task: task, key: key, downloadURL: resolvedURL ?? task.sourceURL)
+            self.transfer(task: task, key: key, downloadURL: resolvedURL ?? canonicalURL)
         }
     }
 

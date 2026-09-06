@@ -44,12 +44,25 @@ final class DownloadTask {
         }
     }
     var sourceURL: URL {
+        // Non-throwing accessor for comparison sites. Never traps: falls back
+        // to baseURL which then fails SHA/size validation as a failed download.
+        // New transfer starts should use trySourceURL().
+        if let url = try? trySourceURL() {
+            return url
+        }
+        assertionFailure("DownloadTask .mmproj for model '\(model.id)' with no mmprojURL")
+        return model.baseURL
+    }
+
+    /// Throwing accessor. Prefer this when starting a transfer so a corrupt
+    /// vision record surfaces as a failed download instead of a crash.
+    func trySourceURL() throws -> URL {
         switch artifact {
         case .base:
             return model.baseURL
         case .mmproj:
             guard let url = model.mmprojURL else {
-                fatalError("DownloadTask .mmproj for model '\(model.id)' with no mmprojURL")
+                throw DownloadError.missingMmprojURL(modelID: model.id)
             }
             return url
         }

@@ -563,10 +563,14 @@ struct HFRepositoryInspector: Sendable {
         let encoded = repositoryID.split(separator: "/").map(String.init).map {
             $0.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? $0
         }.joined(separator: "/")
-        let url = URL(string: "https://huggingface.co/api/models/\(encoded)?blobs=true")!
+        guard let url = URL(string: "https://huggingface.co/api/models/\(encoded)?blobs=true") else {
+            throw HFInspectionError.malformedRepository
+        }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 15
         let data: Data
         let response: HTTPURLResponse
-        do { (data, response) = try await loader(URLRequest(url: url)) }
+        do { (data, response) = try await loader(request) }
         catch { throw HFInspectionError.transientFailure }
         switch response.statusCode {
         case 200: break
@@ -655,9 +659,30 @@ struct HFRepositoryInspector: Sendable {
     }
 
     static func liveLoader(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
-        return (data, http)
+        var timed = request
+        if timed.timeoutInterval > 15 || timed.timeoutInterval == 60 {
+            timed.timeoutInterval = 15
+        }
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 15
+        config.timeoutIntervalForResource = 30
+        let session = URLSession(configuration: config)
+        var lastError: Error?
+        for attempt in 0..<2 {
+            do {
+                let (data, response) = try await session.data(for: timed)
+                guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+                return (data, http)
+            } catch {
+                lastError = error
+                if attempt == 0 {
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    continue
+                }
+                throw error
+            }
+        }
+        throw lastError ?? URLError(.timedOut)
     }
 
 

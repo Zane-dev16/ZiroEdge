@@ -68,6 +68,8 @@ enum DownloadFailureCategory: String, Codable, Sendable {
             return .network
         case .invalidCatalogMetadata:
             return .catalog
+        case .missingMmprojURL:
+            return .catalog
         case .promotionFailed:
             return .storage
         case .cancelled:
