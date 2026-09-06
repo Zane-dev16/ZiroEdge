@@ -4,8 +4,8 @@
 import PhotosUI
 import SwiftUI
 
-/// The chat surface. Identity/loading feedback lives in the header pill
-/// (`ChatHeaderPill`); the composer enables only while the model is resident;
+/// The chat surface. Identity/loading feedback lives in the composer model
+/// picker (`ComposerModelPicker`); the composer enables only while the model is resident;
 /// load failures surface as inline retry rows, not alerts (master plan §B).
 struct ChatView: View {
     @ObservedObject var viewModel: ChatViewModel
@@ -15,6 +15,9 @@ struct ChatView: View {
     var onNavigateToRoute: ((ShellRoute) -> Void)? = nil
     /// Presents the sidebar drawer; nil hides the toggle even when requested.
     var onOpenSidebar: (() -> Void)? = nil
+    /// Deletes the active conversation (shell-owned: cancels any in-flight
+    /// stream first). Nil hides the ... menu's Delete row.
+    var onDeleteConversation: (() -> Void)? = nil
 
     @FocusState var isInputFocused: Bool
     @State private var hasScrolledUp = false
@@ -33,8 +36,7 @@ struct ChatView: View {
     private var imageRemoveCornerInset: CGFloat { imageRemoveControlSide / 2 - 8 }
     @State private var selectedPhotos: [PhotosPickerItem] = []
     @State private var canPasteImage = UIPasteboard.general.hasImages
-    @State private var showSystemPromptEditor = false
-    @State private var systemPromptDraft = ""
+    @State private var showDeleteChatConfirmation = false
     // BATCH-04: throttle scrollToBottom to avoid stacked withAnimation per token
     @State private var lastScrollTime: Date = .distantPast
     @State private var pendingScrollTask: Task<Void, Never>?
@@ -71,24 +73,16 @@ struct ChatView: View {
         } message: {
             Text("This imported profile has not passed the full physical workload. ZiroEdge will still enforce its measured admission floor and reserve.")
         }
-        .sheet(isPresented: $showSystemPromptEditor) {
-            ConversationSystemPromptEditor(
-                prompt: $systemPromptDraft,
-                defaultPrompt: UserDefaults.standard.string(
-                    forKey: ChatViewModel.DefaultsKeys.defaultSystemPrompt
-                ) ?? "",
-                onSave: {
-                    if await viewModel.updateSystemPrompt(systemPromptDraft) {
-                        showSystemPromptEditor = false
-                    }
-                },
-                onUseDefault: {
-                    if await viewModel.updateSystemPrompt(nil) {
-                        systemPromptDraft = ""
-                        showSystemPromptEditor = false
-                    }
-                }
-            )
+        .alert("Delete Conversation?", isPresented: $showDeleteChatConfirmation) {
+            Button("Delete", role: .destructive) {
+                showDeleteChatConfirmation = false
+                onDeleteConversation?()
+            }
+            Button("Cancel", role: .cancel) {
+                showDeleteChatConfirmation = false
+            }
+        } message: {
+            Text("This will permanently delete the conversation and all its messages.")
         }
     }
 
@@ -352,7 +346,7 @@ extension ChatView {
             }
         ) {
             // A.2: with no models installed, the empty state gains a direct
-            // CTA into the catalog (same shell route the header pill's
+            // CTA into the catalog (same shell route the composer picker's
             // Browse action uses). Chips are withheld in that state — the
             // composer is disabled with nothing to load, so the guided
             // prompts could not actually work.
@@ -453,45 +447,44 @@ extension ChatView {
                 .accessibilityIdentifier("sidebar-button")
             }
         }
-        ToolbarItem(placement: .principal) {
-            ChatHeaderPill(
-                phase: viewModel.modelLoadPhase,
-                modelName: viewModel.selectedModel?.displayName,
-                isUserUnloaded: viewModel.lifecycleManager.isUserUnloaded,
-                availableModels: viewModel.availableModels,
-                onSelectModel: { model in Task { await viewModel.selectModel(model) } },
-                onBrowseModels: { navigateToRoute(.models) },
-                onRetryLoad: { viewModel.retryModelLoad() }
-            )
-        }
-        ToolbarItem(placement: .secondaryAction) {
-            Button {
-                systemPromptDraft = viewModel.activeConversationSystemPrompt ?? ""
-                showSystemPromptEditor = true
+        // The toolbar carries no model control: the Claude-style composer
+        // picker above the message field is the single identity surface
+        // (same phases, menu, and VoiceOver labels — no redundant pill).
+        // Explicit "More" menu instead of `.secondaryAction` overflow: on
+        // iPhone the system collapses secondary actions behind a "..."
+        // button that was not presenting anything when tapped. An explicit
+        // Menu in `.topBarTrailing` always opens. System prompt lives
+        // globally in Settings (Default Instructions) — this menu carries
+        // only Share and Delete for the active chat.
+        ToolbarItem(placement: .topBarTrailing) {
+            Menu {
+                Button {
+                    viewModel.exportTranscript()
+                } label: {
+                    Label("Share", systemImage: "square.and.arrow.up")
+                }
+                .disabled(viewModel.messages.isEmpty)
+                if let transcriptURL = viewModel.transcriptExportURL {
+                    ShareLink(item: transcriptURL) {
+                        Label("Share transcript file", systemImage: "square.and.arrow.up.on.square")
+                    }
+                }
+                Divider()
+                if onDeleteConversation != nil {
+                    Button(role: .destructive) {
+                        showDeleteChatConfirmation = true
+                    } label: {
+                        Label("Delete chat", systemImage: "trash")
+                    }
+                    .disabled(viewModel.activeConversationID == nil)
+                }
             } label: {
-                Image(systemName: "text.badge.star")
+                Image(systemName: "ellipsis")
+                    .frame(minWidth: 44, minHeight: 44)
+                    .contentShape(Rectangle())
             }
-            // Draft chats have no row yet (activeConversationID == nil) but are
-            // real editing surfaces — keep instructions reachable there.
-            .disabled((viewModel.activeConversationID == nil && !viewModel.isDraftConversation)
-                      || viewModel.isLoadingConversation)
-            .accessibilityLabel("Conversation instructions")
-        }
-        ToolbarItem(placement: .secondaryAction) {
-            Button {
-                viewModel.exportTranscript()
-            } label: {
-                Image(systemName: "square.and.arrow.up")
-            }
-            .disabled(viewModel.messages.isEmpty)
-            .accessibilityLabel("Export transcript")
-            .accessibilityHint("Writes the conversation to a file you can share")
-        }
-        if let transcriptURL = viewModel.transcriptExportURL {
-            ToolbarItem(placement: .secondaryAction) {
-                ShareLink(item: transcriptURL)
-                    .accessibilityLabel("Share transcript")
-            }
+            .accessibilityLabel("More actions")
+            .accessibilityIdentifier("more-actions-menu")
         }
     }
 

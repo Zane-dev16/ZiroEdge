@@ -218,17 +218,27 @@ extension ChatView {
         }
     }
 
-    /// Replaces the former input-bar model capsule: token usage while ready,
-    /// otherwise a subtle explanation of why composing is unavailable.
+    /// Composer top row: the Claude-style model picker leading, token/status
+    /// hint trailing. The picker is the single identity surface (same phases,
+    /// menu, and VoiceOver labels the toolbar pill used to carry).
     var statusOrTokenHintRow: some View {
         HStack {
+            ComposerModelPicker(
+                phase: viewModel.modelLoadPhase,
+                modelName: viewModel.selectedModel?.displayName,
+                isUserUnloaded: viewModel.lifecycleManager.isUserUnloaded,
+                availableModels: viewModel.availableModels,
+                onSelectModel: { model in Task { await viewModel.selectModel(model) } },
+                onBrowseModels: { navigateToRoute(.models) },
+                onRetryLoad: { viewModel.retryModelLoad() }
+            )
             Spacer(minLength: 0)
             composerStatusBadge
         }
         .padding(.horizontal, ZiroTheme.Spacing.large)
     }
 
-    /// Composer status row. The header pill is the single authoritative
+    /// Composer status row. The composer picker is the single authoritative
     /// loading indicator (spinner + "Name…" title), and `.failed`/`.evicted`
     /// already render the modelRetryRow banner directly above this row —
     /// repeating those states here showed the same message on screen twice.
@@ -251,7 +261,7 @@ extension ChatView {
                 .lineLimit(1...2)
         } else if viewModel.modelLoadPhase == .idle,
                   viewModel.lifecycleManager.isUserUnloaded {
-            Text("\(viewModel.selectedModel?.displayName ?? "The model") is unloaded. Reload from the model menu above.")
+            Text("\(viewModel.selectedModel?.displayName ?? "The model") is unloaded. Reload from the model menu.")
                 .font(ZiroType.micro)
                 .foregroundStyle(ZiroTheme.secondaryText)
                 .lineLimit(1...2)

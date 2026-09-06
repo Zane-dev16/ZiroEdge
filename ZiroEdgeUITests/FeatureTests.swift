@@ -82,7 +82,7 @@ final class FeatureTests: UITestBase {
             return
         }
         if let label = readModelPickerLabel(), label == "No Model" || label == "No model yet" {
-            XCTFail("Model never loaded — header pill still shows a placeholder")
+            XCTFail("Model never loaded — model picker still shows a placeholder")
             return
         }
         let texts = app.staticTexts.allElementsBoundByIndex.map { $0.label }.joined(separator: " | ")
@@ -110,7 +110,7 @@ final class FeatureTests: UITestBase {
         // The composer's TextField is disabled until the model is resident
         // (`.disabled(!chatReady || …)`), so tapping it before readiness cannot
         // take keyboard focus and the send would be a no-op. Wait for the
-        // header pill to report a loaded model before typing.
+        // composer picker to report a loaded model before typing.
         XCTAssertTrue(waitForModelLoaded(timeout: 30),
                       "Model did not reach the ready phase — composer stays disabled")
 
@@ -142,13 +142,13 @@ final class FeatureTests: UITestBase {
         print("[TEST-DIAG] Waiting 15s for model auto-load...")
         sleep(15)
 
-        let newConvBtn = app.buttons["New Conversation"].firstMatch
+        let newConvBtn = app.buttons["new-chat-button"].firstMatch
         guard newConvBtn.waitForExistence(timeout: 10) else {
-            print("[TEST-DIAG] No 'New Conversation' button")
+            print("[TEST-DIAG] No 'New chat' button")
             return
         }
         newConvBtn.tap()
-        print("[TEST-DIAG] Tapped New Conversation")
+        print("[TEST-DIAG] Tapped New chat")
         sleep(3)
 
         let modelLabel = readModelPickerLabel() ?? "unknown"
@@ -191,7 +191,7 @@ final class FeatureTests: UITestBase {
 
     // MARK: - Diagnostic: New Conversation flow
 
-    /// Diagnostic test that taps "New Conversation" and checks if we
+    /// Diagnostic test that taps "New chat" and checks if we
     /// enter ChatView (model exists) or get "Download a Model" (no model).
     func testDiagnosticNewConv() {
         let chatApp = XCUIApplication()
@@ -200,10 +200,10 @@ final class FeatureTests: UITestBase {
         app = chatApp
         sleep(3)
 
-        // Tap "New Conversation" button
-        let newConvBtn = app.buttons["New Conversation"].firstMatch
+        // Tap "New chat" button
+        let newConvBtn = app.buttons["new-chat-button"].firstMatch
         guard newConvBtn.waitForExistence(timeout: 5) else {
-            print("[TEST-DIAG] No 'New Conversation' button found")
+            print("[TEST-DIAG] No 'New chat' button found")
             return
         }
         newConvBtn.tap()
@@ -303,7 +303,7 @@ final class FeatureTests: UITestBase {
             return
         }
 
-        // Overhaul IA: the header pill is a single VoiceOver element whose
+        // Overhaul IA: the composer picker is a single VoiceOver element whose
         // accessibility label is "Chat model, <title>" (PLAN §B.3), so the
         // visible "No model yet" title reads as "Chat model, No model yet".
         // Match via CONTAINS to cover both the label family and legacy exact.
@@ -311,7 +311,7 @@ final class FeatureTests: UITestBase {
             NSPredicate(format: "label CONTAINS 'No model yet'")
         ).firstMatch
         XCTAssertTrue(pill.waitForExistence(timeout: 15),
-                      "Header pill should read 'No model yet' in the needsDownload scenario")
+                      "Model picker should read 'No model yet' in the needsDownload scenario")
 
         let hint = app.staticTexts.containing(
             NSPredicate(format: "label CONTAINS 'Download a model to start chatting'")
@@ -359,7 +359,7 @@ final class FeatureTests: UITestBase {
             NSPredicate(format: "label CONTAINS[c] 'failed to load'")
         ).firstMatch
         XCTAssertTrue(failedPill.waitForExistence(timeout: 10),
-                      "Header pill should announce the failed-to-load state")
+                      "Model picker should announce the failed-to-load state")
 
         let retry = app.descendants(matching: .any)["modelRetryButton"].firstMatch
         guard retry.waitForExistence(timeout: 5) else {

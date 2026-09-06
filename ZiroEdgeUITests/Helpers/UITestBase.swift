@@ -44,32 +44,32 @@ class UITestBase: XCTestCase {
         return true
     }
 
-    /// Reveal the conversation sidebar (drawer toggle on compact widths;
+    /// Reveal the conversation sidebar (slide-over toggle on compact widths;
     /// verifies the persistent column on regular widths).
     @discardableResult
     func openSidebar(timeout: TimeInterval = 8) -> Bool {
-        // iPad persistent column, or a drawer that is already open: the
-        // Conversations title is present without tapping.
-        let conversationsTitle = app.staticTexts["Conversations"].firstMatch
-        if conversationsTitle.waitForExistence(timeout: 1) { return true }
+        // iPad persistent column, or a slide-over that is already open: the
+        // New chat button is present without tapping.
+        let newChatButton = app.buttons["new-chat-button"].firstMatch
+        if newChatButton.waitForExistence(timeout: 1) { return true }
 
         let sidebarButton = app.buttons["sidebar-button"].firstMatch
         guard sidebarButton.waitForExistence(timeout: 2) else {
-            return conversationsTitle.waitForExistence(timeout: timeout)
+            return newChatButton.waitForExistence(timeout: timeout)
         }
 
-        // The drawer presentation can lag several seconds behind a cold
+        // The slide-over presentation can lag several seconds behind a cold
         // launch (history-restore work), and the first tap is occasionally
-        // swallowed before the sheet transaction runs — the r2 finding that
+        // swallowed before the presentation transaction runs — the r2 finding that
         // resurfaced in r4 as three consecutive sim-dark Settings capture
-        // failures. Verify the drawer actually appeared and re-tap if it
+        // failures. Verify the slide-over actually appeared and re-tap if it
         // did not, instead of returning true from a fire-and-forget tap.
-        let drawerContent = app.buttons["New Conversation"].firstMatch
+        let drawerContent = app.buttons["new-chat-button"].firstMatch
         let deadline = Date().addingTimeInterval(timeout)
         repeat {
             sidebarButton.tap()
             if drawerContent.waitForExistence(timeout: 2)
-                || conversationsTitle.waitForExistence(timeout: 1) {
+                || newChatButton.waitForExistence(timeout: 1) {
                 return true
             }
         } while Date() < deadline
@@ -77,25 +77,32 @@ class UITestBase: XCTestCase {
     }
 
     /// Open Settings as an in-app page: reveal the sidebar (drawer on iPhone,
-    /// persistent column on iPad), then tap the "Settings" Library row.
+    /// persistent column on iPad), then tap the bottom-bar "Settings" button.
     /// Returns true only after the "Manage Models" link and the
     /// "Active Model" section header appear.
     @discardableResult
     func openSettings(timeout: TimeInterval = 10) -> Bool {
         guard openSidebar(timeout: timeout) else { return false }
 
+        // Settings lives in the sidebar bottom bar next to New chat, so it
+        // is always visible (no list scrolling needed). Prefer the stable
+        // identifier; fall back to the label for older builds.
+        let settingsButton = app.buttons["sidebar-settings-button"].firstMatch
         let settingsRow = app.buttons["Settings"].firstMatch
-        // The drawer's Library section sits below the conversation list;
-        // with several conversations it renders below the fold (lazy
-        // List), so scroll toward it before concluding the row is absent.
-        if !settingsRow.waitForExistence(timeout: 3) {
-            app.swipeUp()
-            if !settingsRow.waitForExistence(timeout: 2) {
+        if settingsButton.waitForExistence(timeout: 3) {
+            settingsButton.tap()
+        } else {
+            // The drawer's conversation list may sit above the fold (lazy
+            // List), so scroll toward it before concluding the row is absent.
+            if !settingsRow.waitForExistence(timeout: 3) {
                 app.swipeUp()
+                if !settingsRow.waitForExistence(timeout: 2) {
+                    app.swipeUp()
+                }
             }
+            guard settingsRow.waitForExistence(timeout: timeout) else { return false }
+            settingsRow.tap()
         }
-        guard settingsRow.waitForExistence(timeout: timeout) else { return false }
-        settingsRow.tap()
 
         let manageModelsButton = app.buttons["Manage Models"].firstMatch
         let manageModelsText = app.staticTexts["Manage Models"].firstMatch
@@ -106,23 +113,32 @@ class UITestBase: XCTestCase {
             && activeModelSection.waitForExistence(timeout: timeout)
     }
 
-    /// Open the Models screen: sidebar -> Settings page -> "Manage Models" link.
+    /// Open the Models screen: sidebar top-bar "Models" button directly,
+    /// falling back to sidebar -> Settings page -> "Manage Models" link.
     /// Returns true only after the Models navigation title and model list appear.
     @discardableResult
     func openModels(timeout: TimeInterval = 10) -> Bool {
-        guard openSettings(timeout: timeout) else { return false }
+        guard openSidebar(timeout: timeout) else { return false }
 
-        let manageModels = app.buttons["Manage Models"].firstMatch
-        let manageModelsText = app.staticTexts["Manage Models"].firstMatch
-        let manageModelsCell = app.cells["Manage Models"].firstMatch
-        if manageModels.waitForExistence(timeout: timeout) {
-            manageModels.tap()
-        } else if manageModelsCell.waitForExistence(timeout: 2) {
-            manageModelsCell.tap()
-        } else if manageModelsText.waitForExistence(timeout: 2) {
-            manageModelsText.tap()
+        // Direct route: the sidebar top bar holds Models next to Chats.
+        let modelsButton = app.buttons["sidebar-models-button"].firstMatch
+        if modelsButton.waitForExistence(timeout: 3) {
+            modelsButton.tap()
         } else {
-            return false
+            guard openSettings(timeout: timeout) else { return false }
+
+            let manageModels = app.buttons["Manage Models"].firstMatch
+            let manageModelsText = app.staticTexts["Manage Models"].firstMatch
+            let manageModelsCell = app.cells["Manage Models"].firstMatch
+            if manageModels.waitForExistence(timeout: timeout) {
+                manageModels.tap()
+            } else if manageModelsCell.waitForExistence(timeout: 2) {
+                manageModelsCell.tap()
+            } else if manageModelsText.waitForExistence(timeout: 2) {
+                manageModelsText.tap()
+            } else {
+                return false
+            }
         }
 
         let modelsTitle = app.staticTexts["Models"].firstMatch
@@ -147,19 +163,19 @@ class UITestBase: XCTestCase {
     ///
     /// Since the shell overhaul the app launches directly into a chat surface
     /// (unsaved draft when nothing is selected), so the input check usually
-    /// succeeds immediately. "New Conversation" lives inside the sidebar — a
-    /// drawer sheet on compact widths — so it is only reachable after revealing
+    /// succeeds immediately. "New chat" lives in the sidebar's bottom bar — a
+    /// slide-over on compact widths — so it is only reachable after revealing
     /// the sidebar.
     @discardableResult
     func selectOrCreateConversation(timeout: TimeInterval = 8) -> Bool {
         let chatInput = app.textFields["chatInput"].firstMatch
         if chatInput.waitForExistence(timeout: min(timeout, 5)) { return true }
 
-        // Reveal the sidebar first: on the compact shell the drawer sheet is
-        // closed at launch, so its "New Conversation" button is not in the
-        // accessibility hierarchy until the drawer is presented.
+        // Reveal the sidebar first: on the compact shell the slide-over is
+        // closed at launch, so its "New chat" button is not in the
+        // accessibility hierarchy until the slide-over is presented.
         _ = openSidebar(timeout: timeout)
-        let newConversation = app.buttons["New Conversation"].firstMatch
+        let newConversation = app.buttons["new-chat-button"].firstMatch
         if newConversation.waitForExistence(timeout: timeout) {
             newConversation.tap()
             if chatInput.waitForExistence(timeout: timeout) { return true }
@@ -188,7 +204,7 @@ class UITestBase: XCTestCase {
         return false
     }
 
-    /// Select a model from the header pill menu (taps picker, picks the first
+    /// Select a model from the composer picker menu (taps picker, picks the first
     /// available model, waits for it to load).
     @discardableResult
     func selectModelFromPicker(timeout: TimeInterval = 30) -> Bool {
@@ -315,7 +331,7 @@ class UITestBase: XCTestCase {
 
     // MARK: - Model Helpers
 
-    /// Wait for the chat header pill to show a loaded model (no placeholder).
+    /// Wait for the composer picker to show a loaded model (no placeholder).
     func waitForModelLoaded(timeout: TimeInterval = 30) -> Bool {
         let start = Date()
         while Date().timeIntervalSince(start) < timeout {
@@ -331,7 +347,7 @@ class UITestBase: XCTestCase {
         return false
     }
 
-    /// Placeholder pill states: legacy "No Model" and S2's "No model yet".
+    /// Placeholder picker states: legacy "No Model" and S2's "No model yet".
     private func hasNoModelIndicator() -> Bool {
         app.buttons["No Model"].firstMatch.exists || app.buttons["No model yet"].firstMatch.exists
     }
@@ -420,7 +436,7 @@ class UITestBase: XCTestCase {
         return message.exists ? message.label : nil
     }
 
-    /// Read the chat header pill title to see what model is selected.
+    /// Read the composer model picker title to see what model is selected.
     /// Strategy: parse the "Chat model, <name>" accessibility label first
     /// (authoritative for every pill state), then fall back to family-name scans.
     func readModelPickerLabel() -> String? {

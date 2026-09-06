@@ -145,17 +145,17 @@ final class AppStoreScreenshotCapture: UITestBase {
         capture("fresh_launch_draft")
     }
 
-    /// Drawer sidebar open over the chat surface (compact shell).
+    /// Slide-over sidebar open over the chat surface (compact shell).
     func testCaptureSidebarDrawer() {
         relaunchWithHermeticModel()
 
         guard app.textFields["chatInput"].firstMatch.waitForExistence(timeout: 15) else {
-            XCTFail("Chat surface did not render — cannot capture drawer screenshot")
+            XCTFail("Chat surface did not render — cannot capture sidebar screenshot")
             return
         }
         guard openSidebar(),
-              app.buttons["New Conversation"].firstMatch.waitForExistence(timeout: 5) else {
-            XCTFail("Drawer sidebar did not render — cannot capture drawer screenshot")
+              app.buttons["new-chat-button"].firstMatch.waitForExistence(timeout: 5) else {
+            XCTFail("Slide-over sidebar did not render — cannot capture sidebar screenshot")
             return
         }
         sleep(1)

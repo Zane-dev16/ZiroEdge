@@ -53,17 +53,16 @@ final class AppStoreScreenshotTests: UITestBase {
         }
 
         if app.buttons["sidebar-button"].firstMatch.waitForExistence(timeout: 3) {
-            // Compact width: reveal the drawer and verify its content.
+            // Compact width: reveal the slide-over and verify its content.
             guard openSidebar(),
-                  app.buttons["New Conversation"].firstMatch.waitForExistence(timeout: 5) else {
-                XCTFail("Drawer sidebar did not render — cannot capture sidebar+chat screenshot")
+                  app.buttons["new-chat-button"].firstMatch.waitForExistence(timeout: 5) else {
+                XCTFail("Slide-over sidebar did not render — cannot capture sidebar+chat screenshot")
                 return
             }
         } else {
             // Regular width: verify the persistent sidebar column rendered.
-            let sidebarReady = app.buttons["New Conversation"].firstMatch.waitForExistence(timeout: 10)
+            let sidebarReady = app.buttons["new-chat-button"].firstMatch.waitForExistence(timeout: 10)
                 || app.collectionViews.cells.firstMatch.waitForExistence(timeout: 10)
-                || app.staticTexts["Conversations"].waitForExistence(timeout: 10)
             guard sidebarReady else {
                 XCTFail("iPad sidebar did not render — cannot capture split-view screenshot")
                 return

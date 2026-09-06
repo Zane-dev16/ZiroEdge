@@ -7,94 +7,104 @@
 
 import SwiftUI
 
-// MARK: - Header Pill
+// MARK: - Model Picker (composer control + toolbar pill)
 
-/// Toolbar identity control showing the chat's selected model name plus an
-/// animated busy indicator while loading (respects Reduce Motion). Absorbs
-/// the former input-bar model-picker menu; tap-to-change leads to the picker
-/// and catalog routes per master plan §B.3. Loading state is carried by the
-/// pill's own spinner/title and the composer status badge — the pill is a
-/// single VoiceOver element whose label names the state.
-struct ChatHeaderPill: View {
+/// Single source of truth for the chat model picker, placed as the
+/// Claude-style composer control (`ComposerModelPicker`) above the message
+/// field. It carries the same titles, menu actions, and VoiceOver labels the
+/// former toolbar pill projected: same phases, same callbacks, no duplicated
+/// state — a stateless projection of `ChatViewModel.modelLoadPhase` /
+/// `selectedModel` / `availableModels`, so nothing can drift.
+enum ChatModelPicker {
+    /// Visible title for every phase: loading spinner text, needsDownload
+    /// "No model yet", evicted/failed retry text, ready name.
+    static func title(phase: ModelLoadPhase, modelName: String?) -> String {
+        switch phase {
+        case .loading:
+            return "\(modelName ?? "Model")…"
+        case .needsDownload:
+            return "No model yet"
+        case .ready, .idle:
+            return modelName ?? "Private on-device chat"
+        case .evicted:
+            return "\(modelName ?? "Model") unloaded"
+        case .failed:
+            return modelName ?? "Model failed"
+        }
+    }
+
+    static func titleTint(phase: ModelLoadPhase) -> Color {
+        switch phase {
+        case .ready: return ZiroTheme.primaryText
+        // Semantic status tokens: raw .orange fails 4.5:1 on light backgrounds.
+        case .failed, .evicted: return ZiroTheme.warningText
+        case .needsDownload, .idle: return ZiroTheme.secondaryText
+        case .loading: return ZiroTheme.primaryText
+        }
+    }
+
+    static func isSelected(modelName: String?, model: AIModel) -> Bool {
+        modelName == model.displayName
+    }
+
+    static func needsDownload(phase: ModelLoadPhase, availableModels: [AIModel]) -> Bool {
+        if phase == .needsDownload { return true }
+        return availableModels.isEmpty && phase != .loading
+    }
+
+    static func showsRetry(phase: ModelLoadPhase) -> Bool {
+        switch phase {
+        case .failed, .evicted: return true
+        default: return false
+        }
+    }
+
+    static func isEvicted(phase: ModelLoadPhase) -> Bool {
+        if case .evicted = phase { return true }
+        return false
+    }
+
+    /// Matches the historical picker-label family used by UI test helpers
+    /// (`readModelPickerLabel`, `selectChatModel`). State folds into the label
+    /// ("Chat model, X, loading" / "…, failed to load" / "…, unloaded, reload
+    /// available" / "…, unloaded, choose a model to reload") so VoiceOver
+    /// hears it from the picker itself — the orange warning indicator and phase
+    /// are otherwise invisible after the one-shot transition announcement, and
+    /// revisiting the picker would read like a normal ready state.
+    static func accessibilityText(
+        phase: ModelLoadPhase,
+        modelName: String?,
+        isUserUnloaded: Bool
+    ) -> String {
+        let name = modelName ?? "Model"
+        switch phase {
+        case .loading:
+            return "Chat model, \(name), loading"
+        case .failed:
+            return "Chat model, \(name), failed to load"
+        case .evicted:
+            return "Chat model, \(name), unloaded, reload available"
+        case .idle:
+            // User-initiated unload: the label must distinguish the parked
+            // state from `.ready`, which projects the same "Chat model, X"
+            // tail otherwise.
+            if isUserUnloaded {
+                return "Chat model, \(name), unloaded, choose a model to reload"
+            }
+            return "Chat model, \(title(phase: phase, modelName: modelName))"
+        case .ready, .needsDownload:
+            return "Chat model, \(title(phase: phase, modelName: modelName))"
+        }
+    }
+}
+
+/// Phase dot / spinner / warning shared by both picker labels (identical
+/// busy signal in each placement; the small ProgressView is system-aware
+/// under Reduce Motion so no extra gating is needed).
+struct ChatModelStatusIndicator: View {
     let phase: ModelLoadPhase
-    let modelName: String?
-    /// True while a user-initiated unload (Settings → Unload Model) has
-    /// parked the chat on `.idle` with a named model. Without it that state
-    /// reads identically to `.ready` over VoiceOver while the composer sits
-    /// dimmed and disabled.
-    var isUserUnloaded: Bool = false
-    let availableModels: [AIModel]
-    let onSelectModel: (AIModel) -> Void
-    let onBrowseModels: () -> Void
-    let onRetryLoad: () -> Void
-
-    /// Width cap scales with Dynamic Type (relative to the pill's headline
-    /// font) so the anti-overflow clamp doesn't shrink the title slot below
-    /// legibility at accessibility sizes. Identical 240pt at default size.
-    @ScaledMetric(relativeTo: .headline) private var pillMaxWidth: CGFloat = 240
 
     var body: some View {
-        menu
-    }
-
-    private var menu: some View {
-        Menu {
-            if needsDownload {
-                Button {
-                    onBrowseModels()
-                } label: {
-                    Label("Download a Model…", systemImage: "arrow.down.circle")
-                }
-            } else {
-                if showsRetry {
-                    Button {
-                        onRetryLoad()
-                    } label: {
-                        Label(isEvicted ? "Reload Model" : "Retry Loading", systemImage: "arrow.clockwise")
-                    }
-                    Divider()
-                }
-                ForEach(availableModels) { model in
-                    Button {
-                        onSelectModel(model)
-                    } label: {
-                        Label(model.displayName, systemImage: isSelected(model) ? "checkmark" : "cpu")
-                    }
-                }
-            }
-        } label: {
-            pillLabel
-        }
-        .allowsHitTesting(phase != .loading)
-        .accessibilityLabel(accessibilityText)
-        .accessibilityHint(phase == .loading ? "" : "Choose the local model for this conversation")
-    }
-
-    private var pillLabel: some View {
-        HStack(spacing: ZiroTheme.Spacing.xSmall) {
-            statusIndicator
-            Text(pillTitle)
-                .font(ZiroType.rowTitle)
-                .lineLimit(1)
-                .allowsTightening(true)
-                .foregroundStyle(titleTint)
-            Image(systemName: "chevron.up.chevron.down")
-                .font(.caption2)
-                .foregroundStyle(ZiroTheme.secondaryText)
-        }
-        // Hard width cap: without one, Menu labels size to their ideal width,
-        // so long model names stretch the capsule under the leading/trailing
-        // toolbar buttons and the toolbar clips it mid-glyph at both ends.
-        // The cap keeps the capsule inside the principal slot and lets the
-        // title truncate with an ellipsis instead.
-        .frame(maxWidth: pillMaxWidth)
-        .padding(.horizontal, ZiroTheme.Spacing.medium)
-        .padding(.vertical, ZiroTheme.Spacing.xSmall)
-        .background(ZiroTheme.wellBackground, in: Capsule())
-    }
-
-    @ViewBuilder
-    private var statusIndicator: some View {
         switch phase {
         case .loading:
             ProgressView().controlSize(.small)
@@ -114,83 +124,148 @@ struct ChatHeaderPill: View {
                 .frame(width: 7, height: 7)
         }
     }
+}
 
-    /// Gentle busy signal beyond the spinner is skipped under Reduce Motion;
-    /// the small ProgressView already animates and is system-aware.
+/// The Menu buttons both pickers present: download CTA when nothing is
+/// installed, otherwise retry (failed/evicted) plus the model list.
+struct ChatModelPickerMenuContent: View {
+    let phase: ModelLoadPhase
+    let modelName: String?
+    let availableModels: [AIModel]
+    let onSelectModel: (AIModel) -> Void
+    let onBrowseModels: () -> Void
+    let onRetryLoad: () -> Void
 
-    private var pillTitle: String {
-        switch phase {
-        case .loading:
-            return "\(modelName ?? "Model")…"
-        case .needsDownload:
-            return "No model yet"
-        case .ready, .idle:
-            return modelName ?? "Private on-device chat"
-        case .evicted:
-            return "\(modelName ?? "Model") unloaded"
-        case .failed:
-            return modelName ?? "Model failed"
-        }
-    }
-
-    private var titleTint: Color {
-        switch phase {
-        case .ready: return ZiroTheme.primaryText
-        // Semantic status tokens: raw .orange fails 4.5:1 on light backgrounds.
-        case .failed, .evicted: return ZiroTheme.warningText
-        case .needsDownload, .idle: return ZiroTheme.secondaryText
-        case .loading: return ZiroTheme.primaryText
-        }
-    }
-
-    private func isSelected(_ model: AIModel) -> Bool {
-        modelName == model.displayName
-    }
-
-    private var needsDownload: Bool {
-        if phase == .needsDownload { return true }
-        return availableModels.isEmpty && phase != .loading
-    }
-
-    private var showsRetry: Bool {
-        switch phase {
-        case .failed, .evicted: return true
-        default: return false
-        }
-    }
-
-    private var isEvicted: Bool {
-        if case .evicted = phase { return true }
-        return false
-    }
-
-    /// Matches the historical picker-label family used by UI test helpers
-    /// (`readModelPickerLabel`, `selectChatModel`). State folds into the label
-    /// ("Chat model, X, loading" / "…, failed to load" / "…, unloaded, reload
-    /// available" / "…, unloaded, choose a model to reload") so VoiceOver
-    /// hears it from the pill itself — the orange warning indicator and phase
-    /// are otherwise invisible after the one-shot transition announcement, and
-    /// revisiting the pill would read like a normal ready state.
-    private var accessibilityText: String {
-        let name = modelName ?? "Model"
-        switch phase {
-        case .loading:
-            return "Chat model, \(name), loading"
-        case .failed:
-            return "Chat model, \(name), failed to load"
-        case .evicted:
-            return "Chat model, \(name), unloaded, reload available"
-        case .idle:
-            // User-initiated unload: the label must distinguish the parked
-            // state from `.ready`, which projects the same "Chat model, X"
-            // tail otherwise.
-            if isUserUnloaded {
-                return "Chat model, \(name), unloaded, choose a model to reload"
+    var body: some View {
+        if ChatModelPicker.needsDownload(phase: phase, availableModels: availableModels) {
+            Button {
+                onBrowseModels()
+            } label: {
+                Label("Download a Model…", systemImage: "arrow.down.circle")
             }
-            return "Chat model, \(pillTitle)"
-        case .ready, .needsDownload:
-            return "Chat model, \(pillTitle)"
+        } else {
+            if ChatModelPicker.showsRetry(phase: phase) {
+                Button {
+                    onRetryLoad()
+                } label: {
+                    Label(
+                        ChatModelPicker.isEvicted(phase: phase) ? "Reload Model" : "Retry Loading",
+                        systemImage: "arrow.clockwise"
+                    )
+                }
+                Divider()
+            }
+            ForEach(availableModels) { model in
+                Button {
+                    onSelectModel(model)
+                } label: {
+                    Label(
+                        model.displayName,
+                        systemImage: ChatModelPicker.isSelected(modelName: modelName, model: model)
+                            ? "checkmark" : "cpu"
+                    )
+                }
+            }
         }
+    }
+}
+
+/// Wraps any picker label in the shared Menu content, loading hit-testing,
+/// and VoiceOver semantics. The Menu is hit-test-disabled while loading in
+/// every placement — the spinner state never accepts taps.
+struct ChatModelPickerMenu<PickerLabel: View>: View {
+    let phase: ModelLoadPhase
+    let modelName: String?
+    var isUserUnloaded: Bool = false
+    let availableModels: [AIModel]
+    let onSelectModel: (AIModel) -> Void
+    let onBrowseModels: () -> Void
+    let onRetryLoad: () -> Void
+    @ViewBuilder let label: () -> PickerLabel
+
+    var body: some View {
+        Menu {
+            ChatModelPickerMenuContent(
+                phase: phase,
+                modelName: modelName,
+                availableModels: availableModels,
+                onSelectModel: onSelectModel,
+                onBrowseModels: onBrowseModels,
+                onRetryLoad: onRetryLoad
+            )
+        } label: {
+            label()
+        }
+        .allowsHitTesting(phase != .loading)
+        .accessibilityLabel(
+            ChatModelPicker.accessibilityText(
+                phase: phase,
+                modelName: modelName,
+                isUserUnloaded: isUserUnloaded
+            )
+        )
+        .accessibilityHint(phase == .loading ? "" : "Choose the local model for this conversation")
+    }
+}
+
+/// Compact Claude-style model picker sitting above the composer message
+/// field (see `statusOrTokenHintRow`). Same phases, menu actions, and
+/// VoiceOver labels the former toolbar pill carried, via the shared
+/// `ChatModelPicker` source of truth — only the label is restyled: a smaller
+/// capsule with a single chevron, `supporting` type, and a narrower width
+/// cap suited to the composer row it shares with the token badge.
+struct ComposerModelPicker: View {
+    let phase: ModelLoadPhase
+    let modelName: String?
+    /// True while a user-initiated unload (Settings → Unload Model) has
+    /// parked the chat on `.idle` with a named model. Without it that state
+    /// reads identically to `.ready` over VoiceOver while the composer sits
+    /// dimmed and disabled.
+    var isUserUnloaded: Bool = false
+    let availableModels: [AIModel]
+    let onSelectModel: (AIModel) -> Void
+    let onBrowseModels: () -> Void
+    let onRetryLoad: () -> Void
+
+    /// Width cap scales with Dynamic Type (relative to the picker's
+    /// subheadline font) so long model names truncate with an ellipsis
+    /// instead of squeezing the token badge off the composer row.
+    @ScaledMetric(relativeTo: .subheadline) private var pickerMaxWidth: CGFloat = 220
+
+    var body: some View {
+        ChatModelPickerMenu(
+            phase: phase,
+            modelName: modelName,
+            isUserUnloaded: isUserUnloaded,
+            availableModels: availableModels,
+            onSelectModel: onSelectModel,
+            onBrowseModels: onBrowseModels,
+            onRetryLoad: onRetryLoad
+        ) {
+            pickerLabel
+        }
+    }
+
+    private var pickerLabel: some View {
+        HStack(spacing: ZiroTheme.Spacing.xSmall) {
+            ChatModelStatusIndicator(phase: phase)
+            Text(ChatModelPicker.title(phase: phase, modelName: modelName))
+                .font(ZiroType.supporting)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .allowsTightening(true)
+                .foregroundStyle(ChatModelPicker.titleTint(phase: phase))
+            Image(systemName: "chevron.down")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(ZiroTheme.secondaryText)
+        }
+        // 44pt minimum hit target (repo standard): the capsule never shrinks
+        // below the touch floor even for short names.
+        .frame(maxWidth: pickerMaxWidth, minHeight: 44)
+        .padding(.horizontal, ZiroTheme.Spacing.medium)
+        .padding(.vertical, ZiroTheme.Spacing.xSmall)
+        .background(ZiroTheme.wellBackground, in: Capsule())
+        .contentShape(Capsule())
     }
 }
 

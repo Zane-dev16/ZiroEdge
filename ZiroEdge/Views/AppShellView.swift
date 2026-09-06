@@ -4,8 +4,10 @@
 // Root application surface shown once startup reaches `.ready`.
 // One detail stack rooted at the chat surface is shared by both size
 // classes; only the sidebar presentation differs:
-//   · Compact width  — chat IS the base layer. The conversation list opens
-//     as a drawer sheet from the toolbar button; conversations swap in place.
+//   · Compact width  — chat IS the base layer and stays mounted. The
+//     conversation list slides in from the leading edge as a slide-over
+//     panel (scrim + panel) from the toolbar button; conversations swap
+//     in place.
 //   · Regular width  — NavigationSplitView with a persistent sidebar column;
 //     the detail column hosts the same stack so Settings/Models pages stay
 //     one pop away from the chat.
@@ -14,6 +16,7 @@ import SwiftUI
 
 /// A pushed destination reachable from the sidebar or from other pages.
 enum ShellRoute: Hashable {
+    case chats
     case models
     case modelDetail(id: String)
     case settings
@@ -47,6 +50,7 @@ struct AppShellView: View {
     }
 
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var detailRoutes: [ShellRoute] = []
     @State private var showSidebarDrawer = false
     /// Deferred "Start Chatting" target while the first-use experimental-consent
@@ -111,11 +115,11 @@ struct AppShellView: View {
                 // Selection always wins over any routed page: return to chat.
                 // Keyboard/VoiceOver List(selection:) activation writes
                 // selectedConversationID without touching the row tap closure,
-                // so the drawer must dismiss here too (mirrors
+                // so the slide-over must dismiss here too (mirrors
                 // selectConversation) or the loaded chat stays hidden behind
-                // the open drawer on iPhone.
+                // the open slide-over on iPhone.
                 detailRoutes.removeAll()
-                showSidebarDrawer = false
+                setSidebarDrawer(false)
                 // Plan §B.4 routes conversation loading through this handler,
                 // so selection writes that bypass the sidebar row's tap
                 // gesture (full-keyboard/VoiceOver List(selection:) tag
@@ -265,21 +269,31 @@ struct AppShellView: View {
 
     // MARK: - Layouts
 
-    /// iPhone: chat is the root; the sidebar opens as a drawer sheet.
+    /// iPhone: chat is the root and stays mounted as the base layer; the
+    /// sidebar slides in from the leading edge as a slide-over (scrim +
+    /// panel) hosting the same `sidebar` content as the iPad column.
     private var compactShell: some View {
-        NavigationStack(path: $detailRoutes) {
-            ChatView(
-                viewModel: chatViewModel,
-                showsSidebarToggle: true,
-                onNavigateToRoute: openShellRoute,
-                onOpenSidebar: { showSidebarDrawer = true }
-            )
-            .navigationDestination(for: ShellRoute.self) { route in
-                routeDestination(route)
+        GeometryReader { geometry in
+            ZStack(alignment: .leading) {
+                NavigationStack(path: $detailRoutes) {
+                    ChatView(
+                        viewModel: chatViewModel,
+                        showsSidebarToggle: true,
+                        onNavigateToRoute: openShellRoute,
+                        onOpenSidebar: { setSidebarDrawer(true) },
+                        onDeleteConversation: deleteActiveConversation
+                    )
+                    .navigationDestination(for: ShellRoute.self) { route in
+                        routeDestination(route)
+                    }
+                }
+
+                if showSidebarDrawer {
+                    slideOverScrim
+                    slideOverPanel(width: slideOverWidth(containerWidth: geometry.size.width))
+                }
             }
-        }
-        .sheet(isPresented: $showSidebarDrawer) {
-            drawerSidebar
+            .ziroAnimation(ZiroMotion.appear, value: showSidebarDrawer)
         }
     }
 
@@ -289,7 +303,11 @@ struct AppShellView: View {
             sidebar
         } detail: {
             NavigationStack(path: $detailRoutes) {
-                ChatView(viewModel: chatViewModel, onNavigateToRoute: openShellRoute)
+                ChatView(
+                    viewModel: chatViewModel,
+                    onNavigateToRoute: openShellRoute,
+                    onDeleteConversation: deleteActiveConversation
+                )
                     .navigationDestination(for: ShellRoute.self) { route in
                         routeDestination(route)
                     }
@@ -311,18 +329,18 @@ struct AppShellView: View {
         )
     }
 
-    private var drawerSidebar: some View {
-        NavigationStack {
-            sidebar
-        }
-        .presentationDetents([.medium, .large])
-    }
-
     // MARK: - Routes
 
     @ViewBuilder
     private func routeDestination(_ route: ShellRoute) -> some View {
         switch route {
+        case .chats:
+            ChatsView(
+                viewModel: conversationListViewModel,
+                onNewConversation: handleNewConversation,
+                onSelectConversation: selectConversation,
+                onDeleteConversation: handleSidebarDelete
+            )
         case .models:
             ModelsView(viewModel: modelsViewModel, onStartChatting: startChatting(with:))
         case .settings:
@@ -352,18 +370,26 @@ struct AppShellView: View {
         ModelRegistry.model(for: id) ?? modelsViewModel.importedModels.first { $0.id == id }
     }
 
-    /// Dismiss the drawer first so pushes land over the chat root. A route
+    /// Dismiss the slide-over first so pushes land over the chat root. A route
     /// already on the stack pops back to its existing page instead of pushing
     /// a duplicate: the iPad sidebar is persistent, so its Models/Settings
     /// rows stay tappable while that page is open (the "Choose Another Model"
     /// alert actions reach here through the same path).
     private func openShellRoute(_ route: ShellRoute) {
-        showSidebarDrawer = false
+        setSidebarDrawer(false)
         if let existingIndex = detailRoutes.firstIndex(of: route) {
             detailRoutes.removeSubrange(detailRoutes.index(after: existingIndex)...)
         } else {
             detailRoutes.append(route)
         }
+    }
+
+    /// Deletes the currently open conversation via the same path as the
+    /// sidebar swipe/context-menu delete (cancels an in-flight stream into
+    /// it first). Drafts have no row yet, so there is nothing to delete.
+    private func deleteActiveConversation() {
+        guard let id = chatViewModel.activeConversationID else { return }
+        handleSidebarDelete(id)
     }
 
     /// Sidebar delete (swipe action / context menu → confirm). Cancels an
@@ -390,7 +416,7 @@ struct AppShellView: View {
     private func selectConversation(_ id: UUID) {
         conversationListViewModel.selectConversation(id)
         detailRoutes.removeAll()
-        showSidebarDrawer = false
+        setSidebarDrawer(false)
         Task { await chatViewModel.loadConversation(id) }
     }
 
@@ -400,7 +426,7 @@ struct AppShellView: View {
     /// §A.2/§A.4), so routed pages are popped just like the onChange nil
     /// branch — the draft chat surface must be the visible one.
     private func handleNewConversation() {
-        showSidebarDrawer = false
+        setSidebarDrawer(false)
         detailRoutes.removeAll()
         chatViewModel.beginNewDraft()
     }
@@ -466,4 +492,98 @@ struct AppShellView: View {
         return "\(lifecycleManager.currentState)-\(targetID)"
     }
 #endif
+}
+
+// MARK: - Compact slide-over
+
+/// iPhone slide-over helpers, housed here so the AppShellView struct body
+/// stays within the type-body-length gate. Same file, so `private` members
+/// of the struct remain reachable.
+extension AppShellView {
+    /// Single funnel for slide-over visibility so opening AND dismissal
+    /// both ride the appear spring explicitly (the container also carries
+    /// a value-based `.ziroAnimation`, but an explicit transaction keeps
+    /// the slide-out alive even when the dismiss lands alongside a
+    /// navigation-stack change). Reduce Motion skips the animation.
+    private func setSidebarDrawer(_ open: Bool) {
+        if reduceMotion {
+            showSidebarDrawer = open
+        } else {
+            withAnimation(ZiroMotion.appear) {
+                showSidebarDrawer = open
+            }
+        }
+    }
+
+    /// Full-screen tap-to-dismiss dim behind the slide-over panel. A Button
+    /// (not a tap gesture) so VoiceOver lands on a labelled control. The
+    /// fill reuses the floating-shadow token — an appearance-adaptive black
+    /// dim — because no dedicated scrim token exists.
+    private var slideOverScrim: some View {
+        Button {
+            setSidebarDrawer(false)
+        } label: {
+            ZiroTheme.shadowFloating
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Dismiss sidebar")
+        .accessibilityIdentifier("dismiss-sidebar-scrim")
+        .transition(.opacity)
+    }
+
+    /// Leading slide-over panel hosting the SAME `sidebar` builder (and its
+    /// callbacks) as the iPad column, so select/new/delete/route/alert
+    /// behaviors match. Dismissal is swipe/scrim only (no close button),
+    /// and the brand mark sits chromeless in the header row — so the root
+    /// nav bar stays hidden and the shared SidebarView needs no toolbar of
+    /// its own. Pushed pages (Chats, Models, Settings) bring their own nav
+    /// bars. Panel content (NavigationStack/List) keeps its system safe-area
+    /// insets; only plain container frames span edge to edge, so nothing
+    /// underlaps the notch or home indicator.
+    private func slideOverPanel(width: CGFloat) -> some View {
+        NavigationStack {
+            sidebar
+                .toolbarVisibility(.hidden, for: .navigationBar)
+        }
+        .frame(width: width)
+        .frame(maxHeight: .infinity)
+        .background(ZiroTheme.overlayBackground)
+        .overlay(alignment: .trailing) {
+            Rectangle()
+                .fill(ZiroTheme.hairline)
+                .frame(width: 1)
+        }
+        .ziroShadow(.floating)
+        .transition(reduceMotion ? .opacity : .move(edge: .leading).combined(with: .opacity))
+        .simultaneousGesture(slideOverDismissDrag)
+    }
+
+    /// Slide-over width: 72pt of chat stays visible as a context anchor,
+    /// clamped to a 240–320pt panel (spec-mandated points, not spacing).
+    private func slideOverWidth(containerWidth: CGFloat) -> CGFloat {
+        min(320, max(240, containerWidth - 72))
+    }
+
+    /// Leading-edge swipe to dismiss. Simultaneous (never high-priority) so
+    /// the conversation List keeps its vertical scroll and row swipe-actions:
+    /// only a clearly horizontal leftward drag past the commit threshold
+    /// dismisses; vertical (scroll) and short trailing (row-action reveal)
+    /// drags fall through untouched. Distances compose spacing tokens
+    /// (24pt engage, 56pt commit).
+    private var slideOverDismissDrag: some Gesture {
+        DragGesture(
+            minimumDistance: ZiroTheme.Spacing.xLarge,
+            coordinateSpace: .local
+        )
+        .onEnded { value in
+            let commit = ZiroTheme.Spacing.xxLarge + ZiroTheme.Spacing.large
+            let translation = value.translation
+            guard translation.width < -commit,
+                  abs(translation.width) > abs(translation.height) * 1.5
+            else { return }
+            setSidebarDrawer(false)
+        }
+    }
 }
