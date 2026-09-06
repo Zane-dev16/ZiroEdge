@@ -26,7 +26,7 @@ from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
 
-CANONICAL_URL = "https://zane-dev16.github.io/ZiroEdge/privacy.html"
+CANONICAL_URL = "https://ziroedge.zanishlabs.com/privacy/"
 
 REQUIRED_SECTIONS: tuple[tuple[str, str], ...] = (
     ("Data Collection", "does not collect"),

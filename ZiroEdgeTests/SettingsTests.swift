@@ -149,10 +149,10 @@ final class SettingsTests: XCTestCase {
     }
 
     func testPrivacyPolicyURL() throws {
-        let privacyURL = URL(string: "https://zane-dev16.github.io/ZiroEdge/privacy.html")!
+        let privacyURL = URL(string: "https://ziroedge.zanishlabs.com/privacy/")!
         XCTAssertNotNil(privacyURL.scheme)
         XCTAssertNotNil(privacyURL.host)
-        XCTAssertEqual(privacyURL.host?.hasSuffix("github.io"), true, "URL should be on GitHub Pages")
+        XCTAssertEqual(privacyURL.host, "ziroedge.zanishlabs.com", "URL should be on the Zanish Labs domain")
         XCTAssertTrue(privacyURL.path.contains("privacy"), "URL path should contain 'privacy'")
     }
 

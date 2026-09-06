@@ -17,7 +17,7 @@ struct ZiroEdgeApp: App {
 
     /// Canonical privacy policy URL. Single source of truth so
     /// Scripts/verify-privacy-policy.py and SettingsPage never drift.
-    static let privacyPolicyURLString = "https://zane-dev16.github.io/ZiroEdge/privacy.html"
+    static let privacyPolicyURLString = "https://ziroedge.zanishlabs.com/privacy/"
     static let privacyPolicyURL = URL(string: privacyPolicyURLString) ?? URL(fileURLWithPath: "/")
 
     static let diagnosticLogURL: URL =

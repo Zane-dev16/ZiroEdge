@@ -60,7 +60,7 @@ ZiroEdge performs **all AI inference locally on the device** using llama.cpp, an
 - **SKU:** ziroedge-ios
 - **Primary Category:** Productivity
 - **Secondary Category:** Utilities
-- **Privacy Policy URL:** <https://zane-dev16.github.io/ZiroEdge/privacy.html>
+- **Privacy Policy URL:** <https://ziroedge.zanishlabs.com/privacy/>
 - **Support URL:** <https://github.com/Zane-dev16/ZiroEdge/issues>
 - **Marketing URL:** <https://ziroedge.app>
 - **Content Rights:** Contains no third-party copyrighted content beyond properly licensed open-source software (MIT License, Gemma Terms, Llama 3.2 Community License).

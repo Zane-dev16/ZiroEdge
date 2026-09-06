@@ -54,7 +54,7 @@
     }
   },
   "privacy": {
-    "policyURL": "https://zane-dev16.github.io/ZiroEdge/privacy.html",
+    "policyURL": "https://ziroedge.zanishlabs.com/privacy/",
     "dataCollection": {
       "collectsData": false,
       "tracking": false,

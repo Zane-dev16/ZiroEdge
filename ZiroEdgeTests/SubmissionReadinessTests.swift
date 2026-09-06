@@ -41,14 +41,14 @@ final class SubmissionReadinessTests: XCTestCase {
     // MARK: - Privacy Policy URL
 
     func testPrivacyPolicyURLIsHTTPS() throws {
-        let url = URL(string: "https://zane-dev16.github.io/ZiroEdge/privacy.html")!
+        let url = URL(string: "https://ziroedge.zanishlabs.com/privacy/")!
         XCTAssertEqual(url.scheme, "https", "Privacy policy URL must use HTTPS")
         XCTAssertNotNil(url.host, "Privacy policy URL must have a host")
     }
 
     func testPrivacyPolicyURLAppearsInSettings() throws {
         // The SettingsView source contains the privacy policy URL literal.
-        let urlString = "https://zane-dev16.github.io/ZiroEdge/privacy.html"
+        let urlString = "https://ziroedge.zanishlabs.com/privacy/"
         let url = URL(string: urlString)
         XCTAssertNotNil(url, "Privacy policy URL must be a valid URL")
         XCTAssertTrue(urlString.hasPrefix("https://"), "Privacy policy must be served over HTTPS")
