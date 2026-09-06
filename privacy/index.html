@@ -1,252 +1,350 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <title>ZiroEdge — Privacy Policy</title>
-  <meta name="description" content="ZiroEdge is a privacy-first application. All data stays on your device.">
-  <style>
-    :root {
-      color-scheme: light dark;
-      --text: #1d1d1f;
-      --text-secondary: #6e6e73;
-      --bg: #ffffff;
-      --card-bg: #f5f5f7;
-      --border: #d2d2d7;
-      --accent: #0071e3;
-      --divider: #e8e8ed;
-    }
-    @media (prefers-color-scheme: dark) {
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>ZiroEdge — Privacy Policy</title>
+    <meta
+      name="description"
+      content="ZiroEdge is a privacy-first application. All data stays on your device."
+    />
+    <style>
       :root {
-        --text: #f5f5f7;
-        --text-secondary: #a1a1a6;
-        --bg: #000000;
-        --card-bg: #1c1c1e;
-        --border: #48484a;
-        --accent: #3399ff;
-        --divider: #2c2c2e;
+        color-scheme: light dark;
+        --text: #1d1d1f;
+        --text-secondary: #6e6e73;
+        --bg: #ffffff;
+        --card-bg: #f5f5f7;
+        --border: #d2d2d7;
+        --accent: #0071e3;
+        --divider: #e8e8ed;
       }
-    }
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --text: #f5f5f7;
+          --text-secondary: #a1a1a6;
+          --bg: #000000;
+          --card-bg: #1c1c1e;
+          --border: #48484a;
+          --accent: #3399ff;
+          --divider: #2c2c2e;
+        }
+      }
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
 
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      background: var(--bg);
-      color: var(--text);
-      line-height: 1.6;
-      -webkit-font-smoothing: antialiased;
-      -moz-osx-font-smoothing: grayscale;
-      min-height: 100dvh;
-    }
+      body {
+        font-family:
+          -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI",
+          Roboto, Helvetica, Arial, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        line-height: 1.6;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+        min-height: 100dvh;
+      }
 
-    header {
-      padding: 2rem 1.5rem 1rem;
-      text-align: center;
-      border-bottom: 1px solid var(--divider);
-    }
-    header .badge {
-      display: inline-block;
-      font-size: 0.75rem;
-      font-weight: 600;
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-      color: var(--accent);
-      background: color-mix(in srgb, var(--accent) 12%, transparent);
-      padding: 0.25rem 0.75rem;
-      border-radius: 999px;
-      margin-bottom: 0.75rem;
-    }
-    header h1 {
-      font-size: 1.75rem;
-      font-weight: 700;
-      letter-spacing: -0.02em;
-    }
-    header .updated {
-      font-size: 0.85rem;
-      color: var(--text-secondary);
-      margin-top: 0.25rem;
-    }
+      header {
+        padding: 2rem 1.5rem 1rem;
+        text-align: center;
+        border-bottom: 1px solid var(--divider);
+      }
+      header .badge {
+        display: inline-block;
+        font-size: 0.75rem;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: var(--accent);
+        background: color-mix(in srgb, var(--accent) 12%, transparent);
+        padding: 0.25rem 0.75rem;
+        border-radius: 999px;
+        margin-bottom: 0.75rem;
+      }
+      header h1 {
+        font-size: 1.75rem;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+      }
+      header .updated {
+        font-size: 0.85rem;
+        color: var(--text-secondary);
+        margin-top: 0.25rem;
+      }
 
-    main {
-      max-width: 680px;
-      margin: 0 auto;
-      padding: 1.5rem 1.25rem 3rem;
-    }
+      main {
+        max-width: 680px;
+        margin: 0 auto;
+        padding: 1.5rem 1.25rem 3rem;
+      }
 
-    section {
-      margin-bottom: 2rem;
-    }
-    section h2 {
-      font-size: 1.25rem;
-      font-weight: 600;
-      margin-bottom: 0.5rem;
-      letter-spacing: -0.01em;
-    }
-    section p, section li {
-      color: var(--text-secondary);
-      font-size: 1rem;
-      margin-bottom: 0.5rem;
-    }
-    section ul {
-      padding-left: 1.25rem;
-      margin-bottom: 0.5rem;
-    }
-    section li {
-      margin-bottom: 0.25rem;
-    }
-    section strong {
-      color: var(--text);
-    }
+      section {
+        margin-bottom: 2rem;
+      }
+      section h2 {
+        font-size: 1.25rem;
+        font-weight: 600;
+        margin-bottom: 0.5rem;
+        letter-spacing: -0.01em;
+      }
+      section p,
+      section li {
+        color: var(--text-secondary);
+        font-size: 1rem;
+        margin-bottom: 0.5rem;
+      }
+      section ul {
+        padding-left: 1.25rem;
+        margin-bottom: 0.5rem;
+      }
+      section li {
+        margin-bottom: 0.25rem;
+      }
+      section strong {
+        color: var(--text);
+      }
 
-    hr {
-      border: none;
-      border-top: 1px solid var(--divider);
-      margin: 2rem 0;
-    }
+      hr {
+        border: none;
+        border-top: 1px solid var(--divider);
+        margin: 2rem 0;
+      }
 
-    .highlight {
-      background: var(--card-bg);
-      border-radius: 12px;
-      padding: 1rem 1.25rem;
-      margin: 1rem 0;
-      border: 1px solid var(--border);
-    }
+      .highlight {
+        background: var(--card-bg);
+        border-radius: 12px;
+        padding: 1rem 1.25rem;
+        margin: 1rem 0;
+        border: 1px solid var(--border);
+      }
 
-    .contact {
-      font-size: 0.95rem;
-      color: var(--text-secondary);
-    }
-    .contact a {
-      color: var(--accent);
-      text-decoration: none;
-    }
-    .contact a:hover { text-decoration: underline; }
+      .contact {
+        font-size: 0.95rem;
+        color: var(--text-secondary);
+      }
+      .contact a {
+        color: var(--accent);
+        text-decoration: none;
+      }
+      .contact a:hover {
+        text-decoration: underline;
+      }
 
-    footer {
-      text-align: center;
-      padding: 2rem 1.25rem;
-      border-top: 1px solid var(--divider);
-      margin-top: 2rem;
-    }
-    footer p {
-      font-size: 0.85rem;
-      color: var(--text-secondary);
-      font-style: italic;
-    }
-  </style>
-</head>
-<body>
+      footer {
+        text-align: center;
+        padding: 2rem 1.25rem;
+        border-top: 1px solid var(--divider);
+        margin-top: 2rem;
+      }
+      footer p {
+        font-size: 0.85rem;
+        color: var(--text-secondary);
+        font-style: italic;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <span class="badge">Privacy Policy</span>
+      <h1>ZiroEdge</h1>
+      <p class="updated">Last Updated: September 2026</p>
+    </header>
 
-<header>
-  <span class="badge">Privacy Policy</span>
-  <h1>ZiroEdge</h1>
-  <p class="updated">Last Updated: September 2026</p>
-</header>
+    <main>
+      <div class="highlight">
+        <strong>ZiroEdge does not collect your data.</strong> There is no
+        account, no tracking, and no advertising. Your conversations and files
+        stay on your device. This page lists the few outside connections the app
+        makes and what leaves your phone in each case.
+      </div>
 
-<main>
+      <section>
+        <h2>Data Collection</h2>
+        <p>
+          <strong
+            >ZiroEdge does not collect, store, transmit, or share any personal
+            information.</strong
+          >
+        </p>
+        <ul>
+          <li>No account is required to use the app</li>
+          <li>
+            No third-party analytics, telemetry, or advertising SDKs are
+            included
+          </li>
+          <li>No usage data is sent anywhere by the app itself</li>
+          <li>
+            Crash and hang summaries arrive through Apple only, and only if you
+            opted in (see Diagnostics below)
+          </li>
+        </ul>
+      </section>
 
-  <div class="highlight">
-    <strong>ZiroEdge does not collect your data.</strong> There is no account, no tracking, and no advertising. Your conversations and files stay on your device. This page lists the few outside connections the app makes and what leaves your phone in each case.
-  </div>
+      <section>
+        <h2>On-Device Processing</h2>
+        <p>
+          All AI inference runs entirely on your device. When you send a message
+          to ZiroEdge:
+        </p>
+        <ul>
+          <li>The model processes your input locally on your device</li>
+          <li>
+            Nothing you type is transmitted to external servers during inference
+          </li>
+          <li>
+            Chatting needs no internet connection once your models are
+            downloaded
+          </li>
+        </ul>
+      </section>
 
-  <section>
-    <h2>Data Collection</h2>
-    <p><strong>ZiroEdge does not collect, store, transmit, or share any personal information.</strong></p>
-    <ul>
-      <li>No account is required to use the app</li>
-      <li>No third-party analytics, telemetry, or advertising SDKs are included</li>
-      <li>No usage data is sent anywhere by the app itself</li>
-      <li>Crash and hang summaries arrive through Apple only, and only if you opted in (see Diagnostics below)</li>
-    </ul>
-  </section>
+      <section>
+        <h2>Conversation Storage</h2>
+        <p>
+          Your conversations are stored locally on your device using Apple's
+          Core Data framework. They are not uploaded to any server, cloud
+          service, or external database.
+        </p>
+        <ul>
+          <li>
+            Delete a single message or a whole conversation at any time in the
+            app
+          </li>
+          <li>
+            Export a conversation as a Markdown file if you want a copy outside
+            the app
+          </li>
+          <li>
+            Deleting the app removes all locally stored conversations and model
+            files
+          </li>
+        </ul>
+      </section>
 
-  <section>
-    <h2>On-Device Processing</h2>
-    <p>All AI inference runs entirely on your device. When you send a message to ZiroEdge:</p>
-    <ul>
-      <li>The model processes your input locally on your device</li>
-      <li>Nothing you type is transmitted to external servers during inference</li>
-      <li>Chatting needs no internet connection once your models are downloaded</li>
-    </ul>
-  </section>
+      <section>
+        <h2>Photos and Images</h2>
+        <p>
+          Vision models can look at images you pick from your photo library
+          through the system photo picker. ZiroEdge never opens your library
+          directly and uploads nothing. Picked images are stored locally
+          alongside the conversation that uses them and are deleted with it.
+        </p>
+      </section>
 
-  <section>
-    <h2>Conversation Storage</h2>
-    <p>Your conversations are stored locally on your device using Apple's Core Data framework. They are not uploaded to any server, cloud service, or external database.</p>
-    <ul>
-      <li>Delete a single message or a whole conversation at any time in the app</li>
-      <li>Export a conversation as a Markdown file if you want a copy outside the app</li>
-      <li>Deleting the app removes all locally stored conversations and model files</li>
-    </ul>
-  </section>
+      <section>
+        <h2>Model Downloads</h2>
+        <p>
+          ZiroEdge downloads AI model files (GGUF format) from Hugging Face, a
+          public model repository. These downloads:
+        </p>
+        <ul>
+          <li>Only occur when you explicitly choose to download a model</li>
+          <li>
+            Contact only Hugging Face servers to fetch repository listings and
+            model files
+          </li>
+          <li>
+            Send no personal or usage data; model files are stored locally on
+            your device
+          </li>
+        </ul>
+      </section>
 
-  <section>
-    <h2>Photos and Images</h2>
-    <p>Vision models can look at images you pick from your photo library through the system photo picker. ZiroEdge never opens your library directly and uploads nothing. Picked images are stored locally alongside the conversation that uses them and are deleted with it.</p>
-  </section>
+      <section>
+        <h2>Diagnostics and Crash Reports</h2>
+        <p>
+          ZiroEdge contains no third-party crash SDK. It does receive Apple
+          crash and hang diagnostics through MetricKit, which works as follows:
+        </p>
+        <ul>
+          <li>
+            Reports reach Apple only if you turned on sharing diagnostics with
+            developers in your iOS settings
+          </li>
+          <li>
+            On your next launch, the app saves a short summary of each report
+            into its local diagnostic log
+          </li>
+          <li>
+            That log never uploads. The only way it leaves your device is if you
+            tap Export Diagnostics and send it yourself
+          </li>
+        </ul>
+      </section>
 
-  <section>
-    <h2>Model Downloads</h2>
-    <p>ZiroEdge downloads AI model files (GGUF format) from Hugging Face, a public model repository. These downloads:</p>
-    <ul>
-      <li>Only occur when you explicitly choose to download a model</li>
-      <li>Contact only Hugging Face servers to fetch repository listings and model files</li>
-      <li>Send no personal or usage data; model files are stored locally on your device</li>
-    </ul>
-  </section>
+      <section>
+        <h2>Third-Party Services</h2>
+        <p>ZiroEdge integrates with:</p>
+        <ul>
+          <li>
+            <strong>Hugging Face</strong> (huggingface.co), for model file
+            downloads only. No user data is shared.
+          </li>
+          <li>
+            <strong>llama.cpp</strong>, the open-source inference engine running
+            locally on your device. No network access.
+          </li>
+          <li>
+            <strong>Apple diagnostics</strong>, as described above. Controlled
+            by your iOS settings, not by us.
+          </li>
+        </ul>
+      </section>
 
-  <section>
-    <h2>Diagnostics and Crash Reports</h2>
-    <p>ZiroEdge contains no third-party crash SDK. It does receive Apple crash and hang diagnostics through MetricKit, which works as follows:</p>
-    <ul>
-      <li>Reports reach Apple only if you turned on sharing diagnostics with developers in your iOS settings</li>
-      <li>On your next launch, the app saves a short summary of each report into its local diagnostic log</li>
-      <li>That log never uploads. The only way it leaves your device is if you tap Export Diagnostics and send it yourself</li>
-    </ul>
-  </section>
+      <section>
+        <h2>Your Rights</h2>
+        <p>
+          Since ZiroEdge collects no data, there is nothing to request a copy of
+          and nothing held about you on any server. What you control on your
+          device:
+        </p>
+        <ul>
+          <li>
+            Read, export, or delete your conversations and messages at any time
+          </li>
+          <li>
+            Turn Apple diagnostic sharing on or off in iOS Settings at any time
+          </li>
+          <li>Deleting the app removes everything it stored</li>
+        </ul>
+      </section>
 
-  <section>
-    <h2>Third-Party Services</h2>
-    <p>ZiroEdge integrates with:</p>
-    <ul>
-      <li><strong>Hugging Face</strong> (huggingface.co), for model file downloads only. No user data is shared.</li>
-      <li><strong>llama.cpp</strong>, the open-source inference engine running locally on your device. No network access.</li>
-      <li><strong>Apple diagnostics</strong>, as described above. Controlled by your iOS settings, not by us.</li>
-    </ul>
-  </section>
+      <section>
+        <h2>Children's Privacy</h2>
+        <p>
+          ZiroEdge does not collect any personal information from anyone,
+          including children under 13.
+        </p>
+      </section>
 
-  <section>
-    <h2>Your Rights</h2>
-    <p>Since ZiroEdge collects no data, there is nothing to request a copy of and nothing held about you on any server. What you control on your device:</p>
-    <ul>
-      <li>Read, export, or delete your conversations and messages at any time</li>
-      <li>Turn Apple diagnostic sharing on or off in iOS Settings at any time</li>
-      <li>Deleting the app removes everything it stored</li>
-    </ul>
-  </section>
+      <section>
+        <h2>Changes to This Policy</h2>
+        <p>
+          This privacy policy may be updated as the app changes. The current
+          version is always at this address, and the revision date at the top
+          shows when it last changed.
+        </p>
+      </section>
 
-  <section>
-    <h2>Children's Privacy</h2>
-    <p>ZiroEdge does not collect any personal information from anyone, including children under 13.</p>
-  </section>
+      <hr />
 
-  <section>
-    <h2>Changes to This Policy</h2>
-    <p>This privacy policy may be updated as the app changes. The current version is always at this address, and the revision date at the top shows when it last changed.</p>
-  </section>
+      <section class="contact">
+        <h2>Contact</h2>
+        <p>
+          For questions about this privacy policy, contact:
+          <a href="mailto:itsirellzane@gmail.com">itsirellzane@gmail.com</a>
+        </p>
+      </section>
+    </main>
 
-  <hr>
-
-  <section class="contact">
-    <h2>Contact</h2>
-    <p>For questions about this privacy policy, contact: <a href="mailto:itsirellzane@gmail.com">itsirellzane@gmail.com</a></p>
-  </section>
-
-</main>
-
-<footer>
-  <p>ZiroEdge by Zanish Labs. Your conversations stay on your device.</p>
-</footer>
-
-</body>
+    <footer>
+      <p>ZiroEdge by Zanish Labs. Your conversations stay on your device.</p>
+    </footer>
+  </body>
 </html>
