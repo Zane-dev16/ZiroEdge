@@ -23,15 +23,19 @@ extension ChatViewModel {
         case .loading:
             modelLoadPhase = .loading
         case .loaded where lifecycleManager.activeModel?.id == selectedModel?.id,
-             .loaded where selectedModel == nil && lifecycleManager.activeModel != nil,
+             .loaded where selectedModel == nil && lifecycleManager.activeModel != nil && unavailableConversationModelID == nil,
              // A failed switch can leave the prior model resident: the new
              // selection's preflight fails before the prior model unloads, so
              // the identity still matches. The working model must read ready —
              // retryModelLoad no-ops while a model is resident, and re-selecting
              // the resident model returns .alreadyLoaded without touching
              // currentState, so only this projection can unstick the composer.
+             // Nil-selection ready is gated on no unavailable conversation
+             // model: opening a removed-model conversation clears the
+             // selection while another model stays resident, and that state
+             // must stay idle until the user explicitly picks a model.
              .loadFailed where lifecycleManager.activeModel?.id == selectedModel?.id,
-             .loadFailed where selectedModel == nil && lifecycleManager.activeModel != nil:
+             .loadFailed where selectedModel == nil && lifecycleManager.activeModel != nil && unavailableConversationModelID == nil:
             modelLoadPhase = .ready
         case .evicted:
             modelLoadPhase = .evicted
@@ -120,6 +124,13 @@ extension ChatViewModel {
         switch modelLoadPhase {
         case .idle, .evicted:
             return true
+        case .needsDownload:
+            // A stale .needsDownload can linger after a download completes
+            // (phase derived before the artifact landed). When a candidate is
+            // now available, treat it as eligible so the deferred kick bridges
+            // it without forcing a Models round-trip. Still ineligible when no
+            // candidate exists.
+            return preferredAutoLoadCandidate() != nil
         case .failed:
             return manual
         default:

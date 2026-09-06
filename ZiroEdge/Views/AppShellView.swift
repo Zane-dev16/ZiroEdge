@@ -17,6 +17,7 @@ enum ShellRoute: Hashable {
     case models
     case modelDetail(id: String)
     case settings
+    case license
 }
 
 struct AppShellView: View {
@@ -48,6 +49,10 @@ struct AppShellView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var detailRoutes: [ShellRoute] = []
     @State private var showSidebarDrawer = false
+    /// Deferred "Start Chatting" target while the first-use experimental-consent
+    /// alert is up (see startChatting): beginNewDraft stays deferred until the
+    /// consent resolves so the chat never parks on .needsDownload behind the alert.
+    @State private var pendingStartChattingModel: AIModel?
 #if DEBUG
     @State private var memoryDiagnosticWorkloadState = "workload-starting"
 #endif
@@ -80,6 +85,20 @@ struct AppShellView: View {
         .fullScreenCover(isPresented: $onboardingManager.showOnboarding) {
             OnboardingView(isPresented: $onboardingManager.showOnboarding)
         }
+        .onAppear {
+            // Drop/renominate the chat's stale selection when its model is
+            // deleted (Models/Settings/import-detail all funnel through
+            // ModelsViewModel.deleteModel). Without this the pill keeps a
+            // ghost name with a silently disabled composer and no hint.
+            // autoSelectModel renominates (or parks needsModelRedirect when
+            // nothing remains); the extra refresh covers its nil-branch
+            // early return so the phase projects .needsDownload immediately.
+            modelsViewModel.onDidDeleteModel = { deleted in
+                guard chatViewModel.selectedModel?.id == deleted.id else { return }
+                chatViewModel.autoSelectModel()
+                chatViewModel.refreshModelLoadPhase()
+            }
+        }
         .onChange(of: conversationListViewModel.selectedConversationID) { _, selection in
             if selection == nil {
                 // Deselection (New Conversation, deleting the open chat) always
@@ -90,7 +109,13 @@ struct AppShellView: View {
                 chatViewModel.beginNewDraft()
             } else {
                 // Selection always wins over any routed page: return to chat.
+                // Keyboard/VoiceOver List(selection:) activation writes
+                // selectedConversationID without touching the row tap closure,
+                // so the drawer must dismiss here too (mirrors
+                // selectConversation) or the loaded chat stays hidden behind
+                // the open drawer on iPhone.
                 detailRoutes.removeAll()
+                showSidebarDrawer = false
                 // Plan §B.4 routes conversation loading through this handler,
                 // so selection writes that bypass the sidebar row's tap
                 // gesture (full-keyboard/VoiceOver List(selection:) tag
@@ -109,6 +134,11 @@ struct AppShellView: View {
             if needsRedirect {
                 openShellRoute(.models)
                 chatViewModel.needsModelRedirect = false
+            }
+        }
+        .onChange(of: chatViewModel.showingExperimentalConsent) { _, showing in
+            if !showing {
+                resolvePendingStartChatting()
             }
         }
         .task {
@@ -313,6 +343,8 @@ struct AppShellView: View {
                     description: Text("This model profile is no longer available on this device.")
                 )
             }
+        case .license:
+            LicenseView()
         }
     }
 
@@ -377,10 +409,40 @@ struct AppShellView: View {
     /// load the newly imported model, then show a fresh draft chat. Loading
     /// first means `beginNewDraft` won't spawn a redundant deferred load for
     /// the auto candidate.
+    /// An unconsented experimental import parks `selectModel` on the first-use
+    /// consent alert (returns false with `showingExperimentalConsent` set).
+    /// Beginning the draft anyway would nominate the auto candidate — which
+    /// deliberately excludes unconsented imports — and park the chat on
+    /// .needsDownload behind the alert. So the draft stays deferred until the
+    /// consent resolves (see the `showingExperimentalConsent` onChange):
+    /// confirm re-selects the now-consented model and then drafts; cancel
+    /// leaves the previous chat surface untouched.
     private func startChatting(with model: AIModel) {
         detailRoutes.removeAll()
         Task {
-            await chatViewModel.selectModel(model)
+            let didSelect = await chatViewModel.selectModel(model)
+            if didSelect {
+                chatViewModel.beginNewDraft()
+            } else if chatViewModel.showingExperimentalConsent {
+                pendingStartChattingModel = model
+            } else {
+                chatViewModel.beginNewDraft()
+            }
+        }
+    }
+
+    /// Resolve a deferred "Start Chatting" once the first-use consent alert
+    /// dismisses. Confirm re-runs the select-then-draft sequence (the second
+    /// select is a no-op when the alert's own confirm already loaded the model,
+    /// and a correct waiter when its load is still in flight — both target the
+    /// same model, so no wrong-model load can interleave). Cancel clears the
+    /// deferral without touching the chat surface.
+    private func resolvePendingStartChatting() {
+        guard let pending = pendingStartChattingModel else { return }
+        pendingStartChattingModel = nil
+        guard ExperimentalModelConsent.isGranted(for: pending) else { return }
+        Task {
+            await chatViewModel.selectModel(pending)
             chatViewModel.beginNewDraft()
         }
     }

@@ -26,6 +26,13 @@ final class ModelsViewModel: ObservableObject {
     @Published var showingImporter = false
     @Published var updateMessage: String?
 
+    /// Post-delete hook fired after a successful `deleteModel`. The shell wires
+    /// this where the chat VM is in scope so deleting the chat's selected
+    /// model drops/renominates the stale selection and refreshes the phase
+    /// (otherwise the pill keeps a ghost name with a silently disabled
+    /// composer and no hint). Invoked on the main actor; nil in unit tests.
+    var onDidDeleteModel: (@MainActor (AIModel) -> Void)?
+
     // MARK: - Dependencies
 
     let downloadManager: DownloadManager
@@ -326,6 +333,7 @@ final class ModelsViewModel: ObservableObject {
         if model.isImported {
             ExperimentalModelConsent.setGranted(false, for: model)
         }
+        onDidDeleteModel?(model)
     }
 
     func unavailableModelReason(for modelID: String) -> UnavailableModelReason? {

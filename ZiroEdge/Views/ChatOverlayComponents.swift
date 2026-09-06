@@ -65,7 +65,7 @@ struct ChatHeaderPill: View {
         } label: {
             pillLabel
         }
-        .disabled(phase == .loading)
+        .allowsHitTesting(phase != .loading)
         .accessibilityLabel(accessibilityText)
         .accessibilityHint(phase == .loading ? "" : "Choose the local model for this conversation")
     }
