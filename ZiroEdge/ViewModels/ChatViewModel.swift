@@ -70,6 +70,8 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var activeConversationSystemPrompt: String?
     @Published private(set) var hasPersistenceRecovery = false
     @Published private(set) var recoveryExportURL: URL?
+    /// staged transcript file for the share sheet. Rebuilt on each export.
+    @Published var transcriptExportURL: URL?
     @Published private(set) var unavailableConversationModelID: String?
 
     /// Observable projection of the model residency bridging ModelLifecycleManager:
@@ -107,10 +109,10 @@ final class ChatViewModel: ObservableObject {
     @Published var truncationWarning: String?
 
     /// Identity of the generation allowed to mutate streaming UI.
-    private var activeGenerationID: UUID?
+    var activeGenerationID: UUID?
     /// Conversation the live generation is writing into; lets conversation
     /// switches detect and cancel a stream that belongs elsewhere.
-    private(set) var streamedConversationID: UUID?
+    var streamedConversationID: UUID?
 
     // MARK: - Model Selection
 
@@ -135,7 +137,7 @@ final class ChatViewModel: ObservableObject {
 
     // MARK: - Dependencies
 
-    private let persistence: any PersistenceProviding
+    let persistence: any PersistenceProviding
     private let inferenceService: any InferenceServiceProtocol
     /// Read-shared with the persistence-recovery extension in
     /// ChatPersistenceRecovery.swift.
@@ -197,6 +199,24 @@ final class ChatViewModel: ObservableObject {
                 Task { @MainActor [weak self] in self?.refreshModelLoadPhase() }
             }
             .store(in: &cancellables)
+
+        // A completed download can resolve a stale .needsDownload/.idle phase.
+        // Observe the concrete DownloadManager (production wiring) and
+        // re-derive the phase plus re-kick the deferred loader when a
+        // candidate appears. Test doubles conform to
+        // ModelDownloadStatusProvider without being ObservableObjects, so this
+        // cast no-ops in unit tests and preserves the init signature.
+        if let downloadManager = downloadStatusProvider as? DownloadManager {
+            downloadManager.objectWillChange
+                .sink { [weak self] _ in
+                    Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        self.refreshModelLoadPhase()
+                        self.startDeferredModelLoadIfNeeded()
+                    }
+                }
+                .store(in: &cancellables)
+        }
     }
 
     // MARK: - Conversation Management
@@ -321,6 +341,17 @@ final class ChatViewModel: ObservableObject {
         if lifecycleManager.activeModel?.id == model.id {
             selectedModel = model
             UserDefaults.standard.set(model.id, forKey: DefaultsKeys.lastUsedModelID)
+            // Repairing an unavailable-model conversation must stick: reassign
+            // the persisted modelID so the post-stream reload does not re-enter
+            // the unavailable branch and wipe the just-made selection. Only
+            // clears on durable success; a persistence failure keeps the banner
+            // so the user can retry.
+            if let activeID = activeConversationID, unavailableConversationModelID != nil {
+                if case .success = await persistence.updateConversationModelID(id: activeID, modelID: model.id) {
+                    unavailableConversationModelID = nil
+                    needsModelRedirect = false
+                }
+            }
             UISelectionFeedbackGenerator().selectionChanged()
             return true
         }
@@ -440,6 +471,14 @@ final class ChatViewModel: ObservableObject {
 
         // Commit identity and content together so a failed fetch can never pair the
         // previous transcript with the newly selected conversation.
+        // Switching conversations must not carry staged attachments forward:
+        // clear pendingImages/visionWarning only on an actual switch. A
+        // same-ID reload (post-stream refresh) preserves images staged
+        // mid-stream for the next message (Batch02 race guard).
+        if previousConversationID != conversationID {
+            pendingImages = []
+            visionWarning = nil
+        }
         activeConversationID = conversationID
         isDraftConversation = false
         messages = fetched
@@ -492,6 +531,11 @@ final class ChatViewModel: ObservableObject {
         truncationWarning = nil
         activeConversationSystemPrompt = nil
         unavailableConversationModelID = nil
+        // Attachments belong to the conversation being left: without this,
+        // images staged in one chat follow into the next transcript and can be
+        // sent into the wrong conversation. beginNewDraft funnels through here.
+        pendingImages = []
+        visionWarning = nil
         refreshModelLoadPhase()
         if wasStreaming {
             Task { await self.cancelStream() }
@@ -576,7 +620,7 @@ extension ChatViewModel {
 
     /// Validate preconditions for sending a message. Returns nil on success,
     /// or the conversationID. Sets error/warning state on failure.
-    private func validateSendPreconditions(
+    func validateSendPreconditions(
         text: String, hasImages: Bool
     ) async -> UUID? {
         if CommandLine.arguments.contains("--uitesting-sendtest") {
@@ -717,7 +761,7 @@ extension ChatViewModel {
         lastStreamEndReason = reason
     }
 
-    private func startStreaming(
+    func startStreaming(
         generationID: UUID,
         conversationID: UUID, history: [ChatMessagePayload], images: [Data],
         hasImages: Bool, isFirstExchange: Bool, firstUserMessage: String
@@ -864,29 +908,6 @@ extension ChatViewModel {
         }
     }
 
-    // MARK: - Branching
-
-    func branchFromMessage(_ messageID: UUID) async {
-        guard let sourceID = activeConversationID else { return }
-        switch await persistence.branchConversationResult(
-            sourceID: sourceID,
-            fromMessageID: messageID,
-            newTitle: "Branched Conversation"
-        ) {
-        case .success(let newID):
-            await loadConversation(newID)
-            // Mirror draft materialization/sendtest: refresh the sidebar and
-            // select the new branch so the highlighted row matches the
-            // visible transcript. The shell's onChange load is a no-op here
-            // because activeConversationID already == newID.
-            await conversationListViewModel?.loadConversations()
-            conversationListViewModel?.selectedConversationID = newID
-        case .failure(let failure):
-            errorMessage = failure.localizedDescription
-            showError = true
-        }
-    }
-
     // MARK: - Title Generation
 
     /// Generate a title for the conversation after the first exchange.
@@ -990,7 +1011,7 @@ extension ChatViewModel {
         }
     }
 
-    private func resetStreamingBuffer() {
+    func resetStreamingBuffer() {
         streamingFlushTask?.cancel()
         streamingFlushTask = nil
         streamingChunks.removeAll(keepingCapacity: true)

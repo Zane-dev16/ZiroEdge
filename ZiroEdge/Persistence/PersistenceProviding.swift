@@ -35,6 +35,11 @@ protocol PersistenceProviding: Sendable {
         systemPrompt: String?
     ) async -> Result<Void, PersistenceFailure>
 
+    func updateConversationModelID(
+        id: UUID,
+        modelID: String
+    ) async -> Result<Void, PersistenceFailure>
+
     func updateConversationTitleIfStill(
         id: UUID,
         newTitle: String,
@@ -46,6 +51,10 @@ protocol PersistenceProviding: Sendable {
         fromMessageID: UUID,
         newTitle: String
     ) async -> Result<UUID, PersistenceFailure>
+
+    func deleteMessageResult(
+        messageID: UUID
+    ) async -> Result<Void, PersistenceFailure>
 
     // MARK: Streaming pipeline (ChatSessionActor)
 

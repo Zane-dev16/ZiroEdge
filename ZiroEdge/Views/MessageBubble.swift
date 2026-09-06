@@ -12,6 +12,7 @@ struct MessageBubble: View {
     let isStreaming: Bool
     let onBranch: (() -> Void)?
     let onCopy: (() -> Void)?
+    let onDelete: (() -> Void)?
 
     // Copy/branch hit targets: scale with Dynamic Type (like ChatView's
     // composerControlSide) so the caption glyphs never overflow their frames
@@ -23,12 +24,14 @@ struct MessageBubble: View {
         message: ChatMessagePayload,
         isStreaming: Bool = false,
         onBranch: (() -> Void)? = nil,
-        onCopy: (() -> Void)? = nil
+        onCopy: (() -> Void)? = nil,
+        onDelete: (() -> Void)? = nil
     ) {
         self.message = message
         self.isStreaming = isStreaming
         self.onBranch = onBranch
         self.onCopy = onCopy
+        self.onDelete = onDelete
     }
 
     var body: some View {
@@ -94,11 +97,22 @@ struct MessageBubble: View {
                     .ziroMessageBubble(.assistant)
                 }
 
-                // Action buttons (assistant messages only). The glyphs stay
-                // caption-size, but each button reserves a scaled 44pt-square
-                // frame with a full-area contentShape — they are the only path
-                // to copy or branch a message, so the hit target must meet the
-                // 44pt minimum and grow with Dynamic Type.
+                // Action buttons. Assistant rows offer copy/branch/delete;
+                // user rows offer delete. Each button keeps the scaled
+                // 44pt-square hit target.
+                if message.role == .user && !isStreaming {
+                    HStack(spacing: 0) {
+                        Button(action: { onDelete?() }) {
+                            Image(systemName: "trash")
+                                .font(.caption)
+                                .foregroundStyle(ZiroTheme.secondaryText)
+                                .frame(width: actionControlSide, height: actionControlSide)
+                                .contentShape(Rectangle())
+                        }
+                        .accessibilityLabel("Delete message")
+                    }
+                    .padding(.trailing, ZiroTheme.Spacing.xSmall)
+                }
                 if message.role == .assistant && !isStreaming {
                     HStack(spacing: 0) {
                         Button(action: { onCopy?() }) {
@@ -118,6 +132,15 @@ struct MessageBubble: View {
                                 .contentShape(Rectangle())
                         }
                         .accessibilityLabel("Branch from this message")
+
+                        Button(action: { onDelete?() }) {
+                            Image(systemName: "trash")
+                                .font(.caption)
+                                .foregroundStyle(ZiroTheme.secondaryText)
+                                .frame(width: actionControlSide, height: actionControlSide)
+                                .contentShape(Rectangle())
+                        }
+                        .accessibilityLabel("Delete message")
                     }
                     .padding(.leading, ZiroTheme.Spacing.xSmall)
                 }

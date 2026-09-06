@@ -56,7 +56,9 @@
 		46C14E3D453B2E54ED9B3733 /* OfflineAvailabilityGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54E6FF39109A4FBD92979287 /* OfflineAvailabilityGuard.swift */; };
 		46DCCA8DB4F98237136EF9F2 /* CDChatMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6095A8B796761917100D204 /* CDChatMessage.swift */; };
 		48C4BC1B2FDBAA7F374FCCC8 /* Batch03StartupANRTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40B3BC02B4B54E628F352664 /* Batch03StartupANRTests.swift */; };
+		4D8B78F29D3C02F204FBAE51 /* MetricKitIntake.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DAFA3BF0C277163E15EBC0B /* MetricKitIntake.swift */; };
 		55ECB21E11A53ED61566ABBD /* PersistenceController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B819FB39EB71743F91968C40 /* PersistenceController.swift */; };
+		5612BB807ADEC9D2BABDAB19 /* StoreMigrationRoundTripTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA11FB2B95E2879D6042772E /* StoreMigrationRoundTripTests.swift */; };
 		563392DB434F5B2D0C862F52 /* TitleGeneratorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F52B00138CB2DC2FC76F4FB /* TitleGeneratorTests.swift */; };
 		5A17063993A5963C621B40E9 /* ImportTransferLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4615495B5B05C1D23FE9AE5 /* ImportTransferLifecycleTests.swift */; };
 		5B5073268AC536EC899DA8A5 /* ImportedModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F9E5203C2947C471C8CAC81 /* ImportedModel.swift */; };
@@ -131,6 +133,7 @@
 		BC2E5082EF579C39C7F89C7C /* DownloadManager+Promotion.swift in Sources */ = {isa = PBXBuildFile; fileRef = A34A4329A3A9479238ABA692 /* DownloadManager+Promotion.swift */; };
 		BD4F0C35731C2136173DC797 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 6CE870E69B142CC05214BEEF /* PrivacyInfo.xcprivacy */; };
 		BE0AA8C78C349B7CA5A838D3 /* ImportRejectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 029AC997A98BAF897597836E /* ImportRejectionTests.swift */; };
+		C528E9322395F5DA7DF1A484 /* ChatViewModel+TranscriptActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCE578920BBAA116B807CAA9 /* ChatViewModel+TranscriptActions.swift */; };
 		C9150288BF4874F03BA7E6FC /* InferenceFailureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0C18181BD64FAAE5DAB39 /* InferenceFailureTests.swift */; };
 		C936F4BA4DC3DFA54A087A89 /* Batch4TokenEstimatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E2B98FA9158F8E8AAE0921D /* Batch4TokenEstimatorTests.swift */; };
 		C9CA3A692545262BBF88A8D3 /* ChatAttachmentPipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51754366FFBDDB6153C327AB /* ChatAttachmentPipeline.swift */; };
@@ -210,6 +213,7 @@
 		274D0F7B6555CEE73EA267E3 /* PendingTailDurabilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingTailDurabilityTests.swift; sourceTree = "<group>"; };
 		2CE64A73CA2034D155FEED4E /* DownloadTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadTransport.swift; sourceTree = "<group>"; };
 		2D4D5F9E57ADBB8C89FB27FC /* RAMDiagnosticTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RAMDiagnosticTests.swift; sourceTree = "<group>"; };
+		2DAFA3BF0C277163E15EBC0B /* MetricKitIntake.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetricKitIntake.swift; sourceTree = "<group>"; };
 		2EE04F17370FF6B074633C13 /* ImportWizardSteps.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportWizardSteps.swift; sourceTree = "<group>"; };
 		2F19CDC2A27AA8D87C05842D /* PairedArtifactCoordinationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairedArtifactCoordinationTests.swift; sourceTree = "<group>"; };
 		32A1B26312450DA02CEE7FAB /* AIModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIModel.swift; sourceTree = "<group>"; };
@@ -341,9 +345,11 @@
 		F5EC199E03A68C0BA22E425F /* DownloadManager+ImportedModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DownloadManager+ImportedModels.swift"; sourceTree = "<group>"; };
 		F67BD152E0DC074B8709CED4 /* ImportedModelRelaunchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportedModelRelaunchTests.swift; sourceTree = "<group>"; };
 		F7D23A8928B6ADDC443C1B88 /* MemoryDiagnosticWorkload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryDiagnosticWorkload.swift; sourceTree = "<group>"; };
+		FA11FB2B95E2879D6042772E /* StoreMigrationRoundTripTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreMigrationRoundTripTests.swift; sourceTree = "<group>"; };
 		FA32FFB006B54EC9A7AA1AE3 /* MemoryBudgeterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryBudgeterTests.swift; sourceTree = "<group>"; };
 		FB6503688D985EAD5140D5FA /* ModelMigrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelMigrationTests.swift; sourceTree = "<group>"; };
 		FC62F9915166C3A428F2A879 /* BackgroundDownloadLifecycle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundDownloadLifecycle.swift; sourceTree = "<group>"; };
+		FCE578920BBAA116B807CAA9 /* ChatViewModel+TranscriptActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatViewModel+TranscriptActions.swift"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -461,6 +467,7 @@
 				6E1242FAB9B786C2167B03D5 /* MemoryBudgeter.swift */,
 				4F92C844E7C56A174EB57161 /* MemoryDiagnostics.swift */,
 				F7D23A8928B6ADDC443C1B88 /* MemoryDiagnosticWorkload.swift */,
+				2DAFA3BF0C277163E15EBC0B /* MetricKitIntake.swift */,
 				8C02E55865CCF1637D4FF9AE /* ModelArtifactVerifier.swift */,
 				F42848498CF819E78EED45AB /* ModelLifecycleManager.swift */,
 				B3766ADA1B58C5CDD1D21E24 /* ModelManagerService.swift */,
@@ -504,6 +511,7 @@
 				7B3EBD96D1A84F9B355A86CA /* ChatModelLoading.swift */,
 				18F2B1A17352118BBE1D1236 /* ChatPersistenceRecovery.swift */,
 				131AF1296FE8159E5BB62C66 /* ChatViewModel.swift */,
+				FCE578920BBAA116B807CAA9 /* ChatViewModel+TranscriptActions.swift */,
 				7AEBED57984673F2549AD67F /* ConversationListViewModel.swift */,
 				F358053422BEF33EAE2F3AE0 /* ImportViewModel.swift */,
 				9A623A7B1E1E06B4160F44CA /* ModelsViewModel.swift */,
@@ -578,6 +586,7 @@
 				CDAFFFD76B609BFDBEA00BA3 /* StorageCleanupTests.swift */,
 				25951064D085DA97A7B22EA7 /* StorageConstraintQATests.swift */,
 				13B0B7279744C17DA80B481F /* StorageFormattingTests.swift */,
+				FA11FB2B95E2879D6042772E /* StoreMigrationRoundTripTests.swift */,
 				E90E46A0BC63141AA92DABA4 /* StoreRecoveryTests.swift */,
 				0F953201BFB4B0AD8951C7C0 /* SubmissionReadinessTests.swift */,
 				1631E6F3835369F5427EC553 /* TestModelFixtures.swift */,
@@ -704,7 +713,7 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
-				LastUpgradeCheck = 1500;
+				LastUpgradeCheck = 2660;
 				TargetAttributes = {
 					0E79B2F28EDEBAC826436FE7 = {
 						DevelopmentTeam = YOUR_TEAM_ID;
@@ -819,6 +828,7 @@
 				8AE4E286EAC7993589DEE298 /* StorageCleanupTests.swift in Sources */,
 				984E1DDA44C047A379A9FF9D /* StorageConstraintQATests.swift in Sources */,
 				3B626BE6B04D3B8C9CA2BA33 /* StorageFormattingTests.swift in Sources */,
+				5612BB807ADEC9D2BABDAB19 /* StoreMigrationRoundTripTests.swift in Sources */,
 				CA403A132590F198D1DD1641 /* StoreRecoveryTests.swift in Sources */,
 				A7D75C0B2416EB94A57A5EFE /* SubmissionReadinessTests.swift in Sources */,
 				72281CE48FE3448A94C6CDE8 /* TestModelFixtures.swift in Sources */,
@@ -864,6 +874,7 @@
 				B25A0D83A6CFF39DF71B44F2 /* ChatSessionActor.swift in Sources */,
 				B49FA6048299AFD126EBE8CF /* ChatSurfaceDetails.swift in Sources */,
 				7567C2C0CD09466D8BC141F4 /* ChatView.swift in Sources */,
+				C528E9322395F5DA7DF1A484 /* ChatViewModel+TranscriptActions.swift in Sources */,
 				15557FE21A9C5AA0E6C0D7F4 /* ChatViewModel.swift in Sources */,
 				B623B77E71590B0EF3065321 /* ChunkedTransport.swift in Sources */,
 				F308DB4C6A26B32606DFBBDF /* ConversationListViewModel.swift in Sources */,
@@ -898,6 +909,7 @@
 				E666B11AED4C81E8B9ACBE3E /* MemoryDiagnostics.swift in Sources */,
 				68E931510047D5F6407C810C /* MemoryProfile.swift in Sources */,
 				9DA86DA602EDEF6C8157190F /* MessageBubble.swift in Sources */,
+				4D8B78F29D3C02F204FBAE51 /* MetricKitIntake.swift in Sources */,
 				1678CC923B0B7258B7237778 /* ModelArtifactVerifier.swift in Sources */,
 				1C77718F3B72419B8A52CF4F /* ModelConfiguration.swift in Sources */,
 				BAAF3D01120C1C2CF1BC1FE1 /* ModelDetailUpdateFlow.swift in Sources */,
@@ -961,6 +973,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Config/Info.plist;
 				INFOPLIST_GENERATION_MODE = GeneratedFile;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
@@ -989,6 +1002,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Config/Info.plist;
 				INFOPLIST_GENERATION_MODE = GeneratedFile;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;

@@ -203,6 +203,20 @@ extension ChatView {
 
     // MARK: Transcript
 
+    /// One transcript row. Extracted so the LazyVStack body stays within
+    /// the compiler's type-check budget with four action closures.
+    private func messageRow(_ message: ChatMessagePayload) -> some View {
+        let messageID = message.id
+        return MessageBubble(
+            message: message,
+            onBranch: { Task { await viewModel.branchFromMessage(messageID) } },
+            onCopy: { [content = message.content] in viewModel.copyMessageText(content) },
+            onDelete: { Task { await viewModel.deleteMessage(messageID) } }
+        )
+        .id(messageID)
+        .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+    }
+
     var messageList: some View {
         ScrollViewReader { proxy in
             ScrollView {
@@ -214,13 +228,18 @@ extension ChatView {
                     }
 
                     ForEach(viewModel.messages, id: \.id) { message in
-                        MessageBubble(
-                            message: message,
-                            onBranch: { Task { await viewModel.branchFromMessage(message.id) } },
-                            onCopy: { viewModel.copyMessage(message) }
-                        )
-                        .id(message.id)
-                        .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+                        messageRow(message)
+                    }
+
+                    if viewModel.canRetryLastResponse && !viewModel.messages.isEmpty {
+                        Button {
+                            Task { await viewModel.retryLastResponse() }
+                        } label: {
+                            Label("Retry response", systemImage: "arrow.clockwise")
+                        }
+                        .buttonStyle(ZiroSecondaryButtonStyle())
+                        .padding(.vertical, ZiroTheme.Spacing.small)
+                        .accessibilityHint("Generates a new response to your last message")
                     }
 
                     if viewModel.isStreaming && !viewModel.streamingText.isEmpty {
@@ -457,6 +476,22 @@ extension ChatView {
             .disabled((viewModel.activeConversationID == nil && !viewModel.isDraftConversation)
                       || viewModel.isLoadingConversation)
             .accessibilityLabel("Conversation instructions")
+        }
+        ToolbarItem(placement: .secondaryAction) {
+            Button {
+                viewModel.exportTranscript()
+            } label: {
+                Image(systemName: "square.and.arrow.up")
+            }
+            .disabled(viewModel.messages.isEmpty)
+            .accessibilityLabel("Export transcript")
+            .accessibilityHint("Writes the conversation to a file you can share")
+        }
+        if let transcriptURL = viewModel.transcriptExportURL {
+            ToolbarItem(placement: .secondaryAction) {
+                ShareLink(item: transcriptURL)
+                    .accessibilityLabel("Share transcript")
+            }
         }
     }
 

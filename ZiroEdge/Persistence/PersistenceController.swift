@@ -339,6 +339,17 @@ actor PersistenceController {
         }
     }
 
+    @discardableResult
+    func updateConversationModelID(
+        id: UUID,
+        modelID: String
+    ) -> Result<Void, PersistenceFailure> {
+        mutateConversation(id: id, operation: "updateConversationModelID") { _, conversation in
+            conversation.modelID = modelID
+            conversation.updatedAt = Date()
+        }
+    }
+
     private func mutateConversation(
         id: UUID,
         operation: String,
@@ -422,6 +433,29 @@ extension PersistenceController {
             }
         }
         logFailure(result, operation: "insertMessage")
+        return result
+    }
+
+    func deleteMessageResult(messageID: UUID) -> Result<Void, PersistenceFailure> {
+        let context = writerContext
+        let injector = faultInjector
+        let result: Result<Void, PersistenceFailure> = context.performAndWait {
+            let request = CDChatMessage.fetchRequest()
+            request.predicate = NSPredicate(format: "id == %@", messageID as CVarArg)
+            request.fetchLimit = 1
+            do {
+                guard let message = try context.fetch(request).first else { return .failure(.notFound()) }
+                context.delete(message)
+                switch Self.saveContext(context, faultInjector: injector) {
+                case .success: return .success(())
+                case .failure(let failure): context.rollback(); return .failure(failure)
+                }
+            } catch {
+                context.rollback()
+                return .failure(.map(error, operation: .fetch))
+            }
+        }
+        logFailure(result, operation: "deleteMessage")
         return result
     }
 
