@@ -11,8 +11,8 @@ import SwiftUI
 
 /// ZiroEdge's brand mark: the ZE logo asset (white monogram with
 /// transparency), rendered as a template glyph in the adaptive primary text
-/// color so it floats on the surrounding surface — warm ink on paper in
-/// light mode, warm white on graphite in dark mode — with no baked tile.
+/// color so it floats on the surrounding surface — adaptive ink on paper in
+/// light mode, near-white on navy in dark mode — with no baked tile.
 /// One asset (`AppLogo` imageset, transparent) backs every in-app surface
 /// (empty state, onboarding bar, galleries), so a logo swap is a single
 /// asset replacement. The app icon (`AppIcon`, opaque) is a separate asset
@@ -40,15 +40,91 @@ struct ZiroBrandMark: View {
 
 // MARK: - Empty State Hero (the brand moment)
 
+/// One guided starting point for the chat empty state: the prompt text
+/// inserted into the composer plus the card's tinted dot. Dots use
+/// `ZiroTheme` text tokens only (no raw hues): purple → `accentPurpleText`,
+/// teal → `infoText` (closest cool data hue), yellow → `warningText` (amber
+/// family). Dots are decorative — the `primaryText` label carries the
+/// meaning — so the pairing needs no contrast floor beyond the label's.
+struct ZiroSuggestion {
+    let text: String
+    let dot: Color
+}
+
+/// Reference-style capability card: full-width row with a tinted dot,
+/// two-line title, and a disclosure chevron on a raised + hairline card.
+/// 56pt minimum height clears the 44pt target floor; pressed state mirrors
+/// `ZiroSuggestionChip` (accent container + accent edge). Reduce Motion
+/// drops the press scale like the chip style does.
+struct ZiroCapabilityCard: View {
+    let item: ZiroSuggestion
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: ZiroTheme.Spacing.medium) {
+                Circle()
+                    .fill(item.dot)
+                    .frame(width: 10, height: 10)
+                    .accessibilityHidden(true)
+                Text(item.text)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(ZiroTheme.primaryText)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(ZiroTheme.tertiaryText)
+                    .accessibilityHidden(true)
+            }
+            .padding(.horizontal, ZiroTheme.Spacing.large)
+            .frame(maxWidth: .infinity, minHeight: 56, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: ZiroTheme.Radius.control, style: .continuous)
+                    .fill(ZiroTheme.raisedBackground)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: ZiroTheme.Radius.control, style: .continuous)
+                    .stroke(ZiroTheme.hairline)
+            )
+        }
+        .buttonStyle(ZiroCapabilityCardStyle())
+    }
+}
+
+private struct ZiroCapabilityCardStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(
+                RoundedRectangle(cornerRadius: ZiroTheme.Radius.control, style: .continuous)
+                    .fill(configuration.isPressed ? ZiroTheme.accentContainer : .clear)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: ZiroTheme.Radius.control, style: .continuous)
+                    .stroke(configuration.isPressed ? Color.accentColor : .clear, lineWidth: 1)
+            )
+            .scaleEffect(reduceMotion || !configuration.isPressed ? 1 : 0.98)
+            .animation(reduceMotion ? nil : ZiroMotion.press, value: configuration.isPressed)
+    }
+}
+
 /// The chat empty state and other full-viewport resting moments. Composition
-/// (top to bottom): the brand mark over a soft ember glow, the ZIROEDGE
+/// (top to bottom): the brand mark over a soft accent glow, the ZIROEDGE
 /// wordmark, the title, the privacy message, optional guided starting-point
-/// chips, and optional actions. Everything is centered, capped at
+/// cards (reference-style `ZiroCapabilityCard` rows when `suggestionItems`
+/// is set, legacy `ZiroSuggestionChip` flow for plain `suggestions`), and
+/// optional actions. Everything is centered, capped at
 /// `ZiroMeasure.standard`, and fully static (Reduce Motion safe).
 struct ZiroEmptyState<Actions: View>: View {
     let title: String
     let message: String
     var suggestions: [String] = []
+    /// Capability pills with per-card tint + chevron (preferred for chat).
+    /// When non-empty this replaces the legacy chip flow below.
+    var suggestionItems: [ZiroSuggestion] = []
     var onSuggestion: ((String) -> Void)? = nil
     @ViewBuilder var actions: () -> Actions
 
@@ -58,12 +134,14 @@ struct ZiroEmptyState<Actions: View>: View {
         title: String,
         message: String,
         suggestions: [String] = [],
+        suggestionItems: [ZiroSuggestion] = [],
         onSuggestion: ((String) -> Void)? = nil,
         @ViewBuilder actions: @escaping () -> Actions
     ) {
         self.title = title
         self.message = message
         self.suggestions = suggestions
+        self.suggestionItems = suggestionItems
         self.onSuggestion = onSuggestion
         self.actions = actions
     }
@@ -102,7 +180,17 @@ struct ZiroEmptyState<Actions: View>: View {
             }
             .accessibilityElement(children: .combine)
 
-            if !suggestions.isEmpty, let onSuggestion {
+            if !suggestionItems.isEmpty, let onSuggestion {
+                VStack(spacing: ZiroTheme.Spacing.small) {
+                    ForEach(Array(suggestionItems.enumerated()), id: \.offset) { index, item in
+                        ZiroCapabilityCard(item: item) { onSuggestion(item.text) }
+                            .accessibilityLabel(item.text)
+                            .accessibilityHint("Inserts this starter prompt into the message field")
+                            .accessibilityIdentifier("suggestion-card-\(index)")
+                    }
+                }
+                .padding(.horizontal, ZiroTheme.Spacing.large)
+            } else if !suggestions.isEmpty, let onSuggestion {
                 ZiroFlowLayout(spacing: ZiroTheme.Spacing.small) {
                     ForEach(suggestions, id: \.self) { suggestion in
                         ZiroSuggestionChip(

@@ -517,13 +517,15 @@ extension AppShellView {
 
     /// Full-screen tap-to-dismiss dim behind the slide-over panel. A Button
     /// (not a tap gesture) so VoiceOver lands on a labelled control. The
-    /// fill reuses the floating-shadow token — an appearance-adaptive black
-    /// dim — because no dedicated scrim token exists.
+    /// fill uses the dedicated `ZiroTheme.scrim` token — an
+    /// appearance-adaptive black dim intentionally aliased to the
+    /// floating-shadow value (see the token docs); call sites must use the
+    /// alias, never the shadow token directly.
     private var slideOverScrim: some View {
         Button {
             setSidebarDrawer(false)
         } label: {
-            ZiroTheme.shadowFloating
+            ZiroTheme.scrim
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
         }

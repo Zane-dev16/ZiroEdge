@@ -230,7 +230,11 @@ struct MarkdownRenderer {
         var result = AttributedString("\n")
         var codeAttr = AttributedString(code)
         codeAttr.font = .system(.body, design: .monospaced)
-        codeAttr.backgroundColor = Color(.systemGray6)
+        // Dark card treatment: the recessed-well token (navy `#1A2340` in
+        // dark mode) instead of systemGray6, which renders light-gray on the
+        // navy canvas. Body text keeps its inherited (contrast-verified)
+        // foreground on top of it.
+        codeAttr.backgroundColor = ZiroTheme.wellBackground
         result.append(codeAttr)
         result.append(AttributedString("\n\n"))
         return result
@@ -239,7 +243,7 @@ struct MarkdownRenderer {
     private static func renderInlineCode(_ code: String) -> AttributedString {
         var attr = AttributedString(code)
         attr.font = .system(.body, design: .monospaced)
-        attr.backgroundColor = Color(.systemGray6)
+        attr.backgroundColor = ZiroTheme.wellBackground
         return attr
     }
 

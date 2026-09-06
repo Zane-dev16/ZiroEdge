@@ -224,7 +224,7 @@ private struct StreamingText: View {
         var attributed = rendered
         var cursor = AttributedString("|")
         cursor.font = ZiroType.body
-        // The amber caret: the ember accent marks what is alive on screen.
+        // The accent caret: the accent marks what is alive on screen.
         cursor.foregroundColor = visible ? ZiroTheme.accent : Color.clear
         attributed.append(cursor)
         return attributed

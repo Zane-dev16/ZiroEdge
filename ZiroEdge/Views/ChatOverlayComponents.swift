@@ -1,9 +1,8 @@
 // ChatOverlayComponents.swift
 // ZiroEdge — Privacy-first local AI assistant
 //
-// Modal and transient chat components: the conversation-instructions sheet,
-// the thinking indicator, and the scroll-offset preference key. Verbatim
-// relocations from ChatView.swift for file-size hygiene.
+// Modal and transient chat components: the model picker, the thinking
+// indicator, and the scroll-offset preference key.
 
 import SwiftUI
 
@@ -266,56 +265,6 @@ struct ComposerModelPicker: View {
         .padding(.vertical, ZiroTheme.Spacing.xSmall)
         .background(ZiroTheme.wellBackground, in: Capsule())
         .contentShape(Capsule())
-    }
-}
-
-
-struct ConversationSystemPromptEditor: View {
-    @Binding var prompt: String
-    let defaultPrompt: String
-    let onSave: () async -> Void
-    let onUseDefault: () async -> Void
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    TextEditor(text: $prompt)
-                        .font(ZiroType.body)
-                        .frame(minHeight: 180)
-                        .accessibilityLabel("Conversation instructions")
-                } header: {
-                    Text("Instructions for this conversation")
-                } footer: {
-                    Text("These instructions are sent only to the on-device model.")
-                }
-
-                if !defaultPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Section("Default Instructions") {
-                        Text(defaultPrompt)
-                            .font(ZiroType.body)
-                            .foregroundStyle(ZiroTheme.secondaryText)
-                            .textSelection(.enabled)
-                        Button("Use Default") { Task { await onUseDefault() } }
-                    }
-                }
-            }
-            // Warm paper canvas with raised card rows (design spec §3.1).
-            .scrollContentBackground(.hidden)
-            .background(ZiroTheme.pageBackground.ignoresSafeArea())
-            .listRowBackground(ZiroTheme.raisedBackground)
-            .navigationTitle("Conversation Instructions")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { Task { await onSave() } }
-                }
-            }
-        }
     }
 }
 

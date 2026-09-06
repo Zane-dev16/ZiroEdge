@@ -1,7 +1,7 @@
 // DesignSystem.swift
 // ZiroEdge — Privacy-first local AI assistant
 //
-// "Ember on graphite — a precision instrument."
+// "Midnight signal — a precision instrument."
 //
 // The single source of truth for ZiroEdge's visual language. This file has
 // ZERO app-internal dependencies: it typechecks against SwiftUI alone so it
@@ -49,7 +49,7 @@ private func ziroColor(light: UInt32, dark: UInt32) -> Color {
 /// colors, ad-hoc opacities, or untyped spacing numbers; everything visual
 /// resolves to a named token here.
 ///
-/// Surfaces — "warm graphite" (dark) and "warm paper" (light), four
+/// Surfaces — "midnight navy" (dark) and "warm paper" (light), four
 /// elevations that replace raw `.systemBackground`:
 ///   page    the base canvas (chat transcript, page bodies)
 ///   raised  cards and message bubbles resting on the page
@@ -59,23 +59,23 @@ enum ZiroTheme {
 
     // MARK: Surfaces
 
-    /// Base canvas. Light: warm paper `#F7F3EC`. Dark: warm graphite `#151210`.
-    static let pageBackground = ziroColor(light: 0xF7F3EC, dark: 0x151210)
+    /// Base canvas. Light: warm paper `#F7F3EC`. Dark: near-black navy `#0A0F1E`.
+    static let pageBackground = ziroColor(light: 0xF7F3EC, dark: 0x0A0F1E)
 
     /// Raised content on the page: cards, assistant bubbles, banner fills.
-    /// Light: white `#FFFFFF`. Dark: lifted graphite `#201B16`.
-    static let raisedBackground = ziroColor(light: 0xFFFFFF, dark: 0x201B16)
+    /// Light: white `#FFFFFF`. Dark: navy card `#131A30`.
+    static let raisedBackground = ziroColor(light: 0xFFFFFF, dark: 0x131A30)
 
     /// Recessed input wells (composer field, search fields). Light: `#EFE9DF`.
-    /// Dark: `#2A241D` — one step lighter than page so text fields read as
-    /// places you type into without floating like a card.
-    static let inputBackground = ziroColor(light: 0xEFE9DF, dark: 0x2A241D)
+    /// Dark: `#1A2340` — one step lighter than the navy page so text fields
+    /// read as places you type into without floating like a card.
+    static let inputBackground = ziroColor(light: 0xEFE9DF, dark: 0x1A2340)
 
     /// Alias for the input-well elevation; prefer this name in new code.
     static let wellBackground = inputBackground
 
-    /// Floating custom layers above everything. Light: white. Dark: `#302920`.
-    static let overlayBackground = ziroColor(light: 0xFFFFFF, dark: 0x302920)
+    /// Floating custom layers above everything. Light: white. Dark: `#1E2A4F`.
+    static let overlayBackground = ziroColor(light: 0xFFFFFF, dark: 0x1E2A4F)
 
     /// Legacy alias retained for the pre-overhaul call sites; identical to
     /// `raisedBackground`. New code should use the elevation names above.
@@ -84,50 +84,54 @@ enum ZiroTheme {
     // MARK: Hairlines & Dividers
 
     /// The 1pt stroke that does the work shadows do elsewhere. Light: warm
-    /// sand `#DCD2C2`. Dark: `#3B342B`. Decorative (no contrast floor).
-    static let hairline = ziroColor(light: 0xDCD2C2, dark: 0x3B342B)
+    /// sand `#DCD2C2`. Dark: navy hairline `#263154`. Decorative (no contrast floor).
+    static let hairline = ziroColor(light: 0xDCD2C2, dark: 0x263154)
 
     /// Legacy alias; identical to `hairline`. Prefer `hairline` in new code.
     static let subtleBorder = hairline
 
     /// Emphasized stroke for focused/selected outlines and the brand mark's
-    /// tile edge. Light: `#C9BCA6`. Dark: `#4C4437`.
-    static let hairlineStrong = ziroColor(light: 0xC9BCA6, dark: 0x4C4437)
+    /// tile edge. Light: `#C9BCA6`. Dark: `#35426B`.
+    static let hairlineStrong = ziroColor(light: 0xC9BCA6, dark: 0x35426B)
 
     // MARK: Text Hierarchy
 
-    /// Primary text. Light `#1C1814` (15.95:1 on page). Dark `#F2EDE4`
-    /// (16.00:1 on page). Warm-tinted near-black/warm-white — pure
-    /// black/white reads clinical against the warm surfaces.
-    static let primaryText = ziroColor(light: 0x1C1814, dark: 0xF2EDE4)
+    /// Primary text. Light `#1C1814` (15.95:1 on page). Dark `#EDF1F7`
+    /// (16.84:1 on page). Cool-tinted near-black/near-white — pure
+    /// black/white reads clinical against the tinted surfaces.
+    static let primaryText = ziroColor(light: 0x1C1814, dark: 0xEDF1F7)
 
     /// Supporting text (descriptions, footers, captions). Light `#5C544A`
-    /// (6.73:1 on page). Dark `#A89F92` (7.14:1 on page).
-    static let secondaryText = ziroColor(light: 0x5C544A, dark: 0xA89F92)
+    /// (6.73:1 on page). Dark `#9AA3B8` (7.55:1 on page).
+    static let secondaryText = ziroColor(light: 0x5C544A, dark: 0x9AA3B8)
 
     /// Tertiary metadata (timestamps, SHA fragments, locked parameters).
-    /// Light `#6E6659` (5.12:1 on page). Dark `#9A9184` (6.00:1 on page).
-    /// Still clears 4.5:1 on every surface including wells.
-    static let tertiaryText = ziroColor(light: 0x6E6659, dark: 0x9A9184)
+    /// Light `#6E6659` (5.12:1 on page). Dark `#8B93A7` (6.21:1 on page,
+    /// 5.03:1 on wells). Still clears 4.5:1 on every surface including wells.
+    static let tertiaryText = ziroColor(light: 0x6E6659, dark: 0x8B93A7)
 
-    // MARK: Accent — the ember
+    // MARK: Accent — vivid blue
 
-    /// The brand accent: warm amber/gold, owned by the asset catalog so it
-    /// also drives system chrome (toolbar tint, menus, selection). Light
-    /// `#8A5A00`, dark `#F2C14E`. Used with discipline: primary actions,
-    /// focus, active states, the streaming cursor, progress.
+    /// The brand accent: vivid blue, owned by the asset catalog so it also
+    /// drives system chrome (toolbar tint, menus, selection). `#2E6BFF` in
+    /// every appearance (Increased Contrast variants step lighter). Used with
+    /// discipline: primary actions, focus, active states, the streaming
+    /// cursor, progress. White `accentForeground` on the fill is 4.50:1.
     static let accent = Color.accentColor
 
-    /// Text/icon color on top of an accent fill (white on light-mode amber
-    /// at 5.93:1; black on dark-mode amber at 12.51:1). Asset-backed so it
-    /// carries Increased Contrast variants.
+    /// Text/icon color on top of an accent fill: white in every appearance
+    /// (4.50:1 on `#2E6BFF`). Asset-backed so it carries Increased Contrast
+    /// variants.
     static let accentForeground = Color("AccentForeground")
 
-    /// Pre-composited accent-tinted container (accent at 12% over the raised
-    /// surface). Light `#F1EBE0` — accent text on it: 5.00:1. Dark `#392F1D`
-    /// — accent text on it: 7.83:1. The fill behind secondary buttons and
-    /// accent badges.
-    static let accentContainer = ziroColor(light: 0xF1EBE0, dark: 0x392F1D)
+    /// Pre-composited accent-tinted container (accent at ~12% over the raised
+    /// surface). Light `#E6EDFF`. Dark `#16265A`. The fill behind secondary
+    /// buttons and accent badges. NOTE: raw accent `#2E6BFF` on these tints
+    /// is ~3.7:1 (light) / ~3.2:1 (dark) — it clears the 3:1 large-text/icon
+    /// floor (semibold body labels qualify) but not the 4.5:1 caption floor;
+    /// a lighter dark-mode accent-text token is the follow-up if accent
+    /// badges ever carry caption-size copy.
+    static let accentContainer = ziroColor(light: 0xE6EDFF, dark: 0x16265A)
 
     // MARK: Semantic Status — success / warning / danger / info
 
@@ -192,18 +196,27 @@ enum ZiroTheme {
     static let indigoContainer = ziroColor(light: 0xEAE9FA, dark: 0x2C2832)
 
     /// Neutral badge/well container: the input-well elevation doubles as the
-    /// untinted fill. `secondaryText` on it: 6.16:1 (light) / 5.87:1 (dark).
+    /// untinted fill. `secondaryText` on it: 6.16:1 (light) / 6.11:1 (dark).
     static let neutralContainer = wellBackground
 
     // MARK: Shadow Language
 
-    /// One shadow language, two levels. In light mode a soft warm-gray drop;
+    /// One shadow language, two levels. In light mode a soft neutral-gray drop;
     /// in dark mode shadows sink deeper but tighter (dark surfaces swallow
     /// soft shadows, so the lift reads through the hairline + shadow pair).
     /// Shadows never substitute for the hairline — they always travel
     /// together (see `ziroShadow(_:)`).
     static let shadowRaised = ziroShadowColor(lightAlpha: 0.14, darkAlpha: 0.50)
     static let shadowFloating = ziroShadowColor(lightAlpha: 0.20, darkAlpha: 0.55)
+
+    /// Full-screen tap-to-dismiss dim behind slide-over panels and custom
+    /// floating layers. Intentionally aliases the floating-shadow black —
+    /// an appearance-adaptive dim with no dedicated value of its own. This
+    /// alias is the token: call sites must use `scrim`, never reach for
+    /// `shadowFloating` as a fill directly. If the dim ever needs its own
+    /// alpha ramp, fork the value here; appearances stay adaptive via the
+    /// shared `ziroShadowColor` builder.
+    static let scrim = shadowFloating
 
     private static func ziroShadowColor(lightAlpha: Double, darkAlpha: Double) -> Color {
         Color(uiColor: UIColor { traits in
@@ -894,6 +907,16 @@ extension View {
                 in: RoundedRectangle(cornerRadius: ZiroTheme.Radius.bubble, style: .continuous)
             )
         case .assistant:
+            // P2 evaluation (keep the fill): stripping this to `.clear`
+            // was considered so assistant text sits directly on the page.
+            // Rejected — the retained transcript captures show the empty
+            // transcript only, so no screenshot comparison supports the
+            // change, and the raised + hairline card is load-bearing: it is
+            // the "calm card" voice distinct from user bubbles and the
+            // page, it carries the thinking indicator and streaming bubble,
+            // and `primaryText` on it is contrast-verified (15.21 dark /
+            // 17.65 light on the raised surface). Revisit only with side-by-side transcript
+            // captures in both appearances.
             self.background(
                 ZiroTheme.raisedBackground,
                 in: RoundedRectangle(cornerRadius: ZiroTheme.Radius.bubble, style: .continuous)

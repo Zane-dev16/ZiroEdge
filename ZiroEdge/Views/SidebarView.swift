@@ -43,6 +43,8 @@ struct SidebarView: View {
             conversationSections
         }
         .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
+        .background(ZiroTheme.pageBackground)
         .navigationBarTitleDisplayMode(.inline)
         .safeAreaInset(edge: .top) {
             sidebarHeader
@@ -88,16 +90,47 @@ struct SidebarView: View {
 
     // MARK: - Header
 
-    /// Brand mark top-left, then plain destination rows (no pills — pills
-    /// are reserved for the bottom bar). Chats pushes the full searchable
-    /// archive; Models pushes the Models page via the shell.
+    /// Brand-mark identity row (monogram tile + wordmark + archive search),
+    /// then plain destination rows (no pills — pills are reserved for the
+    /// bottom bar). Chats pushes the full searchable archive; Models pushes
+    /// the Models page via the shell.
     private var sidebarHeader: some View {
         VStack(spacing: 0) {
-            HStack {
-                ZiroBrandMark(size: 36)
+            HStack(spacing: ZiroTheme.Spacing.medium) {
+                ZiroBrandMark(size: 30)
+                    .padding(ZiroTheme.Spacing.xSmall)
+                    .background(
+                        ZiroTheme.accentContainer,
+                        in: RoundedRectangle(cornerRadius: ZiroTheme.Radius.small, style: .continuous)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: ZiroTheme.Radius.small, style: .continuous)
+                            .stroke(ZiroTheme.hairline)
+                    )
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("ZiroEdge")
+                        .font(ZiroType.rowTitle)
+                        .foregroundStyle(ZiroTheme.primaryText)
+                    Text("Private · On-device")
+                        .font(ZiroType.caption)
+                        .foregroundStyle(ZiroTheme.secondaryText)
+                }
                 Spacer()
+                Button {
+                    onOpenRoute(.chats)
+                } label: {
+                    Image(systemName: "magnifyingglass")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(ZiroTheme.secondaryText)
+                        .frame(minWidth: 44, minHeight: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Search chats")
+                .accessibilityIdentifier("sidebar-search-button")
             }
             .padding(.horizontal, ZiroTheme.Spacing.medium)
+            .padding(.vertical, ZiroTheme.Spacing.small)
             sidebarDestinationRow(
                     title: "Chats",
                     systemImage: "bubble.left.and.bubble.right",
@@ -114,7 +147,7 @@ struct SidebarView: View {
                 }
         }
         .padding(.bottom, ZiroTheme.Spacing.xSmall)
-        .background(.bar)
+        .background(ZiroTheme.pageBackground)
     }
 
     /// One plain navigation row: icon, title, chevron. Deliberately not a
@@ -180,7 +213,12 @@ struct SidebarView: View {
         .padding(.horizontal, ZiroTheme.Spacing.medium)
         .padding(.top, ZiroTheme.Spacing.small)
         .padding(.bottom, ZiroTheme.Spacing.medium)
-        .background(.bar)
+        .background(ZiroTheme.pageBackground)
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(ZiroTheme.hairline)
+                .frame(height: 1)
+        }
     }
 
     // MARK: - Conversation Sections
@@ -210,9 +248,14 @@ struct SidebarView: View {
                     ForEach(group.items) { conversation in
                         conversationRow(conversation)
                     }
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
                 } header: {
                     if let title = group.title {
                         Text(title)
+                            .font(.caption.weight(.semibold))
+                            .textCase(.uppercase)
+                            .foregroundStyle(ZiroTheme.secondaryText)
                     }
                 }
             }
@@ -220,7 +263,10 @@ struct SidebarView: View {
     }
 
     private func conversationRow(_ conversation: ConversationPayload) -> some View {
-        ConversationRow(conversation: conversation)
+        ConversationRow(
+            conversation: conversation,
+            isSelected: viewModel.selectedConversationID == conversation.id
+        )
             .tag(conversation.id)
             .contentShape(Rectangle())
             .onTapGesture {
@@ -256,32 +302,63 @@ struct SidebarView: View {
 
 struct ConversationRow: View {
     let conversation: ConversationPayload
+    /// Selected rows (sidebar `List(selection:)`) tint to the accent
+    /// container with an accent edge — the custom card fill replaces the
+    /// system selection wash, so selection must be projected explicitly.
+    var isSelected: Bool = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: ZiroTheme.Spacing.xSmall) {
-            Text(conversation.title)
-                .font(ZiroType.body)
-                .foregroundStyle(ZiroTheme.primaryText)
-                .lineLimit(1)
+        HStack(spacing: ZiroTheme.Spacing.medium) {
+            Text(monogram)
+                .font(.headline)
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 40, height: 40)
+                .background(
+                    ZiroTheme.accentContainer,
+                    in: RoundedRectangle(cornerRadius: ZiroTheme.Radius.small, style: .continuous)
+                )
+                .accessibilityHidden(true)
 
-            HStack(spacing: ZiroTheme.Spacing.small) {
+            VStack(alignment: .leading, spacing: ZiroTheme.Spacing.micro) {
+                Text(conversation.title)
+                    .font(ZiroType.body.weight(.medium))
+                    .foregroundStyle(ZiroTheme.primaryText)
+                    .lineLimit(1)
+
                 // The message count is engineering metadata — technical voice.
                 Text("\(conversation.messageCount) messages")
                     .font(ZiroType.technical(.caption))
                     .foregroundStyle(ZiroTheme.secondaryText)
-
-                Text("·")
-                    .font(ZiroType.caption)
-                    .foregroundStyle(ZiroTheme.tertiaryText)
-
-                Text(ConversationListViewModel.formattedDate(conversation.updatedAt))
-                    .font(ZiroType.caption)
-                    .foregroundStyle(ZiroTheme.secondaryText)
+                    .lineLimit(1)
             }
+
+            Spacer(minLength: ZiroTheme.Spacing.small)
+
+            Text(ConversationListViewModel.formattedDate(conversation.updatedAt))
+                .font(ZiroType.caption)
+                .foregroundStyle(ZiroTheme.tertiaryText)
+                .lineLimit(1)
         }
-        .padding(.vertical, ZiroTheme.Spacing.xSmall)
+        .padding(ZiroTheme.Spacing.medium)
+        .frame(maxWidth: .infinity)
+        .background(
+            RoundedRectangle(cornerRadius: ZiroTheme.Radius.card, style: .continuous)
+                .fill(isSelected ? ZiroTheme.accentContainer : ZiroTheme.raisedBackground)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: ZiroTheme.Radius.card, style: .continuous)
+                .stroke(isSelected ? Color.accentColor : ZiroTheme.hairline, lineWidth: isSelected ? 1.5 : 1)
+        )
+        .padding(.vertical, ZiroTheme.Spacing.micro)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilitySummary)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    /// Monogram tile glyph: the title's first non-blank character.
+    private var monogram: String {
+        guard let first = conversation.title.first(where: { !$0.isWhitespace }) else { return "•" }
+        return String(first).uppercased()
     }
 
     private var accessibilitySummary: String {
@@ -328,64 +405,173 @@ struct ChatsView: View {
     @State private var showDeleteConfirmation = false
     @State private var conversationToDelete: ConversationPayload?
 
-    private var filteredConversations: [ConversationPayload] {
+    /// Archive scope filter — the capsule pills above the list. Recent
+    /// means touched in the last 7 days; undated rows show under every scope.
+    private enum ArchiveScope: String, CaseIterable {
+        case all = "All"
+        case recent = "Recent"
+        case earlier = "Earlier"
+    }
+    @State private var scope: ArchiveScope = .all
+
+    /// Archive rows: every chat (no 50-row cap), scope-filtered and
+    /// title-searched, bucketed into recency sections like the sidebar.
+    private var visibleSections: [(id: String, title: String?, items: [ConversationPayload])] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return viewModel.conversations }
-        return viewModel.conversations.filter {
-            $0.title.localizedCaseInsensitiveContains(query)
+        let calendar = Calendar.current
+        let now = Date()
+        let sevenDaysAgo = calendar.date(byAdding: .day, value: -7, to: now) ?? now
+        var buckets: [(id: String, title: String?, items: [ConversationPayload])] = [
+            ("today", "Today", []),
+            ("yesterday", "Yesterday", []),
+            ("previous-7-days", "Previous 7 Days", []),
+            ("earlier", nil, [])
+        ]
+        for conversation in viewModel.conversations {
+            guard isInScope(conversation, cutoff: sevenDaysAgo) else { continue }
+            if !query.isEmpty,
+               !conversation.title.localizedCaseInsensitiveContains(query) { continue }
+            let date = conversation.updatedAt ?? conversation.createdAt ?? now
+            let slot: Int
+            if calendar.isDateInToday(date) {
+                slot = 0
+            } else if calendar.isDateInYesterday(date) {
+                slot = 1
+            } else if date >= sevenDaysAgo {
+                slot = 2
+            } else {
+                slot = 3
+            }
+            buckets[slot].items.append(conversation)
         }
+        return buckets.filter { !$0.items.isEmpty }
+    }
+
+    private func isInScope(_ conversation: ConversationPayload, cutoff: Date) -> Bool {
+        guard scope != .all else { return true }
+        guard let date = conversation.updatedAt ?? conversation.createdAt else { return true }
+        let isRecent = date >= cutoff
+        return scope == .recent ? isRecent : !isRecent
+    }
+
+    /// One archive row: card treatment with rename/delete affordances.
+    /// Delete funnels through the shell so an in-flight stream is cancelled
+    /// first (mirrors the sidebar row).
+    private func archiveRow(_ conversation: ConversationPayload) -> some View {
+        ConversationRow(conversation: conversation)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                onSelectConversation(conversation.id)
+            }
+            .contextMenu {
+                Button {
+                    conversationToRename = conversation
+                    renameText = conversation.title
+                } label: {
+                    Label("Rename", systemImage: "pencil")
+                }
+                Button(role: .destructive) {
+                    conversationToDelete = conversation
+                    showDeleteConfirmation = true
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+            }
+            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                Button(role: .destructive) {
+                    conversationToDelete = conversation
+                    showDeleteConfirmation = true
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+            }
+    }
+
+    /// Archive scope filter: capsule pills (not the system segmented
+    /// control) so the selected scope reads in the accent container with a
+    /// hairline edge, matching the chip/pill language elsewhere. Each pill
+    /// is a 44pt-minimum-height button that grows with Dynamic Type; the
+    /// selected pill carries `.isSelected` for VoiceOver.
+    private var archiveScopePills: some View {
+        HStack(spacing: ZiroTheme.Spacing.small) {
+            ForEach(ArchiveScope.allCases, id: \.self) { item in
+                Button {
+                    scope = item
+                } label: {
+                    Text(item.rawValue)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(item == scope ? Color.accentColor : ZiroTheme.secondaryText)
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .background(
+                            Capsule().fill(item == scope ? ZiroTheme.accentContainer : .clear)
+                        )
+                        .overlay(
+                            Capsule().stroke(item == scope ? Color.accentColor : ZiroTheme.hairline, lineWidth: 1)
+                        )
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(item.rawValue) chats")
+                .accessibilityHint("Filters the chat archive")
+                .accessibilityAddTraits(item == scope ? .isSelected : [])
+            }
+        }
+        .accessibilityLabel("Archive scope")
+        .padding(.horizontal, ZiroTheme.Spacing.large)
+        .padding(.vertical, ZiroTheme.Spacing.small)
+        .ziroAnimation(ZiroMotion.press, value: scope)
     }
 
     var body: some View {
-        Group {
-            if viewModel.isLoading && viewModel.conversations.isEmpty {
-                List {
-                    ForEach(0..<8, id: \.self) { _ in
-                        ConversationRow.placeholder
-                            .redacted(reason: .placeholder)
-                            .accessibilityHidden(true)
+        VStack(spacing: 0) {
+            archiveScopePills
+
+            Group {
+                if viewModel.isLoading && viewModel.conversations.isEmpty {
+                    List {
+                        ForEach(0..<8, id: \.self) { _ in
+                            ConversationRow.placeholder
+                                .redacted(reason: .placeholder)
+                                .accessibilityHidden(true)
+                        }
                     }
-                }
-            } else if filteredConversations.isEmpty && !searchText.isEmpty {
-                ContentUnavailableView.search(text: searchText)
-            } else if viewModel.conversations.isEmpty {
-                ContentUnavailableView(
-                    "No Conversations",
-                    systemImage: "bubble.left.and.bubble.right",
-                    description: Text("Create a conversation to get started.")
-                )
-            } else {
-                List(filteredConversations) { conversation in
-                    ConversationRow(conversation: conversation)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            onSelectConversation(conversation.id)
-                        }
-                        .contextMenu {
-                            Button {
-                                conversationToRename = conversation
-                                renameText = conversation.title
-                            } label: {
-                                Label("Rename", systemImage: "pencil")
-                            }
-                            Button(role: .destructive) {
-                                conversationToDelete = conversation
-                                showDeleteConfirmation = true
-                            } label: {
-                                Label("Delete", systemImage: "trash")
-                            }
-                        }
-                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                            Button(role: .destructive) {
-                                conversationToDelete = conversation
-                                showDeleteConfirmation = true
-                            } label: {
-                                Label("Delete", systemImage: "trash")
+                    .scrollContentBackground(.hidden)
+                    .background(ZiroTheme.pageBackground)
+                } else if viewModel.conversations.isEmpty {
+                    ContentUnavailableView(
+                        "No Conversations",
+                        systemImage: "bubble.left.and.bubble.right",
+                        description: Text("Create a conversation to get started.")
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if visibleSections.isEmpty {
+                    ContentUnavailableView.search(text: searchText)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    List {
+                        ForEach(visibleSections, id: \.id) { section in
+                            Section {
+                                ForEach(section.items) { conversation in
+                                    archiveRow(conversation)
+                                }
+                                .listRowBackground(Color.clear)
+                                .listRowSeparator(.hidden)
+                            } header: {
+                                if let title = section.title {
+                                    Text(title)
+                                        .font(.caption.weight(.semibold))
+                                        .textCase(.uppercase)
+                                        .foregroundStyle(ZiroTheme.secondaryText)
+                                }
                             }
                         }
+                    }
+                    .scrollContentBackground(.hidden)
+                    .background(ZiroTheme.pageBackground)
                 }
             }
         }
+        .background(ZiroTheme.pageBackground)
         .navigationTitle("Chats")
         .navigationBarTitleDisplayMode(.large)
         .searchable(text: $searchText, prompt: "Search chats")
@@ -394,11 +580,15 @@ struct ChatsView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button(action: onNewConversation) {
-                    Image(systemName: "square.and.pencil")
+                    Label("New chat", systemImage: "plus")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(ZiroTheme.accentForeground)
+                        .padding(.horizontal, ZiroTheme.Spacing.medium)
+                        .frame(minHeight: 44)
+                        .background(Color.accentColor, in: Capsule())
                 }
                 .accessibilityLabel("New chat")
                 .accessibilityIdentifier("chats-new-chat-button")
-                .frame(minWidth: 44, minHeight: 44)
             }
         }
         .alert("Rename Conversation", isPresented: Binding(

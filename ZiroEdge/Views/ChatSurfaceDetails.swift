@@ -2,8 +2,8 @@
 // ZiroEdge — Privacy-first local AI assistant
 //
 // Banner/retry rows and composer status hints for ChatView, split out to keep
-// that file focused on layout wiring. Verbatim relocation; members access
-// internal view state so nothing is duplicated.
+// that file focused on layout wiring. Members access internal view state so
+// nothing is duplicated.
 
 import SwiftUI
 import UIKit
@@ -34,10 +34,8 @@ private struct BannerAnnouncementModifier: ViewModifier {
 // ZiroEdge — Privacy-first local AI assistant
 //
 // Supporting pieces of the chat surface split out to keep ChatView.swift
-// focused on layout and interaction wiring. Contents are verbatim relocations:
-// the header identity pill, banner/retry rows, composer status hints, the
-// conversation-instructions editor sheet, the thinking indicator, and the
-// scroll-offset preference key.
+// focused on layout and interaction wiring: banner/retry rows and composer
+// status hints.
 
 import SwiftUI
 
@@ -178,34 +176,47 @@ extension ChatView {
     /// True once the selected model is loaded and accepting work.
     var chatReady: Bool { viewModel.modelLoadPhase == .ready }
 
-    /// Composer stack: status/hint row, image previews, text field, actions.
-    /// The text field and send stay disabled until the model is resident.
+    /// Composer stack: status/hint row, image previews, then the rounded
+    /// input well — the always-visible attachment cluster, the message
+    /// field, and send riding one well-elevation fill with a hairline rest
+    /// state and an accent focus ring. The well uses `Radius.control` (not
+    /// `Radius.card`): it is a text field, and the radius scale assigns
+    /// text fields/controls to `control` (design system §6.2, matching
+    /// `ziroComposerField`). The text field and send stay disabled until
+    /// the model is resident; the attachment cluster disables itself (with
+    /// a spoken reason) until a vision-capable model is resident, but never
+    /// leaves the row — see `attachmentButtons`.
     var inputBar: some View {
         VStack(spacing: ZiroTheme.Spacing.xSmall) {
             statusOrTokenHintRow
 
             if !viewModel.pendingImages.isEmpty { imagePreviewRow }
 
-            HStack(alignment: .bottom, spacing: ZiroTheme.Spacing.medium) {
+            HStack(alignment: .bottom, spacing: ZiroTheme.Spacing.small) {
+                attachmentButtons
                 TextField("Message ZiroEdge", text: $viewModel.inputText, axis: .vertical)
                     .textFieldStyle(.plain)
                     .accessibilityIdentifier("chatInput")
                     .accessibilityHint("Enter a message for the local model")
-                    // Design-system input well: recessed fill + hairline at
-                    // rest, accent focus ring while typing (the keyboard
-                    // focus indicator). Replaces the hand-rolled
-                    // background/overlay that reused Radius.card here.
-                    .ziroComposerField(isActive: isInputFocused)
                     .lineLimit(1...6)
                     .focused($isInputFocused)
                     .disabled(!chatReady || viewModel.isLoadingConversation)
                     .onSubmit {
                         if !viewModel.isStreaming { Task { await viewModel.sendMessage() } }
                     }
-
-                if chatReady && viewModel.isVisionModel { attachmentButtons }
                 sendButton
             }
+            .padding(.horizontal, ZiroTheme.Spacing.medium)
+            .padding(.vertical, ZiroTheme.Spacing.small)
+            .background(
+                RoundedRectangle(cornerRadius: ZiroTheme.Radius.control, style: .continuous)
+                    .fill(ZiroTheme.wellBackground)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: ZiroTheme.Radius.control, style: .continuous)
+                    .stroke(isInputFocused ? Color.accentColor : ZiroTheme.hairline, lineWidth: isInputFocused ? 1.5 : 1)
+            )
+            .ziroAnimation(ZiroMotion.press, value: isInputFocused)
             .padding(.horizontal, ZiroTheme.Spacing.large)
             .padding(.bottom, ZiroTheme.Spacing.medium)
         }

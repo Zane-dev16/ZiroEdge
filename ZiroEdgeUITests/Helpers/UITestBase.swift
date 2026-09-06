@@ -73,6 +73,7 @@ class UITestBase: XCTestCase {
                 return true
             }
         } while Date() < deadline
+        let conversationsTitle = app.staticTexts["Conversations"].firstMatch
         return conversationsTitle.exists || drawerContent.exists
     }
 

@@ -86,6 +86,13 @@ struct ChatView: View {
         }
     }
 
+    /// Attachment cluster (photo picker + paste): always in the composer
+    /// row so the affordance never jumps layout as models load or vision
+    /// capability changes. Gating stays logic-only — the controls disable
+    /// (dimmed to the `tertiaryText` disabled voice, with a spoken reason)
+    /// when there is no resident vision-capable model, instead of leaving
+    /// the hierarchy. The text field and send keep their own `chatReady`
+    /// gating; this cluster adds the vision-capable requirement on top.
     var attachmentButtons: some View {
         HStack(spacing: ZiroTheme.Spacing.medium) {
             PhotosPicker(selection: $selectedPhotos, maxSelectionCount: 10, matching: .images) {
@@ -94,8 +101,13 @@ struct ChatView: View {
                     .frame(width: composerControlSide, height: composerControlSide)
                     .contentShape(Rectangle())
             }
+            .disabled(!attachmentsEnabled)
             .accessibilityLabel("Add photos")
-            .accessibilityHint("Attach up to 10 images to this message")
+            .accessibilityHint(
+                attachmentsEnabled
+                    ? "Attach up to 10 images to this message"
+                    : "Attach images, unavailable until a vision-capable model is loaded"
+            )
             .onChange(of: selectedPhotos) { _, items in
                 Task {
                     for item in items {
@@ -117,14 +129,28 @@ struct ChatView: View {
                     // disabled, so the paste glyph must dim itself explicitly.
                     // `tertiaryText` is the quiet-metadata token — the closest
                     // verified "disabled voice" in the design system.
-                    .foregroundStyle(canPasteImage ? Color.accentColor : ZiroTheme.tertiaryText)
+                    .foregroundStyle(pasteTint)
                     .frame(width: composerControlSide, height: composerControlSide)
                     .contentShape(Rectangle())
             }
-            .disabled(!canPasteImage)
+            .disabled(!canPasteImage || !attachmentsEnabled)
             .accessibilityLabel("Paste image")
+            .accessibilityHint(
+                attachmentsEnabled
+                    ? "Paste an image from the clipboard"
+                    : "Paste image, unavailable until a vision-capable model is loaded"
+            )
         }
-        .foregroundStyle(Color.accentColor)
+        .foregroundStyle(attachmentsEnabled ? Color.accentColor : ZiroTheme.tertiaryText)
+    }
+
+    /// Attachment gating: resident AND vision-capable. The cluster renders
+    /// always-visible-but-disabled otherwise (see `inputBar`) so the row
+    /// never reflows and VoiceOver keeps a stable landmark.
+    private var attachmentsEnabled: Bool { chatReady && viewModel.isVisionModel }
+
+    private var pasteTint: Color {
+        (canPasteImage && attachmentsEnabled) ? Color.accentColor : ZiroTheme.tertiaryText
     }
 
     var sendButton: some View {
@@ -326,14 +352,17 @@ extension ChatView {
         .accessibilityElement(children: .combine)
     }
 
-    /// The brand moment (design system §8.1): mark over the ember glow,
-    /// wordmark, title, privacy message, working sample-prompt chips, and —
+    /// The brand moment (design system §8.1): mark over the accent glow,
+    /// wordmark, title, privacy message, working sample-prompt cards, and —
     /// only when nothing is installed — the catalog CTA.
+    /// Centered hello moment (dark-navy taste): greeting title, privacy
+    /// message, working sample-prompt cards, and — only when nothing is
+    /// installed — the catalog CTA.
     var emptyState: some View {
         ZiroEmptyState(
-            title: "Start a conversation",
+            title: "Hello, Ask Me Anything",
             message: "Ask anything below. Your messages and the model's response stay on this device.",
-            suggestions: viewModel.availableModels.isEmpty ? [] : Self.samplePrompts,
+            suggestionItems: viewModel.availableModels.isEmpty ? [] : Self.samplePrompts,
             onSuggestion: { suggestion in
                 // Reuses the existing send flow: the prompt lands in the
                 // composer (trailing space so typing continues naturally)
@@ -365,12 +394,23 @@ extension ChatView {
         .padding(.top, ZiroTheme.Spacing.heroTop)
     }
 
-    /// Guided starting points rendered by `ZiroEmptyState`'s chip row
-    /// (wraps across lines at any Dynamic Type size via ZiroFlowLayout).
+    /// Guided starting points rendered by `ZiroEmptyState`'s capability
+    /// cards (reference-style rows with per-card tinted dot + chevron).
+    /// Same prompt strings as before — only the presentation changed — so
+    /// the send flow (append + focus) is untouched.
     private static let samplePrompts = [
-        "Explain a concept simply",
-        "Help me draft a reply",
-        "Summarize my notes"
+        ZiroSuggestion(
+            text: "Explain quantum computing in simple terms",
+            dot: ZiroTheme.accentPurpleText
+        ),
+        ZiroSuggestion(
+            text: "How do I make an HTTP request in JavaScript?",
+            dot: ZiroTheme.infoText
+        ),
+        ZiroSuggestion(
+            text: "Summarize my notes",
+            dot: ZiroTheme.warningText
+        )
     ]
 
     // MARK: Scrolling
