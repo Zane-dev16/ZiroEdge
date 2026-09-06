@@ -33,6 +33,10 @@ struct VariantPickerView: View {
             )
                 .contentShape(Rectangle())
                 .onTapGesture { selection = artifact }
+                // VoiceOver double-tap must select the mandatory GGUF
+                // variant: button traits alone do not fire onTapGesture,
+                // so mirror the tap in an accessibility action.
+                .accessibilityAction { selection = artifact }
         }
     }
 }
@@ -62,7 +66,11 @@ struct VariantRow: View {
                     Text(caption)
                         .font(ZiroType.caption)
                         .foregroundStyle(ZiroTheme.tertiaryText)
-                        .lineLimit(1)
+                        // Safety signal — must never truncate the memory-fit
+                        // text on the mandatory-choice step. Matches the
+                        // SourceStep hint pattern: no lineLimit + vertical
+                        // fixedSize so it wraps (incl. AX sizes).
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Text("SHA-256 \(artifact.sha256.prefix(12))…")
                     .font(ZiroType.technical(.caption2))

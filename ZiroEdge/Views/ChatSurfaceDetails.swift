@@ -210,7 +210,12 @@ extension ChatView {
             .padding(.bottom, ZiroTheme.Spacing.medium)
         }
         .padding(.top, ZiroTheme.Spacing.small)
-        .background(.bar)
+        .background(ZiroTheme.pageBackground)
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(ZiroTheme.hairline)
+                .frame(height: 1)
+        }
     }
 
     /// Replaces the former input-bar model capsule: token usage while ready,

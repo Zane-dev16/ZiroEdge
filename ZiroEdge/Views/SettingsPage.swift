@@ -35,8 +35,7 @@ struct SettingsPage: View {
     @State private var appMemoryHeadroom: String = "Loading..."
     @State private var totalRAM: String = "Loading..."
 
-    private static let privacyPolicyURL = URL(string: "https://zane-dev16.github.io/ZiroEdge/privacy.html")
-        ?? URL(fileURLWithPath: "/")
+    private static let privacyPolicyURL = ZiroEdgeApp.privacyPolicyURL
 
     /// Read from the bundle at runtime so this row can never drift from the
     /// project's marketing-version / build-number settings on a version bump.
@@ -180,9 +179,7 @@ struct SettingsPage: View {
 
             // Legal section.
             Section {
-                NavigationLink {
-                    LicenseView()
-                } label: {
+                NavigationLink(value: ShellRoute.license) {
                     Label("Licenses", systemImage: "doc.text")
                 }
 

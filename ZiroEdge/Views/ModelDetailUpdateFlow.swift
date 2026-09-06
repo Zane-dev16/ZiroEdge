@@ -150,6 +150,7 @@ struct UpdateFlowSheet: View {
                     set: {
                         selectedBase = $0
                         updatePairConfirmed = false
+                        updateRAMRiskAccepted = false
                     }
                 ),
                 capabilityEstimate: {

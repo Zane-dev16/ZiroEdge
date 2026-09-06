@@ -245,9 +245,7 @@ struct ModelsView: View {
     private func catalogRow(_ model: AIModel, subtitle: String) -> some View {
         let status = viewModel.status(for: model)
         return HStack(spacing: ZiroTheme.Spacing.small) {
-            NavigationLink {
-                ModelDetailView(model: model, viewModel: viewModel, onStartChatting: onStartChatting)
-            } label: {
+            NavigationLink(value: ShellRoute.modelDetail(id: model.id)) {
                 ModelRow(model: model, subtitle: subtitle, status: status)
             }
             if status.isDownloading {

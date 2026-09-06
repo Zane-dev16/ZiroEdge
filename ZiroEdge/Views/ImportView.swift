@@ -111,7 +111,7 @@ struct SourceStepView: View {
     /// accent ring (the keyboard focus indicator).
     @FocusState private var repositoryFieldFocused: Bool
 
-    /// Source-choice icon squares: 44×44 min, scaling with Dynamic Type.
+    /// Source-choice icon squares: 44x44 min, scaling with Dynamic Type.
     @ScaledMetric(relativeTo: .title3) private var sourceIconSide: CGFloat = 44
 
     var body: some View {
@@ -197,35 +197,9 @@ struct SourceStepView: View {
                 }
                 .accessibilityElement(children: .combine)
             }
-
-            ZiroCard {
-                HStack(spacing: ZiroTheme.Spacing.medium) {
-                    Image(systemName: "doc")
-                        .font(.title2)
-                        .foregroundStyle(ZiroTheme.secondaryText)
-                        .frame(width: sourceIconSide, height: sourceIconSide)
-                        .background(
-                            ZiroTheme.accentContainer,
-                            in: RoundedRectangle(cornerRadius: ZiroTheme.Radius.small, style: .continuous)
-                        )
-                        .accessibilityHidden(true)
-                    VStack(alignment: .leading, spacing: ZiroTheme.Spacing.micro) {
-                        HStack(spacing: ZiroTheme.Spacing.xSmall) {
-                            Text("Local GGUF File")
-                                .font(ZiroType.rowTitle)
-                            // The one badge system — neutral stub tone.
-                            ZiroBadge(text: "Coming soon", tone: .neutral)
-                        }
-                        Text("Import a model file stored on this device.")
-                            .font(ZiroType.caption)
-                            .foregroundStyle(ZiroTheme.secondaryText)
-                    }
-                    Spacer()
-                }
-                .accessibilityElement(children: .combine)
-            }
-            .opacity(0.55)
-            .accessibilityHint("Not available yet")
+            // Local GGUF File import hidden for 1.0: no pipeline exists yet.
+            // Do not ship a dimmed dead card (App Review 2.1 risk). Re-add when
+            // file-picker import is wired.
         }
     }
 
@@ -353,6 +327,7 @@ struct ArtifactStepView: View {
                             set: { artifact in
                                 viewModel.selectedBase = artifact
                                 viewModel.visionPairConfirmed = false
+                                viewModel.ramRiskAccepted = false
                             }
                         ),
                         capabilityEstimate: { viewModel.capabilityEstimate(for: $0) }
