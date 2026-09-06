@@ -142,12 +142,15 @@ final class ChatViewModel: ObservableObject {
     /// Read-shared with the persistence-recovery extension in
     /// ChatPersistenceRecovery.swift.
     let sessionActor: ChatSessionActor
-    /// Read-shared with the deferred-load extensions in ChatModelLoading.swift.
+    /// Read-shared with the deferred-load extensions in
+    /// ChatModelLoading.swift.
     let lifecycleManager: ModelLifecycleManager
-    private let downloadStatusProvider: any ModelDownloadStatusProvider
+    /// Read-shared with the send-preflight helper in ChatModelLoading.swift.
+    let downloadStatusProvider: any ModelDownloadStatusProvider
     private let modelProvider: () -> [AIModel]
     private let titleGenerator: TitleGenerator
-    private let logger = Logger(subsystem: "com.zanish-labs.ziroedge", category: "chat-vm")
+    /// Read-shared with the send-preflight helper in ChatModelLoading.swift.
+    let logger = Logger(subsystem: "com.zanish-labs.ziroedge", category: "chat-vm")
 
     /// Weak reference to the conversation list ViewModel for sidebar reloads.
     weak var conversationListViewModel: ConversationListViewModel?
@@ -643,6 +646,9 @@ extension ChatViewModel {
         if selectedModel == nil { autoSelectModel() }
         guard let selectedModel else { needsModelRedirect = true; return nil }
 
+        // Verifier-backed preflight (SHA-256 + GGUF structure via download
+        // status), not modelType alone — see sendPreflightPassed(for:hasImages:).
+        guard sendPreflightPassed(for: selectedModel, hasImages: hasImages) else { return nil }
         if hasImages && !isVisionModel {
             visionWarning = "Vision not supported with text-only model. Switch to a vision model."
             return nil

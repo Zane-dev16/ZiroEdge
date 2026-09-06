@@ -102,9 +102,14 @@ extension DownloadManager: URLSessionDownloadDelegate, URLSessionDataDelegate {
                 correlationID: transferCID,
                 modelID: task.model.id,
                 artifact: artifactLabel,
-                state: "received",
+                state: "staged-awaiting-verify",
                 expectedBytes: task.expectedBytes
             )
+            // "Complete" here means bytes were received and staged — not
+            // that the artifact is verified. Promotion (SHA-256 + atomic
+            // install) still has to run; a crash before `promotionSuccess`
+            // leaves staged bytes that must be re-verified, never trusted.
+            logger.info("Bytes received, awaiting verify: \(key, privacy: .public)")
             if let failure = DownloadTransportValidator.failure(
                 response: response,
                 bodyURL: location,
@@ -129,10 +134,15 @@ extension DownloadManager: URLSessionDownloadDelegate, URLSessionDataDelegate {
                 return
             }
             do {
+                // Single active transfer per storage ID (single-flight via
+                // registerActiveTaskIfAbsent), so no sibling promotion can
+                // race this staging slot.
                 if fileManager.fileExists(atPath: task.stagingURL.path) {
                     try fileManager.removeItem(at: task.stagingURL)
                 }
                 try fileManager.moveItem(at: location, to: task.stagingURL)
+                let stagingName = DownloadDiagnosticRedactor.sanitizedFilename(task.stagingURL)
+                logger.info("Staged for verify: \(key, privacy: .public) file=\(stagingName, privacy: .public)")
                 verifyAndPromoteOffMain(task: task, key: key)
                 return
             } catch {

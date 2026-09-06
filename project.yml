@@ -22,12 +22,15 @@ targets:
       - path: ZiroEdge/Resources/Assets.xcassets
     # Branded launch screen (spec §Launch): xcodegen writes Config/Info.plist
     # with the UILaunchScreen dictionary referencing the LaunchBackground
-    # colorset (universal #F7F3EC, dark #151210) and the AppLogo imageset
-    # (the ZE logo). ModelCatalogVersion is
+    # colorset (universal #F7F3EC, dark #0A0F1E matching ZiroTheme.pageBackground)
+    # and the AppLogoLaunch imageset (the ZE logo at 1x/2x/3x launch scales:
+    # 120/240/360pt — the in-app AppLogo asset is 1254px with a single
+    # universal scale, which iOS renders cropped/zoomed on the splash).
+    # ModelCatalogVersion is
     # carried here so the generated plist keeps its existing key. When the
     # project is regenerated, the explicit plist dict wins over generated
     # keys (GENERATE_INFOPLIST_FILE merges the file) — so the launch screen
-    # renders the logo over the warm-paper/graphite background instead of
+    # renders the logo over the warm-paper/navy background instead of
     # a bare black.
     info:
       path: Config/Info.plist
@@ -35,7 +38,7 @@ targets:
         ModelCatalogVersion: "1"
         UILaunchScreen:
           UIColorName: LaunchBackground
-          UIImageName: AppLogo
+          UIImageName: AppLogoLaunch
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.zanish-labs.ziroedge

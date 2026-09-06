@@ -81,8 +81,17 @@ struct ZiroEdgeApp: App {
                     } else if phase == .active {
                         MemoryDiagnosticRecorder.shared.capture(.foreground)
                     }
-                    guard phase == .background,
-                          case .ready(let services) = runtime.state else { return }
+                    guard case .ready(let services) = runtime.state else { return }
+                    if phase == .active {
+                        // Background eviction parks the chat on `.evicted` with
+                        // no re-kick (ChatView stays mounted, so onAppear never
+                        // re-fires). Re-kick the idempotent deferred loader so
+                        // a visible evicted chat auto-reloads; the
+                        // isUserUnloaded gate keeps Settings → Unload parked.
+                        services.chatViewModel.handleForegroundTransition()
+                        return
+                    }
+                    guard phase == .background else { return }
                     services.downloadManager.handleBackgroundTransition()
                     Task {
                         await services.lifecycleManager.handleBackgroundTransition()
@@ -100,14 +109,11 @@ struct ZiroEdgeApp: App {
     @ViewBuilder
     private var rootView: some View {
         switch runtime.state {
-        case .loading(let attempt):
-            StoreOperationProgressView(
-                symbol: "lock.open.display",
-                title: "Opening local history",
-                message: attempt > 1
-                    ? "Retry attempt \(attempt). Large histories can take a moment to verify."
-                    : "Preparing your private conversations on this device."
-            )
+        case .loading:
+            // Minimal first frame: logo + spinner only. Copy about history
+            // or verification lives on the deferred recovery surfaces, not
+            // the cold-launch path.
+            LaunchLoadingView()
         case .ready(let services):
             AppShellView(services: services, onboardingManager: onboardingManager)
                 .overlay(alignment: .top) {

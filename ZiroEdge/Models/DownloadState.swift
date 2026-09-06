@@ -165,6 +165,9 @@ struct ModelDownloadStatus: Sendable, Hashable {
     }
 
     /// Whether text inference can run with the currently verified artifacts.
+    /// For `allowsTextOnly` models (E2B) a verified base alone is text-ready;
+    /// every other vision pair needs its projector too. Vision readiness always
+    /// requires both — see `isVisionReady` / `isPairComplete`.
     var isReady: Bool {
         guard baseState.isDownloaded else { return false }
         guard let mmproj = mmprojState else { return true }
@@ -174,6 +177,29 @@ struct ModelDownloadStatus: Sendable, Hashable {
     var isVisionReady: Bool {
         guard baseState.isDownloaded, let mmprojState else { return false }
         return mmprojState.isDownloaded
+    }
+
+    /// True pair completion: every required artifact verified, with no
+    /// `allowsTextOnly` exception. `displayState == .downloaded` means the
+    /// requested capability is ready (text-ready for E2B base-only,
+    /// pair-ready otherwise); use this — or `isVisionReady` for vision
+    /// models — whenever both byte streams must be proven before proceeding
+    /// (completion gates, preflight, pair-level logging).
+    var isPairComplete: Bool {
+        guard baseState.isDownloaded else { return false }
+        guard let mmproj = mmprojState else { return true }
+        return mmproj.isDownloaded
+    }
+
+    /// Machine-readable reason the pair is incomplete, for logging and
+    /// preflight. Nil when `isPairComplete`.
+    var incompleteReason: String? {
+        if isPairComplete { return nil }
+        if !baseState.isDownloaded { return "base-incomplete" }
+        if let mmproj = mmprojState, !mmproj.isDownloaded {
+            return "mmproj-incomplete"
+        }
+        return "unknown"
     }
 
     /// Summaries for partial outcomes such as valid base + failed projector.
@@ -265,9 +291,15 @@ struct ModelDownloadStatus: Sendable, Hashable {
             return .failed(error: failure)
         }
         if states.contains(.cancelled) { return .cancelled }
-        // When base is downloaded but vision model projector is not yet started.
+        // A vision pair with verified base but a missing projector is
+        // incomplete — never complete. E2B text-ready base-only already
+        // returned `.downloaded` via `isReady` above; this branch only runs
+        // when `!isReady`, i.e. the projector is genuinely still required
+        // (E4B and every non-`allowsTextOnly` vision pair). Surfacing
+        // `.notDownloaded` keeps repair banners and retry paths reachable
+        // instead of masking the gap as installed.
         if let mmprojState, baseState.isDownloaded, mmprojState == .notDownloaded, !isReady {
-            return .downloaded
+            return .notDownloaded
         }
         return .notDownloaded
     }

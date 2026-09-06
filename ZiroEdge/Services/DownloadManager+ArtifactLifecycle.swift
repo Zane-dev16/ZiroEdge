@@ -33,6 +33,8 @@ extension DownloadManager {
 
         task.isPaused = false
         task.isCancelled = false
+        // Verified staged bytes re-verify off-main instead of redownloading.
+        if repromoteStagingIfValid(model: model, artifact: artifact) { return }
         task.state = .resuming(progress: task.progress)
         DownloadDiagnosticRecorder.shared.record(
             event: .downloadResume,

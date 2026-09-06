@@ -37,7 +37,7 @@ final class ModelsViewModel: ObservableObject {
 
     let downloadManager: DownloadManager
     let lifecycleManager: ModelLifecycleManager
-    private let launchOfflineAvailabilityReport: OfflineAvailabilityReport
+    private(set) var launchOfflineAvailabilityReport: OfflineAvailabilityReport
     private let importedModelStore: ImportedModelStore
     private let importedModelUpdateStore: ImportedModelUpdateStore
     /// Storage queries behind a protocol so tests can substitute isolated readers.
@@ -67,7 +67,7 @@ final class ModelsViewModel: ObservableObject {
     init(
         downloadManager: DownloadManager,
         lifecycleManager: ModelLifecycleManager,
-        offlineAvailabilityReport: OfflineAvailabilityReport = OfflineAvailabilityGuard.sweep(),
+        offlineAvailabilityReport: OfflineAvailabilityReport = OfflineAvailabilityGuard.empty,
         importedModelStore: ImportedModelStore = .shared,
         importedModelUpdateStore: ImportedModelUpdateStore = .shared,
         storageReader: any ModelStorageReader.Type = ModelManagerService.self
@@ -94,6 +94,14 @@ final class ModelsViewModel: ObservableObject {
                 self?.objectWillChange.send()
             }
             .store(in: &cancellables)
+    }
+
+    /// Receives the deferred post-first-frame sweep. The launch placeholder
+    /// (`.empty`) must never gate `.ready`, so the verified report lands here
+    /// once hashing completes off-main.
+    func updateOfflineReport(_ report: OfflineAvailabilityReport) {
+        launchOfflineAvailabilityReport = report
+        objectWillChange.send()
     }
 
     // MARK: - Actions

@@ -101,6 +101,17 @@ extension ChatViewModel {
         spawnDeferredLoadTask()
     }
 
+    /// Foreground re-kick for background/memory-pressure eviction. The chat
+    /// stays mounted across backgrounding (AppShell keeps ChatView as the
+    /// base layer), so `onAppear` never re-fires — without this the `.evicted`
+    /// projection parks on the inline "Model unloaded" banner with a
+    /// disabled composer until the user taps Reload. Reuses the same
+    /// `isUserUnloaded` gate as the appear-time kick: system eviction
+    /// reloads, Settings → Unload stays parked.
+    func handleForegroundTransition() {
+        startDeferredModelLoadIfNeeded()
+    }
+
     /// Explicit user-driven retry from the header pill or inline row. Unlike
     /// the appear-time kick this may also replay `.failed` attempts.
     func retryModelLoad() {
@@ -144,6 +155,12 @@ extension ChatViewModel {
         // Reaching the loader consumes a prior user-unload intent: an explicit
         // retry here (or a fresh nomination below) deliberately loads.
         lifecycleManager.consumeUserUnloadIntent()
+        // An auto-recovery load supersedes the pressure-eviction modal: drop
+        // it now so it never lingers over a successful reload (the inline
+        // loading/retry rows own recovery from here). Harmless when no modal
+        // is up (background eviction never presents one; user-unload never
+        // sets it).
+        lifecycleManager.dismissMemoryWarning()
         // Controlled-workload UI tests drive their own load choreography.
         if MemoryDiagnosticRecorder.shared.controlledWorkloadEnabled {
             deferredLoadTask = Task { @MainActor [weak self] in
@@ -170,7 +187,13 @@ extension ChatViewModel {
     private func performDeferredLoad(candidate: AIModel) async {
         let result = await lifecycleManager.loadModel(candidate)
         refreshModelLoadPhase()
-        guard case .failed(let failure) = result else { return }
+        guard case .failed(let failure) = result else {
+            // Belt-and-suspenders: spawn already dismissed the modal when the
+            // load started; re-assert on success in case pressure raised one
+            // mid-flight without invalidating the load.
+            lifecycleManager.dismissMemoryWarning()
+            return
+        }
         modelLoadPhase = .failed(failure.message)
         // The chat surface owns recovery for auto-loads — the inline retry row
         // replaces an alert dump here; failures initiated elsewhere still raise
@@ -184,5 +207,36 @@ extension ChatViewModel {
         await lifecycleManager.autoLoadFirstModel()
         selectedModel = lifecycleManager.activeModel ?? selectedModel
         refreshModelLoadPhase()
+    }
+
+    // MARK: - Send Preflight
+
+    /// Verifier-backed send gate. Reads the download status derived from
+    /// `authoritativeDiskStatus` (per-artifact SHA-256 + GGUF structure), not
+    /// `modelType` alone: a vision row whose projector is missing or corrupt
+    /// must block image sends even though the model advertises vision, and an
+    /// incomplete pair must block text sends before the lifecycle's load
+    /// attempt. Surfaces the matching banner and returns false when the send
+    /// must stop; true when it may proceed.
+    func sendPreflightPassed(for model: AIModel, hasImages: Bool) -> Bool {
+        let status = downloadStatusProvider.status(for: model)
+        guard status.isReady else {
+            let reason = status.incompleteReason ?? "incomplete"
+            logger.warning("Send blocked, model incomplete: \(model.id, privacy: .public)")
+            logger.warning("Incomplete reason: \(reason, privacy: .public)")
+            errorMessage = "\(model.displayName) is not fully downloaded (\(reason)). " +
+                "Repair it or choose another model, then retry."
+            showError = true
+            return false
+        }
+        // Text-only models keep the legacy modelType message at the call
+        // site; this gate only covers vision rows with an unverified projector.
+        if hasImages, model.modelType == .vision, !status.isVisionReady {
+            logger.warning("Send blocked, vision not ready: \(model.id, privacy: .public)")
+            visionWarning = "Vision is not ready for this model yet. " +
+                "Finish downloading its image processing files, or switch to a vision-ready model."
+            return false
+        }
+        return true
     }
 }

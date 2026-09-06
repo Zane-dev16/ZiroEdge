@@ -76,6 +76,45 @@ enum OfflineAvailabilityGuard {
         set { sweepFlagLock.withLock { $0 = newValue } }
     }
 
+    /// Placeholder published with `.ready` so first frame never waits on
+    /// hashing. The deferred post-first-frame sweep replaces it via
+    /// `ModelsViewModel.updateOfflineReport`.
+    static var empty: OfflineAvailabilityReport {
+        OfflineAvailabilityReport(timestamp: Date(), models: [:], diagnostics: [])
+    }
+
+    /// Repair-branch verdict for the launch sweep: E2B's base is a legitimate
+    /// text-only runtime, so a missing projector alone (verified base, nothing
+    /// else wrong) reports text-only ready instead of repair-needed — keeping
+    /// the offline badge, the models list, and the chat picker in agreement
+    /// with `ModelDownloadStatus.isReady`. Any other issue (corrupt base,
+    /// size/SHA mismatch) stays repair-needed with its diagnostic.
+    private static func repairReadiness(
+        for model: AIModel,
+        issues: [ArtifactIssue]
+    ) -> (OfflineModelReadiness, String) {
+        if model.allowsTextOnlyCapability, issues == [.missing(artifact: .mmproj)] {
+            return (
+                .ready(textOnly: true),
+                "[offline-guard] \(model.id): verified — ready for offline use (text-only)"
+            )
+        }
+        let issueDescriptions = issues.map { issue -> String in
+            switch issue {
+            case .sha256Mismatch: "SHA-256 mismatch"
+            case .sizeMismatch: "size mismatch"
+            case .missingGGUFHeader: "missing GGUF header"
+            case .fileNotFound: "file not found"
+            case .missing(let artifact): "missing \(artifact == .base ? "base" : "mmproj") artifact"
+            case .unknown(let detail): "unknown: \(detail)"
+            }
+        }
+        return (
+            .repairNeeded(issues: issues),
+            "[offline-guard] \(model.id): repair needed — \(issueDescriptions.joined(separator: ", "))"
+        )
+    }
+
     private static func makeReport(extraModels: [AIModel]) -> OfflineAvailabilityReport {
         let all = ModelRegistry.allModels + extraModels
         var models: [String: OfflineModelReadiness] = [:]
@@ -91,20 +130,9 @@ enum OfflineAvailabilityGuard {
                     "[offline-guard] \(model.id): verified — ready for offline use\(textOnly ? " (text-only)" : "")"
                 )
             case .repairNeeded(let issues):
-                models[model.id] = .repairNeeded(issues: issues)
-                let issueDescriptions = issues.map { issue -> String in
-                    switch issue {
-                    case .sha256Mismatch: "SHA-256 mismatch"
-                    case .sizeMismatch: "size mismatch"
-                    case .missingGGUFHeader: "missing GGUF header"
-                    case .fileNotFound: "file not found"
-                    case .missing(let artifact): "missing \(artifact == .base ? "base" : "mmproj") artifact"
-                    case .unknown(let detail): "unknown: \(detail)"
-                    }
-                }
-                diagnostics.append(
-                    "[offline-guard] \(model.id): repair needed — \(issueDescriptions.joined(separator: ", "))"
-                )
+                let (readiness, diagnostic) = repairReadiness(for: model, issues: issues)
+                models[model.id] = readiness
+                diagnostics.append(diagnostic)
             case .unavailable:
                 models[model.id] = .unavailable
                 diagnostics.append("[offline-guard] \(model.id): unavailable")

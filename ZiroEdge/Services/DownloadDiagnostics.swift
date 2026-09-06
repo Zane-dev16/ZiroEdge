@@ -34,6 +34,13 @@ enum DownloadDiagnosticEvent: String, Codable, Sendable {
     case promotionAttempt    = "promotion_attempt"
     case promotionSuccess    = "promotion_success"
     case promotionFailed     = "promotion_failed"
+    /// Both required artifacts of one user intent are verified and promoted.
+    /// Per-artifact events above can each read "complete" in isolation; only
+    /// this event means the pair is usable (vision-ready, or text-ready for
+    /// text-only intents).
+    case pairComplete        = "pair_complete"
+    /// Healer (retryInvalidArtifacts / resume re-verify) re-queued work.
+    case healerAction        = "healer_action"
     case durableStateWritten = "durable_state_written"
     case durableStateWriteFailed = "durable_state_write_failed"
     case durableStateCleared = "durable_state_cleared"
@@ -209,6 +216,14 @@ enum DownloadDiagnosticRedactor {
     static func sanitizedHost(_ url: URL) -> String {
         guard let host = url.host else { return "<redacted URL>" }
         return "\(url.scheme ?? "https")://\(host)"
+    }
+
+    /// Sanitized file identity for logs: final path component only. Absolute
+    /// container paths, hashes, and signed-URL query items must never reach
+    /// os.Logger or the diagnostic export.
+    static func sanitizedFilename(_ url: URL) -> String {
+        let name = url.lastPathComponent
+        return name.isEmpty ? "<unnamed file>" : sanitize(name)
     }
 }
 
@@ -441,7 +456,9 @@ final class DownloadDiagnosticRecorder: @unchecked Sendable {
                     artifact: payload.artifact,
                     expectedBytes: payload.expectedBytes,
                     actualBytes: payload.actualBytes,
-                    verified: payload.event == .downloadComplete || payload.event == .validationComplete,
+                    verified: payload.event == .validationComplete
+                        || payload.event == .promotionSuccess
+                        || payload.event == .pairComplete,
                     lastEvent: payload.event.rawValue,
                     lastEventTime: payload.timestamp
                 )

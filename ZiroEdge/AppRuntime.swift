@@ -137,19 +137,16 @@ final class AppRuntime: ObservableObject {
         }.value
         switch result {
         case .success(let persistence):
-            switch await persistence.recoverIncompleteStreams() {
-            case .success:
+            // Fast path: publish `.ready` with lightweight services so the
+            // first frame never waits on stream recovery, digest
+            // verification, or the offline sweep. Those follow post-frame in
+            // `finishLaunchSetup`.
+            do {
+                let services = try await makeServices(persistence: persistence)
                 lastFailure = nil
                 diagnosticsURL = nil
                 diagnosticsExportError = nil
-                do {
-                    state = .ready(try await makeServices(persistence: persistence))
-                } catch {
-                    state = .loadSafetyFailed(
-                        message: "Load-safety storage is unavailable or corrupt. Model loading is blocked to protect this device."
-                    )
-                    return
-                }
+                state = .ready(services)
                 if isCompletingReset {
                     isCompletingReset = false
                     postResetMessage = "Local history reset successfully. You can start a new conversation."
@@ -158,14 +155,35 @@ final class AppRuntime: ObservableObject {
                         self?.postResetMessage = nil
                     }
                 }
-            case .failure(let failure):
-                lastFailure = failure
-                state = .failed(failure)
+                Task { [weak self] in
+                    await self?.finishLaunchSetup(persistence: persistence, services: services)
+                }
+            } catch {
+                state = .loadSafetyFailed(
+                    message: "Load-safety storage is unavailable or corrupt. Model loading is blocked to protect this device."
+                )
             }
         case .failure(let failure):
             lastFailure = failure
             state = .failed(failure)
         }
+    }
+
+    /// Deferred launch work that must not gate first frame: incomplete-stream
+    /// recovery, full digest verification, and the offline sweep. Runs after
+    /// `.ready` has published; heavy hashing hops off-main internally.
+    private func finishLaunchSetup(persistence: PersistenceController, services: RuntimeServices) async {
+        switch await persistence.recoverIncompleteStreams() {
+        case .success:
+            break
+        case .failure(let failure):
+            lastFailure = failure
+            state = .failed(failure)
+            return
+        }
+        await services.downloadManager.refreshStatusesFromDisk()
+        let report = await OfflineAvailabilityGuard.sweep(extraModels: ModelRegistry.importedModels)
+        services.modelsViewModel.updateOfflineReport(report)
     }
 
     private func makeServices(persistence: PersistenceController) async throws -> RuntimeServices {
@@ -200,7 +218,11 @@ final class AppRuntime: ObservableObject {
             downloadStatusProvider: downloadManager
         )
         chatViewModel.conversationListViewModel = conversationListViewModel
-        let offlineReport = await OfflineAvailabilityGuard.sweep(extraModels: ModelRegistry.importedModels)
+        // Startup placeholder: the verified report lands post-first-frame via
+        // finishLaunchSetup -> updateOfflineReport, so `.ready` never waits
+        // on hashing. The sync sweep default is gone from ModelsViewModel
+        // precisely to keep stray call sites off the digest path.
+        let offlineReport = OfflineAvailabilityGuard.empty
         let modelsVM = ModelsViewModel(
             downloadManager: downloadManager,
             lifecycleManager: lifecycleManager,

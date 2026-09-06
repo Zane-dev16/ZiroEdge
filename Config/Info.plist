@@ -25,7 +25,7 @@
 		<key>UIColorName</key>
 		<string>LaunchBackground</string>
 		<key>UIImageName</key>
-		<string>AppLogo</string>
+		<string>AppLogoLaunch</string>
 	</dict>
 </dict>
 </plist>

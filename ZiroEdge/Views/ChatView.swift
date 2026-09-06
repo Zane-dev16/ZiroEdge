@@ -41,6 +41,7 @@ struct ChatView: View {
     @State private var lastScrollTime: Date = .distantPast
     @State private var pendingScrollTask: Task<Void, Never>?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         VStack(spacing: 0) {
@@ -59,6 +60,16 @@ struct ChatView: View {
             // Deferred autoload lives here rather than at startup: reaching
             // the chat never waits on model work (master plan §B).
             viewModel.startDeferredModelLoadIfNeeded()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            // The chat stays mounted across backgrounding (compact shell base
+            // layer / split detail), so onAppear never re-fires on return.
+            // Re-kick the same idempotent loader so a system-evicted model
+            // auto-reloads; user-unload intent stays parked via the existing
+            // gate inside startDeferredModelLoadIfNeeded.
+            if phase == .active {
+                viewModel.handleForegroundTransition()
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIPasteboard.changedNotification)) { _ in
             refreshPasteboardState()

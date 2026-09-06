@@ -333,6 +333,74 @@ extension ModelManagerService {
         }
         return .repairNeeded(issues: issues)
     }
+
+    /// Startup fast-path: file existence + byte size + GGUF structure only.
+    /// Skips the multi-GB SHA-256 digest pass so cold launch never waits on
+    /// hashing. The post-first-frame refresh (`DownloadManager.refreshStatusesFromDisk`
+    /// + `OfflineAvailabilityGuard.sweep`) re-verifies digests off-main and
+    /// corrects any optimistic `.ready` (a hash mismatch surfaces as
+    /// `.repairNeeded` there). Same taxonomy as `availability(for:)` so the
+    /// seeded statuses map onto identical UI states.
+    static func quickAvailability(for model: AIModel) -> ModelAvailability {
+#if DEBUG
+        if HermeticUITestRuntime.isEnabled, model.id == ModelRegistry.llama32_3B.id {
+            // Match the full-check hermetic short-circuit so UI-test
+            // scenarios converge identically before/after verification.
+            return HermeticUITestRuntime.scenario == .needsDownload ? .unavailable : .ready
+        }
+#endif
+        guard model.catalogUnavailableReason == nil,
+              ModelCatalogValidator.catalogFailureReason(models: ModelRegistry.allModels) == nil else {
+            return .unavailable
+        }
+        var issues: [ArtifactIssue] = []
+        func checkQuick(_ path: URL, expectedBytes: Int64, artifact: ArtifactType) {
+            guard let size = (try? FileManager.default.attributesOfItem(atPath: path.path)[.size] as? NSNumber)?.int64Value else {
+                issues.append(.missing(artifact: artifact))
+                return
+            }
+            guard size == expectedBytes else {
+                issues.append(.sizeMismatch)
+                return
+            }
+            guard verifyGGUFHeader(fileURL: path) else {
+                issues.append(.missingGGUFHeader)
+                return
+            }
+        }
+        checkQuick(baseModelPath(for: model), expectedBytes: model.baseFileSizeBytes, artifact: .base)
+        if model.requiresMMProj {
+            checkQuick(
+                mmprojModelPath(for: model),
+                expectedBytes: model.mmprojFileSizeBytes ?? 0,
+                artifact: .mmproj
+            )
+        }
+        if issues.isEmpty {
+            return .ready
+        }
+        return .repairNeeded(issues: issues)
+    }
+
+    /// Hash-free presence probe (exists + byte size). Used by the startup
+    /// seed for per-artifact states; never quarantines, never hashes.
+    static func isArtifactPresent(_ model: AIModel, artifact: ArtifactType) -> Bool {
+        let path: URL
+        let expectedBytes: Int64
+        switch artifact {
+        case .base:
+            path = baseModelPath(for: model)
+            expectedBytes = model.baseFileSizeBytes
+        case .mmproj:
+            guard let bytes = model.mmprojFileSizeBytes else { return false }
+            path = mmprojModelPath(for: model)
+            expectedBytes = bytes
+        }
+        guard let size = (try? FileManager.default.attributesOfItem(atPath: path.path)[.size] as? NSNumber)?.int64Value else {
+            return false
+        }
+        return size == expectedBytes
+    }
 }
 
 // MARK: - Managed Storage Directories

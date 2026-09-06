@@ -122,15 +122,25 @@ final class DownloadManager: NSObject, ObservableObject {
         super.init()
         ModelMigrationService.ensureManagedDirectories()
         reconcileInterruptedPromotions()
-        updateStatusesFromDisk()
         restoreDurableTransfers()
-        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {
-            reclaimOrphanedStorage()
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
+            // Tests: historical synchronous behavior (full verification on-main).
+            updateStatusesFromDisk()
+            // BATCH-05: seed cache synchronously once at startup to avoid initial 0 flash; subsequent refreshes are off-main and coalesced
+            cachedStorageBreakdown = managedStorageBreakdown()
+            storageBreakdownComputeCount = 1
+            lastStorageBreakdownWasOffMain = false
+        } else {
+            // Cold launch: seed from the hash-free fast path and defer every
+            // heavy pass (digest verification, storage enumeration, orphan
+            // reclamation, background-task reconciliation) until after first
+            // frame via refreshStatusesFromDisk (driven by AppRuntime).
+            seedStatusesFromDiskQuick()
+            cachedStorageBreakdown = ManagedStorageBreakdown(installedBytes: 0, stagingBytes: 0, resumeBytes: 0, quarantineBytes: 0)
+            storageBreakdownComputeCount = 0
+            lastStorageBreakdownWasOffMain = nil
+            scheduleStorageBreakdownRefresh()
         }
-        // BATCH-05: seed cache synchronously once at startup to avoid initial 0 flash; subsequent refreshes are off-main and coalesced
-        cachedStorageBreakdown = managedStorageBreakdown()
-        storageBreakdownComputeCount = 1
-        lastStorageBreakdownWasOffMain = false
         reconcileBackgroundTasks()
         protectedDataObserver = NotificationCenter.default.addObserver(
             forName: UIApplication.protectedDataDidBecomeAvailableNotification,
@@ -225,6 +235,34 @@ final class DownloadManager: NSObject, ObservableObject {
         }
     }
 
+    /// Launch seed: hash-free statuses so init never hashes multi-GB
+    /// artifacts on the critical path. Replaced with verified values by
+    /// `refreshStatusesFromDisk` after first frame.
+    func seedStatusesFromDiskQuick() {
+        for model in ModelRegistry.libraryModels {
+            downloadStatuses[model.id] = Self.quickDiskStatus(for: model)
+        }
+    }
+
+    /// Post-first-frame refresh: full digest verification computed off-main,
+    /// then orphan reclamation, storage accounting, and background-task
+    /// reconciliation. Driven by AppRuntime after `.ready`; idempotent.
+    func refreshStatusesFromDisk() async {
+        let verified = await Task.detached(priority: .utility) {
+            var fresh: [String: ModelDownloadStatus] = [:]
+            for model in ModelRegistry.libraryModels {
+                fresh[model.id] = DownloadManager.diskStatus(for: model)
+            }
+            return fresh
+        }.value
+        for (id, status) in verified {
+            downloadStatuses[id] = status
+        }
+        reclaimOrphanedStorage()
+        scheduleStorageBreakdownRefresh()
+        reconcileBackgroundTasks()
+    }
+
     func recoverProtectedImportedState() {
         guard ModelRegistry.importedRegistriesAvailable else { return }
         updateStatusesFromDisk()
@@ -315,6 +353,12 @@ extension DownloadManager {
         let storageCID = DownloadDiagnosticRecorder.freshCorrelationID()
         let available = availableDiskSpace
         let required = requiredDownloadBytes(for: model, includeOptionalProjector: includeOptionalProjector)
+        // Log the user's intent: text-only E2B requests complete with the base
+        // alone, while vision requests need the pair. The pair-level observer
+        // distinguishes them via isReady vs isVisionReady — never infer intent
+        // from displayState alone.
+        logger.info("Start requested: \(model.id, privacy: .public)")
+        logger.info("Start scope: includeProjector=\(includeOptionalProjector) requiredBytes=\(required)")
         DownloadDiagnosticRecorder.shared.record(
             event: available >= required ? .storageCheck : .storageInsufficient,
             correlationID: storageCID,
@@ -436,11 +480,14 @@ extension DownloadManager {
         }
         updateStatus(model: model)
     }
-    /// Pause every active artifact for a model and retry only missing or
+    /// Pause every active artifact and retry only missing or
     /// invalid artifacts. Verified artifacts on disk are never replaced.
+    /// Staged bytes left behind by an interrupted promotion are re-verified
+    /// off-main and promoted when valid instead of being redownloaded.
     func retryInvalidArtifacts(for model: AIModel) {
         let baseKey = artifactTaskKey(model: model, artifact: .base)
         let mmprojKey = artifactTaskKey(model: model, artifact: .mmproj)
+        logger.info("Healer retrying invalid artifacts: \(model.id, privacy: .public)")
 
         // Pause every active artifact first.
         if let baseTask = activeTasks[baseKey], !baseTask.isPaused {
@@ -450,15 +497,26 @@ extension DownloadManager {
             pauseArtifactDownload(model: model, artifact: .mmproj)
         }
 
-        // Retry only artifacts that are missing or invalid.
+        // Retry only artifacts that are missing or invalid (verifier truth:
+        // full SHA-256 + GGUF structure via isBaseDownloaded/isMMProjDownloaded).
         let baseNeedsRetry = !ModelManagerService.isBaseDownloaded(model)
         let mmprojNeedsRetry = model.requiresMMProj && !ModelManagerService.isMMProjDownloaded(model)
+        DownloadDiagnosticRecorder.shared.record(
+            event: .healerAction,
+            correlationID: DownloadDiagnosticRecorder.freshCorrelationID(),
+            modelID: model.id,
+            artifact: "pair",
+            state: "retrying",
+            failureSummary: "baseNeedsRetry=\(baseNeedsRetry) mmprojNeedsRetry=\(mmprojNeedsRetry)"
+        )
 
         if baseNeedsRetry {
-            if activeTasks[baseKey] != nil {
-                resumeArtifactDownload(model: model, artifact: .base)
-            } else {
-                startArtifactDownload(model: model, artifact: .base)
+            if !repromoteStagingIfValid(model: model, artifact: .base) {
+                if activeTasks[baseKey] != nil {
+                    resumeArtifactDownload(model: model, artifact: .base)
+                } else {
+                    startArtifactDownload(model: model, artifact: .base)
+                }
             }
         } else if activeTasks[baseKey] != nil {
             activeTasks.removeValue(forKey: baseKey)
@@ -467,10 +525,12 @@ extension DownloadManager {
         }
 
         if mmprojNeedsRetry {
-            if activeTasks[mmprojKey] != nil {
-                resumeArtifactDownload(model: model, artifact: .mmproj)
-            } else {
-                startArtifactDownload(model: model, artifact: .mmproj)
+            if !repromoteStagingIfValid(model: model, artifact: .mmproj) {
+                if activeTasks[mmprojKey] != nil {
+                    resumeArtifactDownload(model: model, artifact: .mmproj)
+                } else {
+                    startArtifactDownload(model: model, artifact: .mmproj)
+                }
             }
         } else if activeTasks[mmprojKey] != nil {
             activeTasks.removeValue(forKey: mmprojKey)
@@ -772,6 +832,7 @@ extension DownloadManager {
         noteTransferProgress(key)
         persistDurableState(for: task)
         let transferCID = DownloadDiagnosticRecorder.transferCorrelationID(modelID: model.id, artifact: artifact.label)
+        logger.info("Starting artifact: \(key, privacy: .public) expectedBytes=\(task.expectedBytes)")
         DownloadDiagnosticRecorder.shared.record(
             event: .downloadStart,
             correlationID: transferCID,
