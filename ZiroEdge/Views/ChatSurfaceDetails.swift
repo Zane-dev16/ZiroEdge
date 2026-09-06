@@ -179,8 +179,9 @@ extension ChatView {
     /// Composer stack: the single compact model-picker pill, image
     /// previews, then the one rounded input well — the always-visible
     /// attachment cluster, the message field, and send riding one
-    /// well-elevation fill with a hairline rest state and an accent focus
-    /// ring. The well uses `Radius.control` (not `Radius.card`): it is a
+    /// well-elevation fill with a fill-only rest state and an accent focus
+    /// ring (canonical single composer treatment, matching `ziroComposerField`).
+    /// The well uses `Radius.control` (not `Radius.card`): it is a
     /// text field, and the radius scale assigns text fields/controls to
     /// `control` (design system §6.2, matching `ziroComposerField`). The
     /// text field and send stay disabled until the model is resident; the
@@ -194,13 +195,15 @@ extension ChatView {
 
             if !viewModel.pendingImages.isEmpty { imagePreviewRow }
 
-            HStack(alignment: .bottom, spacing: ZiroTheme.Spacing.small) {
+            HStack(alignment: .center, spacing: ZiroTheme.Spacing.small) {
                 attachmentButtons
                 TextField("Message ZiroEdge", text: $viewModel.inputText, axis: .vertical)
                     .textFieldStyle(.plain)
                     .accessibilityIdentifier("chatInput")
                     .accessibilityHint("Enter a message for the local model")
                     .lineLimit(1...6)
+                    .frame(minHeight: 44, alignment: .center)
+                    .padding(.vertical, ZiroTheme.Spacing.xSmall)
                     .focused($isInputFocused)
                     .disabled(!chatReady || viewModel.isLoadingConversation)
                     .onSubmit {
@@ -216,7 +219,7 @@ extension ChatView {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: ZiroTheme.Radius.control, style: .continuous)
-                    .stroke(isInputFocused ? Color.accentColor : ZiroTheme.hairline, lineWidth: isInputFocused ? 1.5 : 1)
+                    .stroke(isInputFocused ? Color.accentColor : .clear, lineWidth: 1.5)
             )
             .ziroAnimation(ZiroMotion.press, value: isInputFocused)
             .padding(.horizontal, ZiroTheme.Spacing.large)
@@ -226,12 +229,10 @@ extension ChatView {
         .background(ZiroTheme.pageBackground)
     }
 
-    /// Composer top row: the single compact model-picker pill — the sole
-    /// identity surface (same phases, menu, and VoiceOver labels the
-    /// toolbar pill used to carry). The token counter and the
-    /// download/unload captions are gone: the counter was permanent
-    /// engineering text, and both captions duplicated states the picker
-    /// title already carries ("No model yet" / "… unloaded").
+    /// Composer top row: the quiet model status line — the sole identity
+    /// surface (same phases, menu, and VoiceOver labels the toolbar pill
+    /// used to carry). Text-only by design: no capsule, no fill, no token
+    /// counter, no download/unload captions.
     var statusOrTokenHintRow: some View {
         HStack {
             ComposerModelPicker(
@@ -245,6 +246,6 @@ extension ChatView {
             )
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, ZiroTheme.Spacing.large)
+        .padding(.horizontal, ZiroTheme.Spacing.medium)
     }
 }

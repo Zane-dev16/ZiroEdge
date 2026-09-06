@@ -214,7 +214,7 @@ struct SourceStepView: View {
                     .keyboardType(.URL)
                     .submitLabel(.go)
                     .focused($repositoryFieldFocused)
-                    // Design-system input well: recessed fill + hairline at
+                    // Design-system input well: recessed fill-only at
                     // rest, accent focus ring while typing (the keyboard
                     // focus indicator).
                     .ziroComposerField(isActive: repositoryFieldFocused)

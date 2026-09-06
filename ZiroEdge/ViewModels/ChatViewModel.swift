@@ -153,6 +153,9 @@ final class ChatViewModel: ObservableObject {
     weak var conversationListViewModel: ConversationListViewModel?
 
     private(set) var activeConversationID: UUID?
+    /// The active conversation's title for the nav bar. Nil for unsaved
+    /// drafts — the bar reads "New chat" instead of a placeholder.
+    @Published private(set) var activeConversationTitle: String?
     private var loadGeneration: UInt64 = 0
 
     // BATCH-04: buffered streaming — avoids O(n) copy per token and debounces Published churn
@@ -480,6 +483,7 @@ final class ChatViewModel: ObservableObject {
             visionWarning = nil
         }
         activeConversationID = conversationID
+        activeConversationTitle = conversation.title
         isDraftConversation = false
         messages = fetched
         activeConversationSystemPrompt = conversation.systemPrompt
@@ -521,6 +525,7 @@ final class ChatViewModel: ObservableObject {
         streamedConversationID = nil
         loadGeneration += 1
         activeConversationID = nil
+        activeConversationTitle = nil
         messages = []
         streamingText = ""
         resetStreamingBuffer()

@@ -91,10 +91,11 @@ struct SidebarView: View {
 
     // MARK: - Header
 
-    /// Brand-mark identity row (monogram tile + wordmark + archive search),
-    /// then plain destination rows (no pills — pills are reserved for the
-    /// bottom bar). Chats pushes the full searchable archive; Models pushes
-    /// the Models page via the shell.
+    /// Brand-mark identity row (monogram tile + wordmark). Chats pushes
+    /// the full searchable archive (which carries its own search field,
+    /// so no header search button); Models pushes the Models page via
+    /// the shell. No subtitle under the wordmark: the empty state's
+    /// privacy caption already carries that story.
     private var sidebarHeader: some View {
         VStack(spacing: 0) {
             HStack(spacing: ZiroTheme.Spacing.medium) {
@@ -104,27 +105,10 @@ struct SidebarView: View {
                         ZiroTheme.accentContainer,
                         in: RoundedRectangle(cornerRadius: ZiroTheme.Radius.small, style: .continuous)
                     )
-                VStack(alignment: .leading, spacing: 0) {
-                    Text("ZiroEdge")
-                        .font(ZiroType.rowTitle)
-                        .foregroundStyle(ZiroTheme.primaryText)
-                    Text("Private · On-device")
-                        .font(ZiroType.caption)
-                        .foregroundStyle(ZiroTheme.secondaryText)
-                }
+                Text("ZiroEdge")
+                    .font(ZiroType.rowTitle)
+                    .foregroundStyle(ZiroTheme.primaryText)
                 Spacer()
-                Button {
-                    onOpenRoute(.chats)
-                } label: {
-                    Image(systemName: "magnifyingglass")
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(ZiroTheme.secondaryText)
-                        .frame(minWidth: 44, minHeight: 44)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Search chats")
-                .accessibilityIdentifier("sidebar-search-button")
             }
             .padding(.horizontal, ZiroTheme.Spacing.medium)
             .padding(.vertical, ZiroTheme.Spacing.small)
@@ -147,8 +131,10 @@ struct SidebarView: View {
         .background(ZiroTheme.pageBackground)
     }
 
-    /// One plain navigation row: icon, title, chevron. Deliberately not a
-    /// pill — pills are reserved for the New chat / Settings bottom bar.
+    /// One plain navigation row: icon + title, no chevron. The whole row
+    /// is the button — a trailing arrow adds chrome without information.
+    /// Deliberately not a pill — pills are reserved for the New chat /
+    /// Settings bottom bar.
     private func sidebarDestinationRow(
         title: String,
         systemImage: String,
@@ -164,9 +150,6 @@ struct SidebarView: View {
                     .font(.body)
                     .foregroundStyle(ZiroTheme.primaryText)
                 Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(ZiroTheme.tertiaryText)
             }
             .frame(maxWidth: .infinity)
             .frame(minHeight: 44)
@@ -314,33 +297,25 @@ struct ConversationRow: View {
 
     var body: some View {
         HStack(spacing: ZiroTheme.Spacing.medium) {
-            Text(monogram)
-                .font(.headline)
-                .foregroundStyle(Color.accentColor)
-                .frame(width: 40, height: 40)
-                .background(
-                    ZiroTheme.accentContainer,
-                    in: RoundedRectangle(cornerRadius: ZiroTheme.Radius.small, style: .continuous)
-                )
-                .accessibilityHidden(true)
+            // Title + one meta line (message count and recency) so every
+            // row reads sensibly even when titles truncate. No thumbnail
+            // tile and no trailing timestamp column — both were bulk that
+            // fought the title for space.
+            VStack(alignment: .leading, spacing: ZiroTheme.Spacing.micro) {
+                Text(conversation.title)
+                    .font(ZiroType.body.weight(.medium))
+                    .foregroundStyle(ZiroTheme.primaryText)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
 
-            // Title flexes; the trailing timestamp is fixed-width and wins
-            // every truncation fight.
-            Text(conversation.title)
-                .font(ZiroType.body.weight(.medium))
-                .foregroundStyle(ZiroTheme.primaryText)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .layoutPriority(0)
+                Text(metaLine)
+                    .font(ZiroType.caption)
+                    .foregroundStyle(ZiroTheme.tertiaryText)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
 
             Spacer(minLength: ZiroTheme.Spacing.small)
-
-            Text(ConversationListViewModel.formattedDate(conversation.updatedAt))
-                .font(ZiroType.caption)
-                .foregroundStyle(ZiroTheme.tertiaryText)
-                .lineLimit(1)
-                .fixedSize()
-                .layoutPriority(1)
         }
         .padding(.horizontal, ZiroTheme.Spacing.medium)
         .padding(.vertical, ZiroTheme.Spacing.small)
@@ -358,10 +333,11 @@ struct ConversationRow: View {
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
-    /// Monogram tile glyph: the title's first non-blank character.
-    private var monogram: String {
-        guard let first = conversation.title.first(where: { !$0.isWhitespace }) else { return "•" }
-        return String(first).uppercased()
+    /// One meta line: message count plus recency, e.g. "3 messages · 2h ago".
+    private var metaLine: String {
+        let count = conversation.messageCount
+        let date = ConversationListViewModel.formattedDate(conversation.updatedAt)
+        return "\(count) \(count == 1 ? "message" : "messages") · \(date)"
     }
 
     private var accessibilitySummary: String {
@@ -513,9 +489,6 @@ struct ChatsView: View {
                         .frame(maxWidth: .infinity, minHeight: 44)
                         .background(
                             Capsule().fill(item == scope ? ZiroTheme.wellBackground : .clear)
-                        )
-                        .overlay(
-                            Capsule().stroke(item == scope ? ZiroTheme.hairline : Color.clear, lineWidth: 1)
                         )
                         .contentShape(Capsule())
                 }

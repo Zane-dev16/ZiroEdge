@@ -50,7 +50,8 @@ struct ChatView: View {
             inputBar
         }
         .background(ZiroTheme.pageBackground)
-        .navigationTitle("Conversation")
+        // The bar names the conversation (or the draft), never a placeholder.
+        .navigationTitle(viewModel.activeConversationTitle ?? "New chat")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { chatToolbar }
         .onAppear {
@@ -360,13 +361,14 @@ extension ChatView {
         .accessibilityElement(children: .combine)
     }
 
-    /// Centered hello moment: greeting title, one subtle privacy caption,
-    /// working sample-prompt cards, and — only when nothing is installed —
-    /// the catalog CTA (no Browse Models wall when a model is ready).
+    /// Centered hello moment: greeting title, working sample-prompt cards,
+    /// and — only when nothing is installed — the catalog CTA (no Browse
+    /// Models wall when a model is ready). No subtitle message: the title is
+    /// the moment; `ZiroEmptyState` renders its message line only when non-empty.
     var emptyState: some View {
         ZiroEmptyState(
             title: "Hello, Ask Me Anything",
-            message: "Ask anything below. Your messages and the model's response stay on this device.",
+            message: "",
             suggestionItems: viewModel.availableModels.isEmpty ? [] : Self.samplePrompts,
             onSuggestion: { suggestion in
                 // Reuses the existing send flow: the prompt lands in the
@@ -414,7 +416,7 @@ extension ChatView {
         ),
         ZiroSuggestion(
             text: "Summarize my notes",
-            dot: ZiroTheme.warningText
+            dot: ZiroTheme.accentIndigoText
         )
     ]
 

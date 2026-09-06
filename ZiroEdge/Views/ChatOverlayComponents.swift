@@ -67,7 +67,7 @@ enum ChatModelPicker {
     /// (`readModelPickerLabel`, `selectChatModel`). State folds into the label
     /// ("Chat model, X, loading" / "…, failed to load" / "…, unloaded, reload
     /// available" / "…, unloaded, choose a model to reload") so VoiceOver
-    /// hears it from the picker itself — the orange warning indicator and phase
+    /// hears it from the picker itself — the warning indicator and phase
     /// are otherwise invisible after the one-shot transition announcement, and
     /// revisiting the picker would read like a normal ready state.
     static func accessibilityText(
@@ -93,34 +93,6 @@ enum ChatModelPicker {
             return "Chat model, \(title(phase: phase, modelName: modelName))"
         case .ready, .needsDownload:
             return "Chat model, \(title(phase: phase, modelName: modelName))"
-        }
-    }
-}
-
-/// Phase dot / spinner / warning shared by both picker labels (identical
-/// busy signal in each placement; the small ProgressView is system-aware
-/// under Reduce Motion so no extra gating is needed).
-struct ChatModelStatusIndicator: View {
-    let phase: ModelLoadPhase
-
-    var body: some View {
-        switch phase {
-        case .loading:
-            ProgressView().controlSize(.small)
-        case .ready:
-            Circle()
-                .fill(ZiroTheme.positiveText)
-                .frame(width: 7, height: 7)
-        case .evicted, .failed:
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(ZiroTheme.warningText)
-        case .needsDownload, .idle:
-            // Quiet-state dot: tertiary metadata token instead of an
-            // opacity-dimmed system color.
-            Circle()
-                .fill(ZiroTheme.tertiaryText)
-                .frame(width: 7, height: 7)
         }
     }
 }
@@ -207,12 +179,12 @@ struct ChatModelPickerMenu<PickerLabel: View>: View {
     }
 }
 
-/// Compact Claude-style model picker sitting above the composer message
-/// field (see `statusOrTokenHintRow`). Same phases, menu actions, and
-/// VoiceOver labels the former toolbar pill carried, via the shared
-/// `ChatModelPicker` source of truth — only the label is restyled: a smaller
-/// capsule with a single chevron, `supporting` type, and a narrower width
-/// cap suited to the composer row it shares with the token badge.
+/// Quiet text model picker sitting above the composer message field (see
+/// `statusOrTokenHintRow`). Same phases, menu actions, and VoiceOver labels
+/// the former toolbar pill carried, via the shared `ChatModelPicker` source
+/// of truth — but deliberately not a pill: name + a single
+/// chevron in `footnote` type with no fill, so it reads as a status line
+/// rather than an isolated capsule.
 struct ComposerModelPicker: View {
     let phase: ModelLoadPhase
     let modelName: String?
@@ -227,9 +199,9 @@ struct ComposerModelPicker: View {
     let onRetryLoad: () -> Void
 
     /// Width cap scales with Dynamic Type (relative to the picker's
-    /// subheadline font) so long model names truncate with an ellipsis
-    /// instead of squeezing the token badge off the composer row.
-    @ScaledMetric(relativeTo: .subheadline) private var pickerMaxWidth: CGFloat = 220
+    /// footnote font) so long model names truncate with an ellipsis
+    /// instead of pushing past the row.
+    @ScaledMetric(relativeTo: .footnote) private var pickerMaxWidth: CGFloat = 220
 
     var body: some View {
         ChatModelPickerMenu(
@@ -247,24 +219,22 @@ struct ComposerModelPicker: View {
 
     private var pickerLabel: some View {
         HStack(spacing: ZiroTheme.Spacing.xSmall) {
-            ChatModelStatusIndicator(phase: phase)
             Text(ChatModelPicker.title(phase: phase, modelName: modelName))
-                .font(ZiroType.supporting)
+                .font(ZiroType.footnote)
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .allowsTightening(true)
                 .foregroundStyle(ChatModelPicker.titleTint(phase: phase))
             Image(systemName: "chevron.down")
                 .font(.caption2.weight(.semibold))
-                .foregroundStyle(ZiroTheme.secondaryText)
+                .foregroundStyle(ZiroTheme.tertiaryText)
+                .accessibilityHidden(true)
         }
-        // 44pt minimum hit target (repo standard): the capsule never shrinks
-        // below the touch floor even for short names.
-        .frame(maxWidth: pickerMaxWidth, minHeight: 44)
-        .padding(.horizontal, ZiroTheme.Spacing.medium)
-        .padding(.vertical, ZiroTheme.Spacing.xSmall)
-        .background(ZiroTheme.wellBackground, in: Capsule())
-        .contentShape(Capsule())
+        // 44pt minimum hit target (repo standard): the tappable area never
+        // shrinks below the touch floor even though visually this is just
+        // a text line with no pill fill.
+        .frame(maxWidth: pickerMaxWidth, minHeight: 44, alignment: .leading)
+        .contentShape(Rectangle())
     }
 }
 

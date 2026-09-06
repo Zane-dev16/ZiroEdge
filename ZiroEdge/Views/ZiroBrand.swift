@@ -43,9 +43,9 @@ struct ZiroBrandMark: View {
 /// One guided starting point for the chat empty state: the prompt text
 /// inserted into the composer plus the card's tinted dot. Dots use
 /// `ZiroTheme` text tokens only (no raw hues): purple → `accentPurpleText`,
-/// teal → `infoText` (closest cool data hue), yellow → `warningText` (amber
-/// family). Dots are decorative — the `primaryText` label carries the
-/// meaning — so the pairing needs no contrast floor beyond the label's.
+/// teal → `infoText` (closest cool data hue), third → `accentIndigoText`
+/// (data hue, never a warning amber). Dots are decorative — the `primaryText`
+/// label carries the meaning — so the pairing needs no contrast floor beyond the label's.
 struct ZiroSuggestion {
     let text: String
     let dot: Color
@@ -53,7 +53,7 @@ struct ZiroSuggestion {
 
 /// Reference-style capability card: full-width row with a tinted dot,
 /// two-line title, and a disclosure chevron on a raised + hairline card.
-/// 56pt minimum height clears the 44pt target floor; pressed state mirrors
+/// 44pt minimum height meets the repo touch floor exactly; pressed state mirrors
 /// `ZiroSuggestionChip` (accent container + accent edge). Reduce Motion
 /// drops the press scale like the chip style does.
 struct ZiroCapabilityCard: View {
@@ -68,7 +68,7 @@ struct ZiroCapabilityCard: View {
                     .frame(width: 10, height: 10)
                     .accessibilityHidden(true)
                 Text(item.text)
-                    .font(.subheadline.weight(.medium))
+                    .font(ZiroType.supporting.weight(.medium))
                     .foregroundStyle(ZiroTheme.primaryText)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
@@ -79,7 +79,7 @@ struct ZiroCapabilityCard: View {
                     .accessibilityHidden(true)
             }
             .padding(.horizontal, ZiroTheme.Spacing.large)
-            .frame(maxWidth: .infinity, minHeight: 56, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: ZiroTheme.Radius.control, style: .continuous)
                     .fill(ZiroTheme.raisedBackground)
@@ -148,12 +148,17 @@ struct ZiroEmptyState<Actions: View>: View {
                     .font(ZiroType.title)
                     .multilineTextAlignment(.center)
                     .foregroundStyle(ZiroTheme.primaryText)
-                Text(message)
-                    .font(.footnote)
-                    .foregroundStyle(ZiroTheme.secondaryText)
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, ZiroTheme.Spacing.large)
+                // Subtitle renders only when non-empty: the chat empty state
+                // passes empty to drop the caption before the Hello title,
+                // while other callers (gallery preview) keep their message.
+                if !message.isEmpty {
+                    Text(message)
+                        .font(ZiroType.supporting)
+                        .foregroundStyle(ZiroTheme.secondaryText)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, ZiroTheme.Spacing.large)
+                }
             }
             .accessibilityElement(children: .combine)
 

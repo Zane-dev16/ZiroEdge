@@ -303,19 +303,19 @@ enum ZiroTheme {
 /// this is an engineering tool, technical data should look technical.
 enum ZiroType {
     /// Onboarding page titles, the largest brand moments.
-    static let display = Font.largeTitle.weight(.bold)
+    static let display = Font.title.weight(.bold)
     /// Empty-state hero titles, page-level statements.
-    static let title = Font.title2.weight(.semibold)
+    static let title = Font.title3.weight(.semibold)
     /// Card headers, model detail identity, sheet titles.
-    static let heading = Font.title3.weight(.semibold)
+    static let heading = Font.headline.weight(.semibold)
     /// List row titles, banner titles, header-pill labels.
-    static let rowTitle = Font.headline
+    static let rowTitle = Font.subheadline.weight(.semibold)
     /// Message text and primary copy.
-    static let body = Font.body
+    static let body = Font.callout
     /// Secondary copy: descriptions, banner messages, subtitles.
-    static let supporting = Font.subheadline
+    static let supporting = Font.footnote
     /// Inline support text and button labels in dense contexts.
-    static let footnote = Font.footnote
+    static let footnote = Font.caption
     /// Metadata, banner actions.
     static let caption = Font.caption
     /// Badges, micro-meta, download percentages.
@@ -469,11 +469,12 @@ struct ZiroPrimaryButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.body.weight(.semibold))
+            // System type ramp via token (Callout, Dynamic Type scaled) +
+            // true 44pt floor: no vertical padding stacked on minHeight.
+            .font(ZiroType.body.weight(.semibold))
             .frame(maxWidth: .infinity)
             .frame(minHeight: 44)
             .padding(.horizontal, ZiroTheme.Spacing.xLarge)
-            .padding(.vertical, ZiroTheme.Spacing.medium)
             // Fade the label when disabled: the 0.3-opacity accent fill
             // against full-contrast white/black is otherwise unreadable.
             .foregroundStyle(ZiroTheme.accentForeground.opacity(isEnabled ? 1 : 0.6))
@@ -494,17 +495,15 @@ struct ZiroSecondaryButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.body.weight(.semibold))
+            .font(ZiroType.body.weight(.semibold))
             .frame(maxWidth: .infinity)
             .frame(minHeight: 44)
             .padding(.horizontal, ZiroTheme.Spacing.large)
-            .padding(.vertical, ZiroTheme.Spacing.medium)
             .foregroundStyle(Color.accentColor.opacity(isEnabled ? 1 : 0.5))
             .background(
                 Capsule().fill(ZiroTheme.accentContainer)
                     .overlay(configuration.isPressed && isEnabled ? Color.accentColor.opacity(0.12) : Color.clear)
             )
-            .overlay(Capsule().stroke(ZiroTheme.hairline))
             .scaleEffect(reduceMotion || !configuration.isPressed ? 1 : 0.98)
             .animation(reduceMotion ? nil : ZiroMotion.press, value: configuration.isPressed)
     }
@@ -518,17 +517,15 @@ struct ZiroDestructiveButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.body.weight(.semibold))
+            .font(ZiroType.body.weight(.semibold))
             .frame(maxWidth: .infinity)
             .frame(minHeight: 44)
             .padding(.horizontal, ZiroTheme.Spacing.large)
-            .padding(.vertical, ZiroTheme.Spacing.medium)
             .foregroundStyle(ZiroTheme.dangerText.opacity(isEnabled ? 1 : 0.5))
             .background(
                 Capsule().fill(ZiroTheme.dangerContainer)
                     .overlay(configuration.isPressed && isEnabled ? ZiroTheme.dangerText.opacity(0.12) : Color.clear)
             )
-            .overlay(Capsule().stroke(ZiroTheme.hairline))
             .scaleEffect(reduceMotion || !configuration.isPressed ? 1 : 0.98)
             .animation(reduceMotion ? nil : ZiroMotion.press, value: configuration.isPressed)
     }
@@ -622,10 +619,6 @@ struct ZiroStatusBanner<Actions: View>: View {
             RoundedRectangle(cornerRadius: ZiroTheme.Radius.control, style: .continuous)
                 .fill(toneContainer)
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: ZiroTheme.Radius.control, style: .continuous)
-                .stroke(ZiroTheme.hairline)
-        )
         .clipShape(RoundedRectangle(cornerRadius: ZiroTheme.Radius.control, style: .continuous))
         .overlay(alignment: .leading) {
             if showsRail {
@@ -651,8 +644,9 @@ extension ZiroStatusBanner where Actions == EmptyView {
 // MARK: - Card
 
 /// Shared card container: a raised surface resting on the page, defined by
-/// its hairline stroke (the shadow only lifts it). Used for content composed
-/// outside Form/List sections — wizard pages, transfer status, heroes.
+/// its raised fill at rest (fill-only; the shadow only lifts it). Used for
+/// content composed outside Form/List sections — wizard pages, transfer
+/// status, heroes.
 struct ZiroCard<Content: View>: View {
     private let content: Content
     private let padding: CGFloat
@@ -678,10 +672,6 @@ struct ZiroCard<Content: View>: View {
             .background(
                 RoundedRectangle(cornerRadius: ZiroTheme.Radius.card, style: .continuous)
                     .fill(ZiroTheme.raisedBackground)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: ZiroTheme.Radius.card, style: .continuous)
-                    .stroke(ZiroTheme.hairline)
             )
             .ziroShadow(showsShadow ? ZiroShadowLevel.raised : nil)
     }
@@ -746,7 +736,7 @@ struct ZiroSuggestionChip: View {
                         .accessibilityHidden(true)
                 }
                 Text(title)
-                    .font(.subheadline.weight(.medium))
+                    .font(ZiroType.supporting.weight(.medium))
                     .foregroundStyle(ZiroTheme.primaryText)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
@@ -754,7 +744,6 @@ struct ZiroSuggestionChip: View {
             .padding(.horizontal, ZiroTheme.Spacing.medium)
             .frame(minHeight: 44)
             .background(ZiroTheme.wellBackground, in: Capsule())
-            .overlay(Capsule().stroke(ZiroTheme.hairline))
         }
         .buttonStyle(ZiroSuggestionChipButtonStyle())
     }
@@ -919,8 +908,8 @@ extension View {
 
 // MARK: - Composer / Input Well Treatment
 
-/// The composer's recessed input well: well-elevation fill, hairline rest
-/// state, accent focus ring. The visible focus ring doubles as the keyboard
+/// The composer's recessed input well: well-elevation fill-only at rest,
+/// accent focus ring. The visible focus ring doubles as the keyboard
 /// focus indicator — never remove it.
 private struct ZiroComposerFieldModifier: ViewModifier {
     var isActive: Bool
@@ -935,7 +924,7 @@ private struct ZiroComposerFieldModifier: ViewModifier {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: ZiroTheme.Radius.control, style: .continuous)
-                    .stroke(isActive ? Color.accentColor : ZiroTheme.hairline, lineWidth: isActive ? 1.5 : 1)
+                    .stroke(isActive ? Color.accentColor : .clear, lineWidth: 1.5)
             )
             .ziroAnimation(ZiroMotion.press, value: isActive)
     }
