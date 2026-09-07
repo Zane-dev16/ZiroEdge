@@ -264,10 +264,18 @@ struct ModelsView: View {
 
     private func installedSubtitle(for model: AIModel) -> String {
         var details = [capabilityLabel(model)]
-        if viewModel.isVerifiedForOfflineUse(model) {
+        if viewModel.isOfflineVerificationPending {
+            // Empty-report window: the deferred sweep has not landed yet.
+            // Loading state only — never an error or false not-downloaded.
+            details.append("Verifying offline availability…")
+        } else if viewModel.isVerifiedForOfflineUse(model) {
             details.append("Verified for offline use")
         } else {
-            details.append("Offline verification pending")
+            // Post-sweep and still unverified: the status row already carries
+            // the Repair affordance; keep the subtitle truthful instead of
+            // reusing the pending copy so a real failure never masquerades
+            // as loading.
+            details.append("Needs repair")
         }
         return details.joined(separator: " · ")
     }

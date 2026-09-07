@@ -96,6 +96,16 @@ final class DownloadManager: NSObject, ObservableObject {
     /// Prevents double-tap from hashing the same multi-GB artifacts twice;
     /// the first task owns the authoritative decision.
     private var pendingStartVerifications = Set<String>()
+    /// Testing seam: forces the production async tap-verify path even under
+    /// XCTest (where startDownload is otherwise synchronous for determinism).
+    /// Behavior-identical in production (default false).
+    var forceAsyncStartVerificationForTesting = false
+    /// Whether a tap-triggered verification is currently in flight for `modelID`.
+    /// Reads the double-tap dedup set; used to prove a failed/interrupted
+    /// verify cannot leave a stale entry that dedupes-away a later tap.
+    func isVerifyingStart(for modelID: String) -> Bool {
+        pendingStartVerifications.contains(modelID)
+    }
     // BATCH-05: cached storage breakdown — invalidated only on completion/promotion/quarantine/removal, computed off-main
     @Published var cachedStorageBreakdown: ManagedStorageBreakdown = ManagedStorageBreakdown(installedBytes: 0, stagingBytes: 0, resumeBytes: 0, quarantineBytes: 0)
     var storageBreakdownTask: Task<Void, Never>?
@@ -454,7 +464,8 @@ extension DownloadManager {
         guard model.catalogUnavailableReason == nil,
               ModelCatalogValidator.catalogFailureReason(models: ModelRegistry.allModels) == nil else {
             // Preserve test-observable failure shape for the invalid-catalog path.
-            if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
+            if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil,
+               !forceAsyncStartVerificationForTesting {
                 startDownloadSynchronousForTests(for: model, includeOptionalProjector: includeOptionalProjector)
                 return
             }
@@ -468,7 +479,10 @@ extension DownloadManager {
         }
         // Tests: historical synchronous behavior (full verification on-main)
         // so assertions immediately after startDownload observe final truth.
-        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
+        // forceAsyncStartVerificationForTesting opts back into the production
+        // async path to exercise the tap-verify bookkeeping under test.
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil,
+           !forceAsyncStartVerificationForTesting {
             startDownloadSynchronousForTests(for: model, includeOptionalProjector: includeOptionalProjector)
             return
         }
@@ -552,8 +566,19 @@ extension DownloadManager {
                 }
                 return (status, baseDownloaded, mmprojDownloaded, req)
             }.value
-            guard let self else { return }
-            self.pendingStartVerifications.remove(model.id)
+            guard let self else {
+                // Owner deallocated mid-verify: the dedup set dies with the
+                // instance, so no stale entry can outlive self to block a
+                // later tap on a fresh manager.
+                return
+            }
+            // Single cleanup point for every exit below (storage refusal,
+            // already-ready, already-downloading, success). A stale entry
+            // would permanently dedupe later taps for this artifact, so the
+            // removal must not sit ahead of — or behind — any early return.
+            // Defer also runs it after the final publish, so observers never
+            // see "not verifying" before the verified status lands.
+            defer { self.pendingStartVerifications.remove(model.id) }
             // Authoritative storage re-check: the quick gate is optimistic.
             if verified.required >= Int64.max || available < verified.required {
                 let formattedRequired = StorageByteFormatter.string(fromByteCount: verified.required)

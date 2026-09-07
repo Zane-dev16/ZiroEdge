@@ -53,6 +53,15 @@ struct OfflineAvailabilityReport: Sendable {
             return nil
         }
     }
+
+    /// True while this is the launch placeholder (`.empty`) published with
+    /// `.ready` before the deferred post-first-frame sweep lands via
+    /// `ModelsViewModel.updateOfflineReport`. Readers must render a
+    /// loading/skeleton state while pending — never an error or a false
+    /// not-downloaded state, since `models` is empty by construction.
+    var isPending: Bool {
+        models.isEmpty
+    }
 }
 
 // MARK: - Offline Availability Guard

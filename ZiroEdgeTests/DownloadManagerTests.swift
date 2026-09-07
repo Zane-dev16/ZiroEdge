@@ -640,4 +640,113 @@ extension DownloadManagerTests {
         // Pausing takes display priority over downloading
         XCTAssertEqual(status.displayState, .pausing(progress: 0.65))
     }
+
+    // MARK: - Tap-path verification bookkeeping (Harden: no stale dedup entry)
+
+    /// Spins until the async tap-verify for `modelID` finishes (entry cleared
+    /// by the defer cleanup) or fails the test on timeout. Each suspension
+    /// yields the MainActor so the verify task can progress.
+    private func waitUntilTapVerifyFinishes(_ manager: DownloadManager, modelID: String) async {
+        let deadline = Date().addingTimeInterval(10)
+        while manager.isVerifyingStart(for: modelID) {
+            if Date() > deadline {
+                XCTFail("Timed out waiting for tap verification of \(modelID) to finish")
+                return
+            }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+    }
+
+    /// A failed first verify must not leave a stale dedup entry: the next tap
+    /// for the same artifact must run a full second verification, not be
+    /// deduped-away. Setup exploits the documented tap-path split: a
+    /// same-size SHA-mismatched artifact looks installed to the hash-free
+    /// quick gate (required=0, passes with 1 byte free) but fails the
+    /// authoritative post-hash storage re-check.
+    func testRetryAfterFailedTapVerificationIsNotDeduped() async {
+        let good = TestModelFixtures.gguf()
+        let bad = TestModelFixtures.gguf(fill: 0x5A)
+        XCTAssertEqual(good.count, bad.count, "Corrupt fixture must be same-size to pass the quick gate")
+        let model = TestModelFixtures.text(id: "tap-retry-\(UUID().uuidString.lowercased())", data: good)
+        XCTAssertNil(model.catalogUnavailableReason)
+        defer { ModelManagerService.deleteModel(model) }
+        func plantCorruptArtifact() throws {
+            ModelManagerService.ensureModelsDirectory()
+            try bad.write(to: ModelManagerService.baseModelPath(for: model), options: .atomic)
+        }
+        try? plantCorruptArtifact()
+
+        let manager = DownloadManager(availableDiskSpaceProvider: { 1 })
+        manager.forceAsyncStartVerificationForTesting = true
+
+        // First tap owns the verification (synchronous insert, async verify).
+        manager.startDownload(for: model)
+        XCTAssertTrue(manager.isVerifyingStart(for: model.id), "First tap must register the verification")
+
+        await waitUntilTapVerifyFinishes(manager, modelID: model.id)
+        XCTAssertFalse(manager.isVerifyingStart(for: model.id), "Failed verify must clear the dedup entry")
+        guard case .failed(let firstError) = manager.status(for: model).baseState else {
+            return XCTFail("First tap must run verification to the authoritative storage refusal")
+        }
+        XCTAssertEqual(firstError, .diskSpaceInsufficient)
+
+        // The first verify quarantined the corrupt bytes; replant so the
+        // second tap takes the identical quick-pass -> verify -> fail path.
+        try? plantCorruptArtifact()
+        manager.startDownload(for: model)
+        XCTAssertTrue(
+            manager.isVerifyingStart(for: model.id),
+            "Second tap after a failed verify must NOT be deduped-away"
+        )
+
+        await waitUntilTapVerifyFinishes(manager, modelID: model.id)
+        XCTAssertFalse(manager.isVerifyingStart(for: model.id))
+        guard case .failed(let secondError) = manager.status(for: model).baseState else {
+            return XCTFail("Second tap must run verification to completion, not be deduped-away")
+        }
+        XCTAssertEqual(secondError, .diskSpaceInsufficient)
+    }
+
+    /// Dropping the manager mid-verify (interrupted first verify) must be
+    /// safe, and a later tap on a fresh manager must proceed normally — the
+    /// dead instance's dedup set dies with it and cannot block the new tap.
+    func testInterruptedTapVerificationDoesNotBlockFreshManager() async {
+        let good = TestModelFixtures.gguf()
+        let bad = TestModelFixtures.gguf(fill: 0x5A)
+        let model = TestModelFixtures.text(id: "tap-interrupt-\(UUID().uuidString.lowercased())", data: good)
+        defer { ModelManagerService.deleteModel(model) }
+        ModelManagerService.ensureModelsDirectory()
+        try? bad.write(to: ModelManagerService.baseModelPath(for: model), options: .atomic)
+
+        weak var weakManager: DownloadManager?
+        do {
+            let doomed = DownloadManager(availableDiskSpaceProvider: { 1 })
+            weakManager = doomed
+            doomed.forceAsyncStartVerificationForTesting = true
+            doomed.startDownload(for: model)
+            XCTAssertTrue(doomed.isVerifyingStart(for: model.id))
+            // Scope exit drops the last strong reference mid-verify; the
+            // verify Task holds only a weak reference and must not retain it.
+        }
+        try? await Task.sleep(nanoseconds: 500_000_000)
+        XCTAssertNil(weakManager, "Interrupted manager must deallocate (verify Task must not retain it)")
+
+        // Replant: the interrupted verify may or may not have quarantined the
+        // corrupt bytes before deallocation, and the fresh tap needs the
+        // identical quick-pass entry path.
+        try? bad.write(to: ModelManagerService.baseModelPath(for: model), options: .atomic)
+        let fresh = DownloadManager(availableDiskSpaceProvider: { 1 })
+        fresh.forceAsyncStartVerificationForTesting = true
+        fresh.startDownload(for: model)
+        XCTAssertTrue(
+            fresh.isVerifyingStart(for: model.id),
+            "Fresh tap after an interrupted verify must not be deduped-away"
+        )
+
+        await waitUntilTapVerifyFinishes(fresh, modelID: model.id)
+        guard case .failed(let error) = fresh.status(for: model).baseState else {
+            return XCTFail("Fresh tap must run verification to completion")
+        }
+        XCTAssertEqual(error, .diskSpaceInsufficient)
+    }
 }

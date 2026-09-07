@@ -116,8 +116,20 @@ final class ModelsViewModel: ObservableObject {
         downloadManager.status(for: model).isReady
     }
 
+    /// True while the launch placeholder (`.empty`) is still in effect —
+    /// i.e. `.ready` has published but the deferred post-first-frame sweep
+    /// has not yet landed via `updateOfflineReport`. Surfaces must render a
+    /// loading/skeleton state while true, never an error or false
+    /// not-downloaded state.
+    var isOfflineVerificationPending: Bool {
+        launchOfflineAvailabilityReport.isPending
+    }
+
     /// Whether the launch-time offline sweep verified this model and the
     /// download coordinator still considers its local artifacts ready.
+    /// Returns false while `isOfflineVerificationPending` — callers must
+    /// check the pending flag first so the empty-report window never reads
+    /// as a failure.
     func isVerifiedForOfflineUse(_ model: AIModel) -> Bool {
         guard case .ready = launchOfflineAvailabilityReport.models[model.id] else {
             return false
