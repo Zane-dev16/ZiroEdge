@@ -64,6 +64,17 @@ struct ZiroEdgeApp: App {
             rootView
                 .task {
                     guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
+#if DEBUG
+                    // UI-test hook: prolong the LaunchLoadingView first frame
+                    // so LaunchLoadingTests can reliably query its
+                    // identifiers and capture the brand-moment screenshot.
+                    // Explicit opt-in only; zero release impact. The hold is
+                    // generous on purpose: XCUI attach on a cold simulator
+                    // can lag several seconds behind first frame.
+                    if CommandLine.arguments.contains("--uitesting-prolonged-launch") {
+                        try? await Task.sleep(for: .seconds(10))
+                    }
+#endif
                     // Receive-only: Apple-held crash/hang reports land in the
                     // local log. Nothing uploads; Export stays the only exit.
                     MetricKitIntake.shared.start()

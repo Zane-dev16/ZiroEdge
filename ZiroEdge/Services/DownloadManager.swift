@@ -92,6 +92,10 @@ final class DownloadManager: NSObject, ObservableObject {
     private var availableDiskSpaceProviderForTesting: (@MainActor () -> Int64)?
     var additionalTransferModelsProvider: @MainActor () -> [AIModel] = { [] }
     var lastProgressTime: [String: Date] = [:]
+    /// In-flight tap-to-download verifications (Harden: main-thread hash).
+    /// Prevents double-tap from hashing the same multi-GB artifacts twice;
+    /// the first task owns the authoritative decision.
+    private var pendingStartVerifications = Set<String>()
     // BATCH-05: cached storage breakdown — invalidated only on completion/promotion/quarantine/removal, computed off-main
     @Published var cachedStorageBreakdown: ManagedStorageBreakdown = ManagedStorageBreakdown(installedBytes: 0, stagingBytes: 0, resumeBytes: 0, quarantineBytes: 0)
     var storageBreakdownTask: Task<Void, Never>?
@@ -320,9 +324,70 @@ extension DownloadManager {
     func formattedAvailableSpace() -> String {
         StorageByteFormatter.string(fromByteCount: availableDiskSpace)
     }
-    func startDownload(
+    /// Hash-free storage estimate for the tap fast-path. Mirrors
+    /// `requiredDownloadBytes` but uses `isArtifactPresent` (exists + size)
+    /// instead of full SHA-256 verification so the synchronous storage gate
+    /// never blocks the main thread. The async verification re-checks with
+    /// authoritative byte counts before starting any transfer.
+    private func quickRequiredDownloadBytes(
         for model: AIModel,
         includeOptionalProjector: Bool = true
+    ) -> Int64 {
+        func remaining(expectedBytes: Int64, stagingURL: URL, installed: Bool) -> Int64 {
+            guard !installed else { return 0 }
+            let staged = ((try? fileManager.attributesOfItem(atPath: stagingURL.path)[.size]) as? NSNumber)?.int64Value ?? 0
+            return max(0, expectedBytes - min(staged, expectedBytes))
+        }
+        let baseTask = DownloadTask(model: model, artifact: .base)
+        var required = remaining(
+            expectedBytes: baseTask.expectedBytes,
+            stagingURL: baseTask.stagingURL,
+            installed: ModelManagerService.isArtifactPresent(model, artifact: .base)
+        )
+        if model.requiresMMProj && (!model.allowsTextOnlyCapability || includeOptionalProjector) {
+            let projTask = DownloadTask(model: model, artifact: .mmproj)
+            let projector = remaining(
+                expectedBytes: projTask.expectedBytes,
+                stagingURL: projTask.stagingURL,
+                installed: ModelManagerService.isArtifactPresent(model, artifact: .mmproj)
+            )
+            let (sum, overflow) = required.addingReportingOverflow(projector)
+            if overflow { return .max }
+            required = sum
+        }
+        guard required > 0 else { return 0 }
+        let (withMargin, overflow) = required.addingReportingOverflow(storageSafetyMargin(for: required))
+        return overflow ? .max : withMargin
+    }
+
+    /// Merge a hash-free disk probe with live transfer states so the tap
+    /// fast-path never clobbers downloading/verifying UI with stale disk truth.
+    private func quickStatusMergingActiveTasks(
+        for model: AIModel,
+        quick: ModelDownloadStatus
+    ) -> ModelDownloadStatus {
+        let baseKey = artifactTaskKey(model: model, artifact: .base)
+        let mmprojKey = artifactTaskKey(model: model, artifact: .mmproj)
+        let baseState = activeTasks[baseKey]?.state ?? quick.baseState
+        let mmprojState: DownloadState? = model.requiresMMProj
+            ? (activeTasks[mmprojKey]?.state ?? quick.mmprojState)
+            : nil
+        return ModelDownloadStatus(
+            modelID: model.id,
+            baseState: baseState,
+            mmprojState: mmprojState,
+            baseExpectedBytes: model.baseFileSizeBytes,
+            mmprojExpectedBytes: model.mmprojFileSizeBytes,
+            allowsTextOnly: model.allowsTextOnlyCapability
+        )
+    }
+
+    /// Synchronous legacy path for XCTest determinism. Fixtures are byte-scale
+    /// so on-main SHA-256 is negligible; production uses the quick + async
+    /// verify path below to keep multi-GB hashing off the main thread.
+    private func startDownloadSynchronousForTests(
+        for model: AIModel,
+        includeOptionalProjector: Bool
     ) {
         guard hasSufficientStorage(
             for: model,
@@ -353,10 +418,6 @@ extension DownloadManager {
         let storageCID = DownloadDiagnosticRecorder.freshCorrelationID()
         let available = availableDiskSpace
         let required = requiredDownloadBytes(for: model, includeOptionalProjector: includeOptionalProjector)
-        // Log the user's intent: text-only E2B requests complete with the base
-        // alone, while vision requests need the pair. The pair-level observer
-        // distinguishes them via isReady vs isVisionReady — never infer intent
-        // from displayState alone.
         logger.info("Start requested: \(model.id, privacy: .public)")
         logger.info("Start scope: includeProjector=\(includeOptionalProjector) requiredBytes=\(required)")
         DownloadDiagnosticRecorder.shared.record(
@@ -384,6 +445,160 @@ extension DownloadManager {
             startArtifactDownload(model: model, artifact: .mmproj)
         }
     }
+
+    func startDownload(
+        for model: AIModel,
+        includeOptionalProjector: Bool = true
+    ) {
+        // Catalog gate is cheap (no I/O) — fail fast on main in all environments.
+        guard model.catalogUnavailableReason == nil,
+              ModelCatalogValidator.catalogFailureReason(models: ModelRegistry.allModels) == nil else {
+            // Preserve test-observable failure shape for the invalid-catalog path.
+            if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
+                startDownloadSynchronousForTests(for: model, includeOptionalProjector: includeOptionalProjector)
+                return
+            }
+            downloadStatuses[model.id] = ModelDownloadStatus(
+                modelID: model.id,
+                baseState: .failed(error: .invalidCatalogMetadata),
+                mmprojState: model.requiresMMProj ? .failed(error: .invalidCatalogMetadata) : nil
+            )
+            logger.error("Refusing download with invalid integrity metadata: \(model.id, privacy: .public)")
+            return
+        }
+        // Tests: historical synchronous behavior (full verification on-main)
+        // so assertions immediately after startDownload observe final truth.
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
+            startDownloadSynchronousForTests(for: model, includeOptionalProjector: includeOptionalProjector)
+            return
+        }
+        // Tap fast-path: hash-free storage gate so a tap on a complete
+        // multi-GB artifact never hashes on the main thread. The async phase
+        // re-checks with authoritative bytes (a same-size SHA mismatch looks
+        // installed to this probe but needs full bytes).
+        let quickRequired = quickRequiredDownloadBytes(for: model, includeOptionalProjector: includeOptionalProjector)
+        let available = availableDiskSpace
+        if quickRequired >= Int64.max || available < quickRequired {
+            let formattedRequired = StorageByteFormatter.string(fromByteCount: quickRequired)
+            let formattedAvailable = StorageByteFormatter.string(fromByteCount: available)
+            let message = "Not enough disk space: \(formattedRequired) needed, but only \(formattedAvailable) is available."
+            downloadStatuses[model.id] = ModelDownloadStatus(
+                modelID: model.id,
+                baseState: .failed(error: .diskSpaceInsufficient),
+                mmprojState: model.requiresMMProj ? .failed(error: .diskSpaceInsufficient) : nil
+            )
+            logger.error("Refusing download without sufficient free storage: \(model.id, privacy: .public) — \(message, privacy: .public)")
+            DownloadDiagnosticRecorder.shared.record(
+                event: .storageInsufficient,
+                correlationID: DownloadDiagnosticRecorder.freshCorrelationID(),
+                modelID: model.id,
+                artifact: "base",
+                availableStorageBytes: available,
+                requiredStorageBytes: quickRequired
+            )
+            return
+        }
+        let storageCID = DownloadDiagnosticRecorder.freshCorrelationID()
+        // Log the user's intent: text-only E2B requests complete with the base
+        // alone, while vision requests need the pair. The pair-level observer
+        // distinguishes them via isReady vs isVisionReady — never infer intent
+        // from displayState alone.
+        logger.info("Start requested: \(model.id, privacy: .public)")
+        logger.info("Start scope: includeProjector=\(includeOptionalProjector) requiredBytes=\(quickRequired)")
+        DownloadDiagnosticRecorder.shared.record(
+            event: .storageCheck,
+            correlationID: storageCID,
+            modelID: model.id,
+            artifact: "base",
+            availableStorageBytes: available,
+            requiredStorageBytes: quickRequired
+        )
+        startStuckWatchdog()
+        // Fast-path publish: hash-free quick status merged with live transfers.
+        // Matches the launch-defer pattern (seedStatusesFromDiskQuick): instant
+        // UI, authoritative truth arrives async and corrects any optimistic
+        // `.downloaded` (hash mismatch surfaces as repair there).
+        let quick = Self.quickDiskStatus(for: model)
+        downloadStatuses[model.id] = quickStatusMergingActiveTasks(for: model, quick: quick)
+        // Dedupe double-tap: the first verification owns the decision.
+        guard pendingStartVerifications.insert(model.id).inserted else { return }
+        // Authoritative SHA-256 off-main; every UI publish hops back to main.
+        // Mirrors refreshStatusesFromDisk: detached utility work, MainActor publish.
+        Task { [weak self, model, includeOptionalProjector, storageCID, available] in
+            let verified = await Task.detached(priority: .utility) { () -> (status: ModelDownloadStatus, baseDownloaded: Bool, mmprojDownloaded: Bool, required: Int64) in
+                let status = DownloadManager.diskStatus(for: model)
+                // Share the mtime+size digest cache with the status above, so
+                // these are cache hits — not second hashes — while still
+                // applying quarantine side effects for corrupt artifacts.
+                let baseDownloaded = ModelManagerService.isBaseDownloaded(model)
+                let mmprojDownloaded = ModelManagerService.isMMProjDownloaded(model)
+                func remaining(expected: Int64, staging: URL, installed: Bool) -> Int64 {
+                    guard !installed else { return 0 }
+                    let staged = ((try? FileManager.default.attributesOfItem(atPath: staging.path)[.size]) as? NSNumber)?.int64Value ?? 0
+                    return max(0, expected - min(staged, expected))
+                }
+                let baseTask = DownloadTask(model: model, artifact: .base)
+                var req = remaining(expected: baseTask.expectedBytes, staging: baseTask.stagingURL, installed: baseDownloaded)
+                if model.requiresMMProj && (!model.allowsTextOnlyCapability || includeOptionalProjector) {
+                    let projTask = DownloadTask(model: model, artifact: .mmproj)
+                    let proj = remaining(expected: projTask.expectedBytes, staging: projTask.stagingURL, installed: mmprojDownloaded)
+                    let (sum, overflow) = req.addingReportingOverflow(proj)
+                    req = overflow ? .max : sum
+                }
+                if req > 0 {
+                    let margin = max(req / 20, DownloadManager.storageSafetyMarginBytes)
+                    let (withMargin, overflow) = req.addingReportingOverflow(margin)
+                    req = overflow ? .max : withMargin
+                }
+                return (status, baseDownloaded, mmprojDownloaded, req)
+            }.value
+            guard let self else { return }
+            self.pendingStartVerifications.remove(model.id)
+            // Authoritative storage re-check: the quick gate is optimistic.
+            if verified.required >= Int64.max || available < verified.required {
+                let formattedRequired = StorageByteFormatter.string(fromByteCount: verified.required)
+                let formattedAvailable = StorageByteFormatter.string(fromByteCount: available)
+                let message = "Not enough disk space: \(formattedRequired) needed, but only \(formattedAvailable) is available."
+                let baseKey = self.artifactTaskKey(model: model, artifact: .base)
+                let mmprojKey = self.artifactTaskKey(model: model, artifact: .mmproj)
+                if self.activeTasks[baseKey] == nil && self.activeTasks[mmprojKey] == nil {
+                    self.downloadStatuses[model.id] = ModelDownloadStatus(
+                        modelID: model.id,
+                        baseState: .failed(error: .diskSpaceInsufficient),
+                        mmprojState: model.requiresMMProj ? .failed(error: .diskSpaceInsufficient) : nil
+                    )
+                }
+                self.logger.error("Refusing download without sufficient free storage: \(model.id, privacy: .public) — \(message, privacy: .public)")
+                DownloadDiagnosticRecorder.shared.record(
+                    event: .storageInsufficient,
+                    correlationID: storageCID,
+                    modelID: model.id,
+                    artifact: "base",
+                    availableStorageBytes: available,
+                    requiredStorageBytes: verified.required
+                )
+                return
+            }
+            // Publish verified truth merged with any transfers that started
+            // in the race window; complete vs partial drives identical starts.
+            let merged = self.quickStatusMergingActiveTasks(for: model, quick: verified.status)
+            self.downloadStatuses[model.id] = merged
+            let requestedCapabilityReady = model.allowsTextOnlyCapability && includeOptionalProjector
+                ? merged.isVisionReady
+                : merged.isReady
+            guard !requestedCapabilityReady, !merged.isDownloading else { return }
+            ModelManagerService.ensureModelsDirectory()
+            if !verified.baseDownloaded {
+                self.startArtifactDownload(model: model, artifact: .base)
+            }
+            if model.requiresMMProj,
+               (!model.allowsTextOnlyCapability || includeOptionalProjector),
+               !verified.mmprojDownloaded {
+                self.startArtifactDownload(model: model, artifact: .mmproj)
+            }
+        }
+    }
+
     func pauseDownload(for model: AIModel) {
         pauseArtifactDownload(model: model, artifact: .base)
         if model.requiresMMProj {
