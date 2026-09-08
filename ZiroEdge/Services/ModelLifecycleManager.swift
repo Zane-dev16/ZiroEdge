@@ -88,6 +88,12 @@ final class ModelLifecycleManager: ObservableObject {
     private let recoveryDelay: Duration
     private var safetyEpoch: UInt64 = 0
     private var loadInProgress = false
+    // P1-3 coalesces concurrent safety evictions onto one teardown so rapid
+    // pressure/background pairs can't spawn duplicate backend_free work.
+    // Single warning: eviction only ever sets showMemoryWarning true (never
+    // clears it); dismissal owns the reset.
+    private var evictTask: Task<Void, Never>?
+    private var evictGeneration: UInt64 = 0
 
     // MARK: - Initialization
 
@@ -142,109 +148,46 @@ final class ModelLifecycleManager: ObservableObject {
     // MARK: - Model Operations
 
     /// Load a model. Every exit returns a typed result and user-visible failures.
+    /// P0-1: preflight runs off-main via `Task.detached(.utility)` with loading
+    /// state + cancellation. P0-3: profile/isDisabled/budget admit before any
+    /// teardown so a refusal keeps `activeModel` resident; recovery sleep is
+    /// cancellable per 100ms with epoch checks.
     @discardableResult
     func loadModel(_ model: AIModel) async -> ModelLoadResult {
-        guard case .ready = availabilityProvider(model) else {
-            return failLoad(
-                kind: .unavailableArtifact,
-                message: "The downloaded model files are missing or failed integrity verification. Repair the download and try again."
-            )
-        }
         if let active = activeModel, active.id == model.id, currentState == .loaded {
             return .alreadyLoaded
         }
-
+        let priorActive = activeModel
+        let priorState = currentState
         loadInProgress = true
         currentState = .loading
         let loadEpoch = safetyEpoch
         defer { loadInProgress = false }
         MemoryDiagnosticRecorder.shared.capture(.beforeModelLoad)
-
-        let engineReportsLoaded = await inferenceService.isModelLoaded
-        let hadPriorEngine = activeModel != nil || engineReportsLoaded
-        if hadPriorEngine {
-            await inferenceService.cancelCurrentStream()
-            await inferenceService.unloadModel()
-            activeModel = nil
-            currentState = .loading
-            do {
-                try await Task.sleep(for: recoveryDelay)
-            } catch {
-                return await invalidateLoadAttempt()
-            }
+        logger.info("Load preflight started \(model.id, privacy: .public)")
+        let admission = await preflightAndAdmit(model, loadEpoch: loadEpoch, priorActive: priorActive, priorState: priorState)
+        if let early = admission.early { return early }
+        guard admission.profile != nil else {
+            logger.fault("Load admission missing profile \(model.id, privacy: .public)")
+            return await invalidateLoadAttempt()
         }
-        guard loadEpoch == safetyEpoch else { return await invalidateLoadAttempt() }
-
-        guard let profile = MemoryProfileRegistry.profile(for: model) else {
-            return failLoad(kind: .runtimeProfileUnavailable, message: model.runtimeEligibilityExplanation)
+        // P0 chat-switch teardown-then-fail: re-sample the budget immediately
+        // BEFORE teardownAndRecover. Headroom that fell after preflight refuses
+        // here with the prior model still resident instead of tearing it down
+        // for a load the pre-mmap resample would refuse.
+        if let refused = await freshBudgetGateBeforeTeardown(
+            model, loadEpoch: loadEpoch, priorActive: priorActive, priorState: priorState
+        ) { return refused }
+        if let early = await teardownAndRecover(model, loadEpoch: loadEpoch) { return early }
+        guard loadEpoch == safetyEpoch else {
+            logger.info("Load invalidated before construction \(model.id, privacy: .public)")
+            return await invalidateLoadAttempt()
         }
-        if loadSafetyStore.isDisabled(profileID: profile.id) {
-            return failLoad(
-                kind: .safetyDisabled,
-                message: "This exact runtime profile was disabled after two unclean attempts among its last five loads. "
-                    + "Open the model details and explicitly reset its safety history before trying again."
-            )
-        }
-
-        let calibrationOverride = MemoryDiagnosticRecorder.shared.controlledWorkloadEnabled
-            && model.id == MemoryDiagnosticRecorder.targetModelID
-        let experimentalConsent = model.runtimeEligibility == .experimental
-            && ExperimentalModelConsent.isGranted(for: model)
-        let decision = await memoryBudgeter.decision(
-            for: model,
-            allowUnvalidatedCalibration: calibrationOverride || experimentalConsent
-        )
-        guard loadEpoch == safetyEpoch else { return await invalidateLoadAttempt() }
-        guard decision.recommendation == .proceed else {
-            logger.warning("Blocking unsafe load for \(model.id, privacy: .public): \(decision.logSummary, privacy: .public)")
-            let alert = decision.alertMessage(modelName: model.displayName)
-            insufficientMemoryMessage = alert
-            showInsufficientMemoryWarning = true
-            currentState = .loadFailed
-            return .failed(ModelLoadFailure(kind: .insufficientMemory, message: alert, nativeKind: nil))
-        }
-
-        let baseURL = ModelManagerService.baseModelPath(for: model)
-        let mmprojURL = model.requiresMMProj ? ModelManagerService.mmprojModelPath(for: model) : nil
-        let loadStarted = ContinuousClock.now
-        do {
-            try await inferenceService.loadModel(model, baseURL: baseURL, mmprojURL: mmprojURL)
-            guard loadEpoch == safetyEpoch else { return await invalidateLoadAttempt() }
-            guard await memoryBudgeter.postLoadReserveSatisfied() else {
-                await inferenceService.unloadModel()
-                throw InferenceError.nativeFailure(
-                    kind: .memoryPressure,
-                    diagnostic: MemoryAdmissionFailure.postLoadReserveBreached.rawValue
-                )
-            }
-            guard loadEpoch == safetyEpoch else { return await invalidateLoadAttempt() }
-            activeModel = model
-            currentState = .loaded
-            recordImportedLoadSuccess(for: model)
-            MemoryDiagnosticRecorder.shared.capture(
-                .afterModelLoad,
-                elapsedMilliseconds: loadStarted.elapsedMilliseconds
-            )
-            logger.info("Model loaded: \(model.id, privacy: .public)")
-            return .loaded
-        } catch {
-            MemoryDiagnosticRecorder.shared.capture(
-                .afterModelLoad,
-                elapsedMilliseconds: loadStarted.elapsedMilliseconds,
-                error: error.localizedDescription
-            )
-            let inferenceError = error as? InferenceError
-            logger.error("Model load failed: \(inferenceError?.sanitizedDiagnostic ?? "unknown-load-failure", privacy: .private)")
-            let nativeKind = inferenceError?.nativeFailureKind
-            let message = Self.userMessage(for: inferenceError)
-            recordImportedLoadFailure(for: model, nativeKind: nativeKind, message: message)
-            let kind: ModelLoadFailureKind =
-                inferenceError?.sanitizedDiagnostic.contains("load-safety") == true
-                    ? .safetyPersistence : .nativeLoadFailure
-            return failLoad(kind: kind, message: message, nativeKind: nativeKind)
-        }
+        return await constructAndCommit(model, loadEpoch: loadEpoch, priorActive: priorActive)
     }
 
+    /// P0-1 async preflight + P0-3 admission (profile/safety/budget) before teardown.
+    /// Returns `.early` for any refusal/invalidation, else the admitted profile.
     private func recordImportedLoadSuccess(for model: AIModel) {
         guard model.isImported else { return }
         try? importedModelStore.update(id: model.id) { $0.loadStatus = .loaded }
@@ -267,6 +210,7 @@ final class ModelLifecycleManager: ObservableObject {
         kind: ModelLoadFailureKind, message: String, nativeKind: NativeFailureKind? = nil
     ) -> ModelLoadResult {
         currentState = .loadFailed
+        logger.warning("Load failed kind=\(String(describing: kind), privacy: .public) message=\(message, privacy: .private)")
         loadFailureMessage = message
         showLoadFailure = true
         return .failed(ModelLoadFailure(kind: kind, message: message, nativeKind: nativeKind))
@@ -275,6 +219,15 @@ final class ModelLifecycleManager: ObservableObject {
     private func invalidateLoadAttempt() async -> ModelLoadResult {
         await inferenceService.cancelCurrentStream()
         await inferenceService.unloadModel()
+        // A deliberately cancelled load is not a crash: withdraw its safety
+        // marker so it can never be misread as an unclean attempt at next
+        // launch (previously every backgrounding during a load burned one of
+        // the profile's five slots toward a permanent disable).
+        // P1-2: profile-agnostic withdraw reports persistence; fault-log a
+        // write failure (in-memory still cleared, best-effort).
+        if !loadSafetyStore.withdrawPendingLoad() {
+            logger.error("Withdraw pending load persist failed during invalidation")
+        }
         activeModel = nil
         currentState = .evicted
         return .failed(ModelLoadFailure(
@@ -373,28 +326,54 @@ final class ModelLifecycleManager: ObservableObject {
     /// Read-shared gate for opportunistic loaders preventing stacked loads.
     var isLoadAttemptInFlight: Bool { loadInProgress }
 
+    /// Current safety epoch for tests. Eviction bumps this; loads capture it
+    /// at entry and stale evictions/loads invalidate against it.
+    var currentSafetyEpochForTests: UInt64 { safetyEpoch }
+
     // MARK: - Memory Pressure
 
     // Critical path stays allocation-free apart from dispatching actor work.
     @objc private func handleMemoryPressure() {
         guard currentState == .loaded || currentState == .loading || loadInProgress else { return }
         safetyEpoch &+= 1
+        let evictEpoch = safetyEpoch
         currentState = .evicted
-        Task { await cancelAndUnloadForSafety(showWarning: true) }
+        logger.info("Memory pressure evict epoch=\(evictEpoch, privacy: .public)")
+        Task { await cancelAndUnloadForSafety(showWarning: true, expectedEpoch: evictEpoch) }
     }
 
     func handleBackgroundTransition() async {
         guard currentState == .loaded || currentState == .loading || loadInProgress else { return }
         safetyEpoch &+= 1
+        let evictEpoch = safetyEpoch
         currentState = .evicted
-        await cancelAndUnloadForSafety(showWarning: false)
+        logger.info("Background evict epoch=\(evictEpoch, privacy: .public)")
+        await cancelAndUnloadForSafety(showWarning: false, expectedEpoch: evictEpoch)
     }
 
-    private func cancelAndUnloadForSafety(showWarning: Bool) async {
-        await inferenceService.cancelCurrentStream()
-        await unloadCurrentModel()
-        currentState = .evicted
-        showMemoryWarning = showWarning
+    /// Epoch-gated safety eviction (P0-2). A stale Task from an older epoch
+    /// must never wipe a fresh load that started after the bump: every
+    /// destructive step re-checks `expectedEpoch == safetyEpoch` and bails
+    /// with a fault log when stale. Serialized with loads via the MainActor
+    /// plus epoch checks (loads capture `loadEpoch` and invalidate on mismatch).
+    /// P1-3 coalesces concurrent evictions onto one teardown via evictTask:
+    /// a joiner awaits the in-flight work and returns early when it already
+    /// evicted (no duplicate backend_free); a stale join falls through to run
+    /// its own epoch. Single warning: only sets true, never clears here.
+    func cancelAndUnloadForSafety(showWarning: Bool, expectedEpoch: UInt64) async {
+        if let running = evictTask {
+            logger.info("Safety eviction coalesced expected=\(expectedEpoch, privacy: .public) current=\(self.safetyEpoch, privacy: .public)")
+            await running.value
+            if activeModel == nil && currentState == .evicted { return }
+        }
+        evictGeneration &+= 1
+        let myGeneration = evictGeneration
+        let work = Task<Void, Never> { [weak self, showWarning, expectedEpoch] in
+            await self?.evictWork(showWarning: showWarning, expectedEpoch: expectedEpoch)
+        }
+        evictTask = work
+        await work.value
+        if evictGeneration == myGeneration { evictTask = nil }
     }
 
     /// Dismiss the memory warning banner.
@@ -403,6 +382,9 @@ final class ModelLifecycleManager: ObservableObject {
     }
 
     /// Load the first fully downloaded model. Used for UI testing.
+    /// P0-1: candidate scan uses hash-free `quickAvailability` so auto-load
+    /// never hashes multi-GB artifacts on the MainActor. The authoritative
+    /// full SHA-256 verdict lands in `loadModel`'s async off-main preflight.
     func autoLoadFirstModel() async {
         guard activeModel == nil, !isLoadAttemptInFlight else { return }
 
@@ -414,11 +396,313 @@ final class ModelLifecycleManager: ObservableObject {
             candidates = ModelRegistry.selectableModels
         }
 
-        guard let model = candidates.first(where: ModelManagerService.isFullyDownloaded) else {
+        guard let model = candidates.first(where: {
+            if case .ready = ModelManagerService.quickAvailability(for: $0) { return true }
+            return false
+        }) else {
             logger.warning("autoLoadFirstModel: required model is not installed and verified")
             return
         }
         logger.info("autoLoadFirstModel: loading \(model.id, privacy: .public)")
         await loadModel(model)
     }
+
+    /// P0-3: admission refusal before teardown keeps the working model resident.
+    /// Teardown hasn't run yet, so `activeModel` is still `priorActive` (untouched).
+    /// Restores `priorState` when a prior model exists instead of parking on
+    /// `.loadFailed` with a nilled engine. IDs are public; messages stay private.
+    private func refuseLoadPreservingResident(
+        kind: ModelLoadFailureKind,
+        message: String,
+        nativeKind: NativeFailureKind? = nil,
+        priorActive: AIModel?,
+        priorState: ModelState,
+        modelID: String
+    ) -> ModelLoadResult {
+        logger.error("Load refused \(modelID, privacy: .public) kind=\(String(describing: kind), privacy: .public)")
+        loadFailureMessage = message
+        showLoadFailure = true
+        if kind == .insufficientMemory {
+            insufficientMemoryMessage = message
+            showInsufficientMemoryWarning = true
+        }
+        if priorActive != nil {
+            currentState = priorState == .loading ? .loadFailed : priorState
+        } else {
+            currentState = .loadFailed
+        }
+        return .failed(ModelLoadFailure(kind: kind, message: message, nativeKind: nativeKind))
+    }
+}
+// MARK: - Load pipeline (extension keeps the manager type body focused for
+// type_body_length; same-file extension retains private access).
+@MainActor
+extension ModelLifecycleManager {
+    private func preflightAndAdmit(
+        _ model: AIModel,
+        loadEpoch: UInt64,
+        priorActive: AIModel?,
+        priorState: ModelState
+    ) async -> (profile: MemoryProfile?, early: ModelLoadResult?) {
+        let provider = availabilityProvider
+        let availability = await Task.detached(priority: .utility) { provider(model) }.value
+        if Task.isCancelled {
+            logger.info("Load preflight cancelled \(model.id, privacy: .public)")
+            return (nil, await invalidateLoadAttempt())
+        }
+        guard loadEpoch == safetyEpoch else {
+            logger.info("Load preflight invalidated by safety epoch \(model.id, privacy: .public)")
+            return (nil, await invalidateLoadAttempt())
+        }
+        logger.info("Load preflight \(model.id, privacy: .public) availability=\(String(describing: availability), privacy: .public)")
+        guard case .ready = availability else {
+            logger.error("Load refused unavailable artifact \(model.id, privacy: .public)")
+            let msg = "The downloaded model files are missing or failed integrity verification. Repair the download and try again."
+            return (nil, refuseLoadPreservingResident(kind: .unavailableArtifact, message: msg, priorActive: priorActive, priorState: priorState, modelID: model.id))
+        }
+        guard let profile = MemoryProfileRegistry.profile(for: model) else {
+            logger.error("Load refused no runtime profile \(model.id, privacy: .public)")
+            let msg = model.runtimeEligibilityExplanation
+            let refused = refuseLoadPreservingResident(kind: .runtimeProfileUnavailable, message: msg, priorActive: priorActive, priorState: priorState, modelID: model.id)
+            return (nil, refused)
+        }
+        if loadSafetyStore.isDisabled(profileID: profile.id) {
+            let unclean = loadSafetyStore.recentUncleanAttemptCount(profileID: profile.id)
+            logger.error("Load refused safety-disabled profile \(profile.id, privacy: .public) unclean=\(unclean, privacy: .public) model=\(model.id, privacy: .public)")
+            let msg = "This exact runtime profile was disabled after two unclean attempts among its last five loads. "
+                + "Open the model details and explicitly reset its safety history before trying again."
+            return (nil, refuseLoadPreservingResident(kind: .safetyDisabled, message: msg, priorActive: priorActive, priorState: priorState, modelID: model.id))
+        }
+        let override = MemoryDiagnosticRecorder.shared.controlledWorkloadEnabled && model.id == MemoryDiagnosticRecorder.targetModelID
+        let consent = model.runtimeEligibility == .experimental && ExperimentalModelConsent.isGranted(for: model)
+        let decision = await memoryBudgeter.decision(for: model, allowUnvalidatedCalibration: override || consent)
+        if Task.isCancelled {
+            logger.info("Load budget check cancelled \(model.id, privacy: .public)")
+            return (nil, await invalidateLoadAttempt())
+        }
+        guard loadEpoch == safetyEpoch else {
+            logger.info("Load budget check invalidated by epoch \(model.id, privacy: .public)")
+            return (nil, await invalidateLoadAttempt())
+        }
+        guard decision.recommendation == .proceed else {
+            logger.error("Load refused insufficient memory \(model.id, privacy: .public) \(decision.logSummary, privacy: .public)")
+            let alert = decision.alertMessage(modelName: model.displayName)
+            let refused = refuseLoadPreservingResident(kind: .insufficientMemory, message: alert, priorActive: priorActive, priorState: priorState, modelID: model.id)
+            return (nil, refused)
+        }
+        return (profile, nil)
+    }
+
+    /// P0-3 teardown + cancellable recovery sleep (epochs per 100ms).
+    /// Returns nil to continue, or an invalidation result to return early.
+    private func teardownAndRecover(_ model: AIModel, loadEpoch: UInt64) async -> ModelLoadResult? {
+        let engineLoaded = await inferenceService.isModelLoaded
+        if Task.isCancelled {
+            logger.info("Load cancelled before teardown \(model.id, privacy: .public)")
+            return await invalidateLoadAttempt()
+        }
+        guard loadEpoch == safetyEpoch else {
+            logger.info("Load invalidated before teardown \(model.id, privacy: .public)")
+            return await invalidateLoadAttempt()
+        }
+        guard activeModel != nil || engineLoaded else { return nil }
+        await inferenceService.cancelCurrentStream()
+        if Task.isCancelled {
+            logger.info("Load cancelled during teardown \(model.id, privacy: .public)")
+            return await invalidateLoadAttempt()
+        }
+        guard loadEpoch == safetyEpoch else {
+            logger.info("Load invalidated during teardown \(model.id, privacy: .public)")
+            return await invalidateLoadAttempt()
+        }
+        await inferenceService.unloadModel()
+        guard loadEpoch == safetyEpoch else {
+            logger.info("Load invalidated after unload \(model.id, privacy: .public)")
+            return await invalidateLoadAttempt()
+        }
+        activeModel = nil
+        currentState = .loading
+        let sleepStart = ContinuousClock.now
+        let chunk: Duration = .milliseconds(100)
+        while sleepStart.duration(to: .now) < recoveryDelay {
+            if Task.isCancelled {
+                logger.info("Load recovery sleep cancelled \(model.id, privacy: .public)")
+                return await invalidateLoadAttempt()
+            }
+            guard loadEpoch == safetyEpoch else {
+                logger.info("Load recovery sleep invalidated by epoch \(model.id, privacy: .public)")
+                return await invalidateLoadAttempt()
+            }
+            do {
+                try await Task.sleep(for: chunk)
+            } catch {
+                logger.info("Load recovery sleep interrupted \(model.id, privacy: .public)")
+                return await invalidateLoadAttempt()
+            }
+        }
+        guard loadEpoch == safetyEpoch else {
+            logger.info("Load recovery completed stale \(model.id, privacy: .public)")
+            return await invalidateLoadAttempt()
+        }
+        if Task.isCancelled {
+            logger.info("Load recovery cancelled after sleep \(model.id, privacy: .public)")
+            return await invalidateLoadAttempt()
+        }
+        return nil
+    }
+
+    /// Native construction + post-load reserve + commit. Post-teardown failures
+    /// funnel through failPostTeardownOrRestorePrior so a displaced resident
+    /// gets one bring-back attempt instead of stranding .loadFailed + nil.
+    private func constructAndCommit(_ model: AIModel, loadEpoch: UInt64, priorActive: AIModel?) async -> ModelLoadResult {
+        let baseURL = ModelManagerService.baseModelPath(for: model)
+        let mmprojURL = model.requiresMMProj ? ModelManagerService.mmprojModelPath(for: model) : nil
+        // P1-1 fresh resample immediately pre-mmap: the preflight decision is
+        // stale after teardown sleep. Recompute consent/override identically,
+        // refuse closed with fault logs; never reuse the old decision.
+        let freshOverride = MemoryDiagnosticRecorder.shared.controlledWorkloadEnabled && model.id == MemoryDiagnosticRecorder.targetModelID
+        let freshConsent = model.runtimeEligibility == .experimental && ExperimentalModelConsent.isGranted(for: model)
+        let freshDecision = await memoryBudgeter.decision(for: model, allowUnvalidatedCalibration: freshOverride || freshConsent)
+        if Task.isCancelled {
+            logger.info("Load pre-mmap resample cancelled \(model.id, privacy: .public)")
+            return await invalidateLoadAttempt()
+        }
+        guard loadEpoch == safetyEpoch else {
+            logger.info("Load pre-mmap resample invalidated by epoch \(model.id, privacy: .public)")
+            return await invalidateLoadAttempt()
+        }
+        guard freshDecision.recommendation == .proceed else {
+            logger.error("Load refused stale-budget resample \(model.id, privacy: .public) \(freshDecision.logSummary, privacy: .public)")
+            let alert = freshDecision.alertMessage(modelName: model.displayName)
+            insufficientMemoryMessage = alert
+            showInsufficientMemoryWarning = true
+            return await failPostTeardownOrRestorePrior(
+                target: model, priorActive: priorActive, loadEpoch: loadEpoch,
+                kind: .insufficientMemory, message: alert
+            )
+        }
+        let started = ContinuousClock.now
+        do {
+            try await inferenceService.loadModel(model, baseURL: baseURL, mmprojURL: mmprojURL)
+            guard loadEpoch == safetyEpoch else { return await invalidateLoadAttempt() }
+            guard await memoryBudgeter.postLoadReserveSatisfied() else {
+                await inferenceService.unloadModel()
+                throw InferenceError.nativeFailure(kind: .memoryPressure, diagnostic: MemoryAdmissionFailure.postLoadReserveBreached.rawValue)
+            }
+            guard loadEpoch == safetyEpoch else { return await invalidateLoadAttempt() }
+            activeModel = model
+            currentState = .loaded
+            recordImportedLoadSuccess(for: model)
+            MemoryDiagnosticRecorder.shared.capture(.afterModelLoad, elapsedMilliseconds: started.elapsedMilliseconds)
+            logger.info("Model loaded: \(model.id, privacy: .public)")
+            return .loaded
+        } catch {
+            MemoryDiagnosticRecorder.shared.capture(.afterModelLoad, elapsedMilliseconds: started.elapsedMilliseconds, error: error.localizedDescription)
+            let inferenceError = error as? InferenceError
+            let detail = inferenceError?.sanitizedDiagnostic ?? "unknown-load-failure"
+            let kindName = inferenceError?.nativeFailureKind.map(String.init(describing:)) ?? "none"
+            logger.error("Model load failed: \(detail, privacy: .private) nativeKind=\(kindName, privacy: .public)")
+            let nativeKind = inferenceError?.nativeFailureKind
+            let message = Self.userMessage(for: inferenceError)
+            recordImportedLoadFailure(for: model, nativeKind: nativeKind, message: message)
+            let kind: ModelLoadFailureKind = inferenceError?.sanitizedDiagnostic.contains("load-safety") == true ? .safetyPersistence : .nativeLoadFailure
+            return await failPostTeardownOrRestorePrior(
+                target: model, priorActive: priorActive, loadEpoch: loadEpoch,
+                kind: kind, message: message, nativeKind: nativeKind
+            )
+        }
+    }
+
+    /// P0 chat-switch teardown-then-fail: fresh budget sample between admission
+    /// and teardown. Refusals keep the resident via refuseLoadPreservingResident
+    /// (same consent/override inputs as preflight and the pre-mmap resample).
+    /// IDs are public; the decision summary stays public, messages private.
+    private func freshBudgetGateBeforeTeardown(
+        _ model: AIModel,
+        loadEpoch: UInt64,
+        priorActive: AIModel?,
+        priorState: ModelState
+    ) async -> ModelLoadResult? {
+        let override = MemoryDiagnosticRecorder.shared.controlledWorkloadEnabled && model.id == MemoryDiagnosticRecorder.targetModelID
+        let consent = model.runtimeEligibility == .experimental && ExperimentalModelConsent.isGranted(for: model)
+        let fresh = await memoryBudgeter.decision(for: model, allowUnvalidatedCalibration: override || consent)
+        if Task.isCancelled {
+            logger.info("Load pre-teardown resample cancelled \(model.id, privacy: .public)")
+            return await invalidateLoadAttempt()
+        }
+        guard loadEpoch == safetyEpoch else {
+            logger.info("Load pre-teardown resample invalidated by epoch \(model.id, privacy: .public)")
+            return await invalidateLoadAttempt()
+        }
+        guard fresh.recommendation == .proceed else {
+            logger.fault("Load refused pre-teardown resample \(model.id, privacy: .public) \(fresh.logSummary, privacy: .public)")
+            let alert = fresh.alertMessage(modelName: model.displayName)
+            return refuseLoadPreservingResident(
+                kind: .insufficientMemory, message: alert,
+                priorActive: priorActive, priorState: priorState, modelID: model.id
+            )
+        }
+        return nil
+    }
+
+    /// Post-teardown failure with a displaced resident: single attempt to bring
+    /// the prior model back with a direct engine load — never via loadModel, so
+    /// no recursion into admit/teardown — else park .loadFailed for the failed
+    /// target. IDs are public; messages stay private.
+    private func failPostTeardownOrRestorePrior(
+        target: AIModel,
+        priorActive: AIModel?,
+        loadEpoch: UInt64,
+        kind: ModelLoadFailureKind,
+        message: String,
+        nativeKind: NativeFailureKind? = nil
+    ) async -> ModelLoadResult {
+        guard let priorActive, loadEpoch == safetyEpoch else {
+            return failLoad(kind: kind, message: message, nativeKind: nativeKind)
+        }
+        logger.fault("Post-teardown load failed, restoring prior target=\(target.id, privacy: .public) prior=\(priorActive.id, privacy: .public)")
+        do {
+            try await inferenceService.loadModel(
+                priorActive,
+                baseURL: ModelManagerService.baseModelPath(for: priorActive),
+                mmprojURL: priorActive.requiresMMProj ? ModelManagerService.mmprojModelPath(for: priorActive) : nil
+            )
+            guard loadEpoch == safetyEpoch else { return await invalidateLoadAttempt() }
+            activeModel = priorActive
+            currentState = .loaded
+            recordImportedLoadSuccess(for: priorActive)
+            loadFailureMessage = message
+            showLoadFailure = true
+            return .failed(ModelLoadFailure(kind: kind, message: message, nativeKind: nativeKind))
+        } catch {
+            logger.error("Prior restore failed \(priorActive.id, privacy: .public)")
+            return failLoad(kind: kind, message: message, nativeKind: nativeKind)
+        }
+    }
+
+    /// P1-3 single-teardown worker behind the evictTask coalescer. Epoch-gated
+    /// at every destructive step; single warning (sets true only, never clears).
+    /// R6: cancel engine, release gate (actor teardown releases idempotently),
+    /// then unload. VM completion paths gate reload on evicted state.
+    private func evictWork(showWarning: Bool, expectedEpoch: UInt64) async {
+        guard expectedEpoch == safetyEpoch else {
+            logger.info("Stale safety eviction ignored expected=\(expectedEpoch, privacy: .public) current=\(self.safetyEpoch, privacy: .public)")
+            return
+        }
+        await inferenceService.cancelCurrentStream()
+        await inferenceService.releaseGenerationGateForEviction()
+        guard expectedEpoch == safetyEpoch else {
+            logger.info("Stale safety eviction ignored after cancel expected=\(expectedEpoch, privacy: .public) current=\(self.safetyEpoch, privacy: .public)")
+            return
+        }
+        await unloadCurrentModel()
+        guard expectedEpoch == safetyEpoch else {
+            logger.info("Stale safety eviction ignored after unload expected=\(expectedEpoch, privacy: .public) current=\(self.safetyEpoch, privacy: .public)")
+            return
+        }
+        currentState = .evicted
+        if showWarning, !showMemoryWarning { showMemoryWarning = true }
+        logger.info("Safety eviction completed epoch=\(expectedEpoch, privacy: .public) warning=\(showWarning, privacy: .public)")
+    }
+
 }

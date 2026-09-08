@@ -132,4 +132,84 @@ final class MemoryProfileTests: XCTestCase {
         XCTAssertNil(decision.requiredBytes)
         XCTAssertNil(decision.artifactBytesUsedForAdmission)
     }
+
+    // MARK: - P1-4 imported weights / floor / fail-closed
+
+    /// Vision projector is fully resident while mmap'd base is ~1/3: the
+    /// vision-text delta equals the full projector size, not a third.
+    func testP1ImportedSeparatesBaseAndProjectorWeights() {
+        let baseBytes: Int64 = 3_000_000_000
+        let mmprojBytes: Int64 = 600_000_000
+        let context = 2048
+        let contextScale = UInt64(context) * 256_000
+        let text = MemoryProfileRegistry.importedProfile(for: Self.makeImported(
+            baseBytes: baseBytes, mmprojBytes: nil, contextLength: context, modelType: .text))
+        let vision = MemoryProfileRegistry.importedProfile(for: Self.makeImported(
+            baseBytes: baseBytes, mmprojBytes: mmprojBytes, contextLength: context, modelType: .vision))
+        XCTAssertEqual(text.measuredLoadDeltaBytes, UInt64(baseBytes / 3) + contextScale)
+        XCTAssertEqual(vision.measuredLoadDeltaBytes, UInt64(baseBytes / 3) + UInt64(mmprojBytes) + contextScale)
+        XCTAssertEqual(
+            vision.measuredLoadDeltaBytes! - text.measuredLoadDeltaBytes!,
+            UInt64(mmprojBytes),
+            "projector weight must be full size, not a third"
+        )
+    }
+
+    /// Tiny imports still demand a real device: absolute 4GB floor.
+    func testP1ImportedPhysicalFloorEnforced() {
+        let profile = MemoryProfileRegistry.importedProfile(for: Self.makeImported(
+            baseBytes: 100_000_000, mmprojBytes: nil, contextLength: 512, modelType: .text))
+        XCTAssertEqual(profile.minimumPhysicalRAMBytes, 4_000_000_000)
+    }
+
+    /// Non-positive catalog sizes fail closed: nil evidence plus .max floor
+    /// so admission can never proceed.
+    func testP1ImportedNegativeSizeFailsClosed() {
+        let badBase = MemoryProfileRegistry.importedProfile(for: Self.makeImported(
+            baseBytes: -5, mmprojBytes: nil, contextLength: 2048, modelType: .text))
+        XCTAssertNil(badBase.measuredLoadDeltaBytes)
+        XCTAssertEqual(badBase.minimumPhysicalRAMBytes, .max)
+        XCTAssertThrowsError(try badBase.experimentalRequiredProcessHeadroomBytes())
+
+        let badProjector = MemoryProfileRegistry.importedProfile(for: Self.makeImported(
+            baseBytes: 3_000_000_000, mmprojBytes: 0, contextLength: 2048, modelType: .vision))
+        XCTAssertNil(badProjector.measuredLoadDeltaBytes)
+        XCTAssertEqual(badProjector.minimumPhysicalRAMBytes, .max)
+    }
+
+    private static func makeImported(
+        baseBytes: Int64,
+        mmprojBytes: Int64?,
+        contextLength: Int,
+        modelType: ModelType
+    ) -> AIModel {
+        let provenance = HuggingFaceProvenance(
+            repositoryID: "acme/p1-fixture",
+            revision: String(repeating: "c", count: 40),
+            baseFilename: "model.gguf",
+            baseSHA256: String(repeating: "d", count: 64),
+            architecture: "llama",
+            projectorFilename: mmprojBytes == nil ? nil : "mmproj.gguf",
+            projectorSHA256: mmprojBytes == nil ? nil : String(repeating: "e", count: 64)
+        )
+        let isVision = modelType == .vision
+        let baseString = "https://huggingface.co/acme/p1-fixture/resolve/\(provenance.revision)/model.gguf"
+        let mmprojString = "https://huggingface.co/acme/p1-fixture/resolve/\(provenance.revision)/mmproj.gguf"
+        return AIModel(
+            id: "hf-p1-\(baseBytes)-\(mmprojBytes ?? 0)",
+            displayName: "P1",
+            description: "Fixture",
+            modelType: modelType,
+            baseURL: URL(string: baseString)!,
+            mmprojURL: isVision ? URL(string: mmprojString)! : nil,
+            baseFileSizeBytes: baseBytes,
+            mmprojFileSizeBytes: mmprojBytes,
+            baseSHA256: provenance.baseSHA256,
+            mmprojSHA256: provenance.projectorSHA256,
+            quantization: "Q4_K_M",
+            config: .imported(promptPath: .raw, contextLength: contextLength),
+            license: LicenseInfo(name: "MIT", url: URL(string: "https://example.com")!, copyright: ""),
+            source: .huggingFace(provenance)
+        )
+    }
 }

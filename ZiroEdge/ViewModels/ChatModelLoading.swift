@@ -9,6 +9,7 @@
 // `deferredLoadTask` members. Behavior matches the pre-extraction inline code.
 
 import Foundation
+import os
 import UIKit
 
 extension ChatViewModel {
@@ -42,6 +43,10 @@ extension ChatViewModel {
         case .loadFailed:
             modelLoadPhase = .failed(lifecycleManager.loadFailureMessage
                 ?? "\(selectedModel?.displayName ?? "The model") could not be loaded.")
+            // Failure projection stays observable: the banner text alone
+            // never says which gate refused the load.
+            let projectedMessage = lifecycleManager.loadFailureMessage ?? "no-message"
+            logger.warning("Phase projected to failed: \(projectedMessage, privacy: .private)")
         default:
             // `.unloaded`, or `.loaded` with a transient identity mismatch.
             if selectedModel == nil {
@@ -109,18 +114,62 @@ extension ChatViewModel {
     /// `isUserUnloaded` gate as the appear-time kick: system eviction
     /// reloads, Settings → Unload stays parked.
     func handleForegroundTransition() {
+        // P2-8: restore parked per-conversation drafts first (cheap, sync,
+        // idempotent) so the composer shows the right text even if its state
+        // was purged while backgrounded; the model re-kick below is separate.
+        noteForegroundTransition()
         startDeferredModelLoadIfNeeded()
     }
 
     /// Explicit user-driven retry from the header pill or inline row. Unlike
     /// the appear-time kick this may also replay `.failed` attempts.
+    /// P1-4: a refused retry surfaces its reason in-place — the inline
+    /// Retry row disables with `retryIneligibilityHint` — instead of the
+    /// previous silent guard return (which read as a dead button).
     func retryModelLoad() {
         refreshModelLoadPhase()
+        let retryEligible = isEligibleForDeferredStart(manual: true)
+        let retryActiveID = lifecycleManager.activeModel?.id ?? "nil"
+        let retryInFlight = lifecycleManager.isLoadAttemptInFlight ? 1 : 0
+        let retryEligibleFlag = retryEligible ? 1 : 0
+        // Manual-retry decisions stay observable: a no-op retry with no log
+        // is indistinguishable from a tap the app never received.
+        let retryPhase = String(describing: modelLoadPhase)
+        logger.info("Manual retry phase=\(retryPhase, privacy: .public) active=\(retryActiveID, privacy: .public)")
+        logger.info("Manual retry inFlight=\(retryInFlight, privacy: .public) eligible=\(retryEligibleFlag, privacy: .public)")
         guard deferredLoadTask == nil,
               lifecycleManager.activeModel == nil,
               !lifecycleManager.isLoadAttemptInFlight,
-              isEligibleForDeferredStart(manual: true) else { return }
+              retryEligible else {
+            let hint = retryBlockedHint(eligible: retryEligible)
+            retryIneligibilityHint = hint
+            logger.warning("Manual retry refused: \(hint, privacy: .public)")
+            return
+        }
+        retryIneligibilityHint = nil
         spawnDeferredLoadTask()
+    }
+
+    /// User-visible reason a manual retry refused to start, for the inline
+    /// hint under the disabled Retry row. Pure over current state for tests.
+    func retryBlockedHint(eligible: Bool) -> String {
+        if lifecycleManager.activeModel != nil {
+            return "The model is already loaded."
+        }
+        if lifecycleManager.isLoadAttemptInFlight || deferredLoadTask != nil {
+            return "A load is already in progress."
+        }
+        if !eligible {
+            switch modelLoadPhase {
+            case .needsDownload:
+                return "No downloaded model is available yet. Download one to continue."
+            case .loading, .ready:
+                return "A load is already in progress."
+            default:
+                return "Retry is not available right now."
+            }
+        }
+        return "Retry is not available right now."
     }
 
     /// Appear-time kicks allow fresh starts plus eviction retries; manual taps
@@ -152,6 +201,9 @@ extension ChatViewModel {
     // MARK: - Load Execution
 
     private func spawnDeferredLoadTask() {
+        // Autoload kicks stay observable: silent kicks hide eligibility bugs.
+        let spawnID = selectedModel?.id ?? "nil"
+        logger.info("Spawning deferred load for \(spawnID, privacy: .public)")
         // Reaching the loader consumes a prior user-unload intent: an explicit
         // retry here (or a fresh nomination below) deliberately loads.
         lifecycleManager.consumeUserUnloadIntent()
@@ -209,6 +261,54 @@ extension ChatViewModel {
         refreshModelLoadPhase()
     }
 
+    // MARK: - Auto-Select Candidate (moved from ChatViewModel.swift to keep
+    // that file within the type-body-length gate; behavior unchanged).
+
+    /// Auto-select a model for a new conversation. Uses the fallback chain:
+    /// last used model → first available → redirect to models page.
+    /// Reimplemented atop `preferredAutoLoadCandidate()`; behavior (and the
+    /// `needsModelRedirect` contract relied on by unit tests) is unchanged.
+    func autoSelectModel() {
+        guard let candidate = preferredAutoLoadCandidate() else {
+            selectedModel = nil
+            needsModelRedirect = true
+            return
+        }
+        selectedModel = candidate
+        needsModelRedirect = false
+        refreshModelLoadPhase()
+    }
+
+    /// The best available model for the untitled draft chat's deferred load:
+    /// last used model, then the first fully downloaded model.
+    /// Hermetic test runtimes only ever satisfy llama32_3B paths downstream,
+    /// so they are pinned to that profile. Controlled-workload diagnostics
+    /// route through `lifecycleManager.autoLoadFirstModel()` instead and never
+    /// consult this method.
+    /// Unconsented experimental imports are excluded: `availableModels`
+    /// deliberately includes them for picker discoverability, but the deferred
+    /// auto-loader (launch autoload, `beginNewDraft`, Start-Chatting) must not
+    /// silently load and enable chatting on a model `selectModel` would have
+    /// gated behind the first-use consent dialog. They stay picker-only until
+    /// consent is granted.
+    func preferredAutoLoadCandidate() -> AIModel? {
+        let downloaded = availableModels.filter { model in
+            !(model.runtimeEligibility == .experimental
+                && model.isImported
+                && !ExperimentalModelConsent.isGranted(for: model))
+        }
+        #if DEBUG
+        if HermeticUITestRuntime.isEnabled {
+            return downloaded.first { $0.id == ModelRegistry.llama32_3B.id }
+        }
+        #endif
+        if let lastID = UserDefaults.standard.string(forKey: DefaultsKeys.lastUsedModelID),
+           let lastModel = downloaded.first(where: { $0.id == lastID }) {
+            return lastModel
+        }
+        return downloaded.first
+    }
+
     // MARK: - Send Preflight
 
     /// Verifier-backed send gate. Reads the download status derived from
@@ -238,5 +338,82 @@ extension ChatViewModel {
             return false
         }
         return true
+    }
+
+    // MARK: - Send Validation (moved from ChatViewModel.swift to hold the
+    // type-body-length gate; behavior plus P3 R2/R8 post-suspension re-gates).
+
+    /// Validate preconditions for sending a message. Returns nil on success,
+    /// or the conversationID. Sets error/warning state on failure.
+    func validateSendPreconditions(
+        text: String, hasImages: Bool
+    ) async -> UUID? {
+        if CommandLine.arguments.contains("--uitesting-sendtest") {
+            print("[UITEST] sendMessage: textLength=\(text.count) isEmpty=\(text.isEmpty) hasImages=\(hasImages)")
+            print("[UITEST] sendMessage: selectedModel=\(selectedModel?.id ?? "nil")")
+            print("[UITEST] sendMessage: isModelLoaded=\(lifecycleManager.isModelLoaded)")
+        }
+
+        guard !text.isEmpty || hasImages else { return nil }
+        guard !isLoadingConversation else {
+            surfaceSendBlockedDuringConversationLoad()
+            return nil
+        }
+
+        if selectedModel == nil { autoSelectModel() }
+        guard let selectedModel else { needsModelRedirect = true; return nil }
+
+        // Verifier-backed preflight (SHA-256 + GGUF structure via download
+        // status), not modelType alone — see sendPreflightPassed(for:hasImages:).
+        guard sendPreflightPassed(for: selectedModel, hasImages: hasImages) else { return nil }
+        if hasImages && !isVisionModel {
+            visionWarning = "Vision not supported with text-only model. Switch to a vision model."
+            return nil
+        }
+        // Belt-and-braces residency gate: the composer stays disabled until
+        // modelLoadPhase == .ready, so manual sends always pass this.
+        if lifecycleManager.activeModel?.id != selectedModel.id {
+            let selected = await selectModel(selectedModel)
+            if !selected, showingExperimentalConsent { return nil }
+        }
+        guard lifecycleManager.activeModel?.id == selectedModel.id else {
+            errorMessage = "\(selectedModel.displayName) could not be loaded. Choose another downloaded model."
+            showError = true
+            return nil
+        }
+        // R2/R8: re-gate after the selectModel suspension — a switch, evict,
+        // or unload may have moved residency or the vision capability while
+        // suspended. IDs are public; messages stay private.
+        if hasImages, !isVisionModel {
+            logger.info("Send re-gate refused vision post-suspension model=\(selectedModel.id, privacy: .public)")
+            visionWarning = "Vision not supported with text-only model. Switch to a vision model."
+            return nil
+        }
+        guard lifecycleManager.isModelLoaded else {
+            logger.info("Send re-gate refused residency lost post-suspension model=\(selectedModel.id, privacy: .public)")
+            errorMessage = "\(selectedModel.displayName) is no longer loaded. Retry once it reloads."
+            showError = true
+            return nil
+        }
+
+        // Untitled drafts materialize their persistence row just-in-time — only
+        // after the model is confirmed resident.
+        guard let conversationID = activeConversationID else {
+            guard isDraftConversation else {
+                errorMessage = "No active conversation."; showError = true; return nil
+            }
+            guard let materialized = await materializeDraftForSend() else { return nil }
+            // R2: residency may have been lost during the materialization
+            // suspension (evict/unload racing first-send creation).
+            guard lifecycleManager.activeModel?.id == selectedModel.id,
+                  lifecycleManager.isModelLoaded else {
+                logger.info("Send re-gate refused residency lost post-materialize model=\(selectedModel.id, privacy: .public)")
+                errorMessage = "\(selectedModel.displayName) is no longer loaded. Retry once it reloads."
+                showError = true
+                return nil
+            }
+            return materialized
+        }
+        return conversationID
     }
 }

@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 enum MemoryProfileMode: String, Codable, Sendable {
     case text
@@ -206,14 +207,61 @@ enum MemoryProfileRegistry {
 
     /// Imported models have no retained device calibration yet. The estimate is
     /// conservative and only enables the explicit experimental-consent path.
+    /// P1-4: separate base/mmproj weights (mmap'd Q4 base ~1/3 resident vs
+    /// projector pinned fully during vision init), an absolute 4GB + dynamic
+    /// physical floor, and fail-closed nil evidence + .max floor on
+    /// zero/negative catalog sizes. Artifact bytes shape the conservative
+    /// estimate only — admission quantity stays nil (see sentinel).
     static func importedProfile(for model: AIModel) -> MemoryProfile {
+        let revision = model.huggingFaceProvenance?.revision.prefix(12) ?? "unknown"
+        func failClosedProfile() -> MemoryProfile {
+            Logger(subsystem: "com.zanish-labs.ziroedge", category: "memory")
+                .fault("Imported profile fail-closed malformed size \(model.id, privacy: .public)")
+            return MemoryProfile(
+                id: "hf-\(model.id)-\(revision)-ctx\(model.config.contextLength)-p1",
+                modelID: model.id,
+                mode: model.modelType == .vision ? .vision : .text,
+                contextLength: model.config.contextLength,
+                batchSize: model.config.batchSize,
+                microBatchSize: model.config.microBatchSize,
+                projectorPolicy: model.requiresMMProj ? .required : .disabled,
+                evidenceStatus: .unvalidated,
+                policyVersion: 1,
+                measuredFullWorkloadPeakDeltaBytes: nil,
+                measuredLoadDeltaBytes: nil,
+                safetyMultiplier: MemoryProfile.productionSafetyMultiplier,
+                fixedReserveBytes: MemoryProfile.productionReserveBytes,
+                minimumPhysicalRAMBytes: .max
+            )
+        }
+        // Fail closed: non-positive base, or a vision/projector identity with
+        // missing/non-positive projector bytes, can never admit.
+        guard model.baseFileSizeBytes > 0 else { return failClosedProfile() }
+        let needsProjector = model.requiresMMProj || model.mmprojURL != nil
+        if needsProjector {
+            guard let mmprojBytes = model.mmprojFileSizeBytes, mmprojBytes > 0 else {
+                return failClosedProfile()
+            }
+        }
+        let baseResident = UInt64(clamping: model.baseFileSizeBytes / 3)
+        let mmprojResident: UInt64 = {
+            guard let mmprojBytes = model.mmprojFileSizeBytes, mmprojBytes > 0 else { return 0 }
+            return UInt64(clamping: mmprojBytes)
+        }()
         let contextScale = SaturatedArithmetic.multiply(
             UInt64(clamping: max(model.config.contextLength, 512)),
             256_000
         )
-        let artifactResidentEstimate = UInt64(clamping: model.totalFileSizeBytes / 3)
-        let estimated = SaturatedArithmetic.add(artifactResidentEstimate, contextScale)
-        let revision = model.huggingFaceProvenance?.revision.prefix(12) ?? "unknown"
+        let estimated = SaturatedArithmetic.add(
+            SaturatedArithmetic.add(baseResident, mmprojResident),
+            contextScale
+        )
+        // Absolute 4GB floor plus dynamic estimated+reserve so huge imports
+        // demand real hardware instead of passing on any 6GB device.
+        let physicalFloor = max(
+            4_000_000_000,
+            SaturatedArithmetic.add(estimated, MemoryProfile.productionReserveBytes)
+        )
         return MemoryProfile(
             id: "hf-\(model.id)-\(revision)-ctx\(model.config.contextLength)-p1",
             modelID: model.id,
@@ -228,7 +276,7 @@ enum MemoryProfileRegistry {
             measuredLoadDeltaBytes: estimated,
             safetyMultiplier: MemoryProfile.productionSafetyMultiplier,
             fixedReserveBytes: MemoryProfile.productionReserveBytes,
-            minimumPhysicalRAMBytes: 1
+            minimumPhysicalRAMBytes: physicalFloor
         )
     }
 }

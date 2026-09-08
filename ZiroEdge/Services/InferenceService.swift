@@ -34,6 +34,10 @@ protocol InferenceServiceProtocol: Sendable {
 
     func cancelCurrentStream() async
 
+    /// R6: unconditional gate release for safety eviction. Idempotent with
+    /// the stream's own onTermination release.
+    func releaseGenerationGateForEviction() async
+
     /// Ensures no generation holds the engine before a new chat decode starts.
     /// Chat preempts the current holder (cancels it and waits for release).
     /// Throws `generationBusy` when the holder did not release in time so the
@@ -45,6 +49,7 @@ extension InferenceServiceProtocol {
     /// Default no-op so test doubles that don't model cross-generation
     /// arbitration compile unchanged.
     func ensureIdleForNewChat() async throws {}
+    func releaseGenerationGateForEviction() async {}
 }
 
 // MARK: - Inference Service
@@ -156,29 +161,7 @@ actor InferenceService: InferenceServiceProtocol {
         logger.info("Loading model: \(model.id, privacy: .public) from \(baseURL.path, privacy: .public)")
 
 #if DEBUG
-        if HermeticUITestRuntime.isEnabled, model.id == ModelRegistry.llama32_3B.id {
-            // --uitesting-hermetic-failed-load: deterministic native-load failure
-            // for the chat error state. Thrown before any load-safety bookkeeping
-            // so retries replay the failure instead of tripping the two-strikes
-            // profile disable.
-            if HermeticUITestRuntime.scenario == .failedLoad {
-                throw InferenceError.nativeFailure(kind: .contextCreation, diagnostic: "hermetic-load-failure")
-            }
-            guard let profile = MemoryProfileRegistry.profile(for: model) else {
-                throw InferenceError.nativeFailure(kind: .contextCreation, diagnostic: "fixture-profile-missing")
-            }
-            try loadSafetyStore.beginLoad(profileID: profile.id)
-            do {
-                try loadSafetyStore.clearAfterNativeConstruction(profileID: profile.id)
-            } catch {
-                throw InferenceError.nativeFailure(kind: .suspectedJetsam, diagnostic: "fixture-safety-clear-failed")
-            }
-            hermeticModelLoaded = true
-            _loadedModelID = model.id
-            currentConfig = model.config
-            currentModel = model
-            return
-        }
+        if try loadHermeticIfEligible(model) { return }
 #endif
 
         // Validate file exists.
@@ -217,10 +200,29 @@ actor InferenceService: InferenceServiceProtocol {
         do {
             try loadSafetyStore.beginLoad(profileID: profile.id)
         } catch {
+            let uncleanCount = loadSafetyStore.recentUncleanAttemptCount(profileID: profile.id)
+            let disabledFlag = loadSafetyStore.isDisabled(profileID: profile.id)
+            // A latched-disabled profile must read distinctly from a stale
+            // pending marker so the UI can route to Reset instead of Retry.
+            let diagnostic = disabledFlag ? "load-safety-profile-disabled" : "load-safety-circuit-open"
+            let gateError = String(describing: error)
+            logger.error("Safety gate threw for \(profile.id, privacy: .public): \(gateError, privacy: .private)")
+            logger.error("Safety state unclean=\(uncleanCount, privacy: .public) disabled=\(disabledFlag, privacy: .public)")
             throw InferenceError.nativeFailure(
                 kind: .suspectedJetsam,
-                diagnostic: "load-safety-circuit-open"
+                diagnostic: diagnostic
             )
+        }
+
+        // P1-1 fresh sample immediately pre-mmap: the caller's budget decision
+        // may be stale after teardown sleep. Retry-once inside; on refusal
+        // withdraw the just-set marker so the slot isn't burned and the next
+        // begin isn't blocked (admission refusal, not a construction attempt).
+        do {
+            try enforcePreLoadReserve(for: model, profile: profile)
+        } catch {
+            _ = loadSafetyStore.withdrawPendingLoad()
+            throw error
         }
 
         // Native construction is synchronous and cannot be interrupted once entered.
@@ -256,6 +258,14 @@ actor InferenceService: InferenceServiceProtocol {
     }
 
     func unloadModel() async {
+        // P1-3 coalesce: actor-serialized second unload joins in-flight teardown
+        // instead of spawning a duplicate backend_free. Idempotent when idle.
+#if DEBUG
+        let hasHermetic = hermeticModelLoaded
+#else
+        let hasHermetic = false
+#endif
+        if engine == nil && pendingUnload == nil && !hasHermetic { return }
         unloadInternal()
         await pendingUnload?.value
         pendingUnload = nil
@@ -266,7 +276,10 @@ actor InferenceService: InferenceServiceProtocol {
         hermeticModelLoaded = false
 #endif
         if let eng = engine {
-            pendingUnload = Task { await eng.unload() }
+            // Join in-flight teardown instead of overwriting (and leaking) it.
+            if pendingUnload == nil {
+                pendingUnload = Task { await eng.unload() }
+            }
         }
         engine = nil
         _loadedModelID = nil
@@ -274,6 +287,33 @@ actor InferenceService: InferenceServiceProtocol {
         currentModel = nil
         logger.info("Model unloaded")
     }
+
+#if DEBUG
+    /// Hermetic fast-path for UI tests (extracted to hold the loadModel
+    /// body-length gate). Returns true when the load was fully handled.
+    private func loadHermeticIfEligible(_ model: AIModel) throws -> Bool {
+        guard HermeticUITestRuntime.isEnabled, model.id == ModelRegistry.llama32_3B.id else {
+            return false
+        }
+        if HermeticUITestRuntime.scenario == .failedLoad {
+            throw InferenceError.nativeFailure(kind: .contextCreation, diagnostic: "hermetic-load-failure")
+        }
+        guard let profile = MemoryProfileRegistry.profile(for: model) else {
+            throw InferenceError.nativeFailure(kind: .contextCreation, diagnostic: "fixture-profile-missing")
+        }
+        try loadSafetyStore.beginLoad(profileID: profile.id)
+        do {
+            try loadSafetyStore.clearAfterNativeConstruction(profileID: profile.id)
+        } catch {
+            throw InferenceError.nativeFailure(kind: .suspectedJetsam, diagnostic: "fixture-safety-clear-failed")
+        }
+        hermeticModelLoaded = true
+        _loadedModelID = model.id
+        currentConfig = model.config
+        currentModel = model
+        return true
+    }
+#endif
 
 }
 
@@ -301,7 +341,10 @@ extension InferenceService {
             topP: sampling.topP,
             topK: sampling.topK,
             maxTokens: sampling.maxTokens,
-            repeatPenalty: sampling.repeatPenalty
+            repeatPenalty: sampling.repeatPenalty,
+            penaltyLastN: sampling.penaltyLastN,
+            frequencyPenalty: sampling.frequencyPenalty,
+            presencePenalty: sampling.presencePenalty
         )
         return try await eng.streamCompletion(
             prompt: prompt,
@@ -337,7 +380,10 @@ extension InferenceService {
             topP: sampling.topP,
             topK: sampling.topK,
             maxTokens: sampling.maxTokens,
-            repeatPenalty: sampling.repeatPenalty
+            repeatPenalty: sampling.repeatPenalty,
+            penaltyLastN: sampling.penaltyLastN,
+            frequencyPenalty: sampling.frequencyPenalty,
+            presencePenalty: sampling.presencePenalty
         )
 
         let prefillStarted = ContinuousClock.now
@@ -413,7 +459,10 @@ extension InferenceService {
             topP: sampling.topP,
             topK: sampling.topK,
             maxTokens: sampling.maxTokens,
-            repeatPenalty: sampling.repeatPenalty
+            repeatPenalty: sampling.repeatPenalty,
+            penaltyLastN: sampling.penaltyLastN,
+            frequencyPenalty: sampling.frequencyPenalty,
+            presencePenalty: sampling.presencePenalty
         )
 
         let imageEvaluationStarted = ContinuousClock.now
@@ -585,14 +634,44 @@ extension InferenceService {
 
     /// One fresh snapshot immediately before entering inference. The load-time
     /// check cannot protect a model whose headroom fell while it was idle.
+    /// P1-1 retry-once: a transient dip resamples immediately before failing.
     private func enforcePreInferenceReserve() throws {
-        let available = UInt64(os_proc_available_memory())
+        var available = UInt64(os_proc_available_memory())
+        if available < MemoryProfile.productionReserveBytes {
+            logger.fault("Pre-inference reserve dip available=\(available, privacy: .public) retrying once")
+            available = UInt64(os_proc_available_memory())
+        }
         guard available >= MemoryProfile.productionReserveBytes else {
+            logger.fault("Pre-inference reserve breached available=\(available, privacy: .public) reserve=\(MemoryProfile.productionReserveBytes, privacy: .public)")
             throw InferenceError.nativeFailure(
                 kind: .memoryPressure,
                 diagnostic: MemoryAdmissionFailure.postLoadReserveBreached.rawValue
             )
         }
+    }
+
+    /// P1-1 fresh headroom sample immediately pre-mmap/context init. The
+    /// caller's budget decision may be stale after teardown sleep, so this gate
+    /// never reuses it: it derives the floor from the profile and samples now,
+    /// retrying once on breach. No validated floor (unvalidated without consent)
+    /// defers to the caller's admission refusal — this gate only enforces a
+    /// known floor. IDs public; no digests here.
+    private func enforcePreLoadReserve(for model: AIModel, profile: MemoryProfile) throws {
+        let required = (try? profile.requiredProcessHeadroomBytes())
+            ?? (try? profile.experimentalRequiredProcessHeadroomBytes())
+        guard let required else { return }
+        var available = UInt64(os_proc_available_memory())
+        if available >= required { return }
+        logger.fault("Pre-mmap headroom dip \(model.id, privacy: .public) available=\(available, privacy: .public) required=\(required, privacy: .public) retrying once")
+        available = UInt64(os_proc_available_memory())
+        guard available >= required else {
+            logger.fault("Pre-mmap reserve breached \(model.id, privacy: .public) available=\(available, privacy: .public) required=\(required, privacy: .public)")
+            throw InferenceError.nativeFailure(
+                kind: .memoryPressure,
+                diagnostic: MemoryAdmissionFailure.insufficientProcessHeadroom.rawValue
+            )
+        }
+        logger.info("Pre-mmap retry recovered \(model.id, privacy: .public) available=\(available, privacy: .public)")
     }
 
     private static func classifyNativeFailure(_ error: Error) -> InferenceError {
@@ -606,6 +685,8 @@ extension InferenceService {
         case .projectorInitializationFailed, .visionNotSupported, .visionImageLoadFailed:
             kind = .projectorInitialization
         case .decodeFailed, .tokenizationFailed, .samplerCreationFailed, .modelNotLoaded:
+            kind = .inference
+        case .contextWindowExceeded:
             kind = .inference
         case .invalidConfiguration: kind = .contextCreation
         }
@@ -670,6 +751,13 @@ extension InferenceService {
         pendingCancellation = cancellationTask
         await cancellationTask.value
         pendingCancellation = nil
+    }
+
+    /// R6: eviction-time gate release. Called after cancelCurrentStream so a
+    /// holder stuck past its decode boundary cannot wedge the next load.
+    func releaseGenerationGateForEviction() async {
+        await generationGate.forceReleaseAllForEviction()
+        logger.info("Generation gate released for eviction")
     }
 
     private func waitForPendingCancellation() async {

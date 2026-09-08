@@ -116,6 +116,70 @@ final class LoadSafetyStoreTests: XCTestCase {
         XCTAssertEqual(store.recentUncleanAttemptCount(profileID: "p1"), 0)
         XCTAssertEqual(store.recentUncleanAttemptCount(profileID: "p2"), 1)
     }
+
+    /// A deliberately cancelled load must leave no trace: withdrawing the
+    /// pending marker records neither a clean nor an unclean outcome, the
+    /// next begin succeeds immediately, and a relaunch classifies nothing.
+    func testWithdrawPendingLoadRecordsNoOutcome() throws {
+        let url = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: url) }
+        var store = try LoadSafetyStore(directory: url)
+        try store.beginLoad(profileID: "p1")
+        store.withdrawPendingLoad()
+        // No stale pending: the next load may begin at once.
+        try store.beginLoad(profileID: "p1")
+        store.withdrawPendingLoad()
+        store = try LoadSafetyStore(directory: url)
+        XCTAssertEqual(store.recentUncleanAttemptCount(profileID: "p1"), 0)
+        XCTAssertFalse(store.isDisabled(profileID: "p1"))
+        XCTAssertNil(store.lastLaunchClassification)
+    }
+
+    /// Withdrawing with no pending marker is a safe no-op.
+    func testWithdrawWithoutPendingMarkerIsNoOp() throws {
+        let url = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = try LoadSafetyStore(directory: url)
+        XCTAssertTrue(store.withdrawPendingLoad())
+        XCTAssertEqual(store.recentUncleanAttemptCount(profileID: "p1"), 0)
+    }
+
+    // MARK: - P1-2 profile-agnostic withdraw + persisted Bool
+
+    /// Withdraw clears ANY pending marker regardless of profile (cancellation
+    /// races admission) and reports persistence: next begin for a different
+    /// profile succeeds immediately and relaunch records no outcome.
+    func testP1WithdrawIsProfileAgnosticAndReportsPersisted() throws {
+        let url = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = try LoadSafetyStore(directory: url)
+        try store.beginLoad(profileID: "p1")
+        XCTAssertTrue(store.withdrawPendingLoad())
+        // Profile-agnostic: p1's marker never blocks p2's begin.
+        try store.beginLoad(profileID: "p2")
+        XCTAssertTrue(store.withdrawPendingLoad())
+        let relaunched = try LoadSafetyStore(directory: url)
+        XCTAssertEqual(relaunched.recentUncleanAttemptCount(profileID: "p1"), 0)
+        XCTAssertEqual(relaunched.recentUncleanAttemptCount(profileID: "p2"), 0)
+        XCTAssertFalse(relaunched.isDisabled(profileID: "p1"))
+        XCTAssertNil(relaunched.lastLaunchClassification)
+    }
+
+    /// A write failure still clears in memory (caller never blocks) but
+    /// returns false and fault-logs so the stale on-disk marker can't silently
+    /// masquerade as a future jetsam event.
+    func testP1WithdrawPersistFailureReturnsFalseButClearsInMemory() throws {
+        let url = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let fileSystem = FaultingLoadSafetyFileSystem()
+        let store = try LoadSafetyStore(directory: url, fileSystem: fileSystem)
+        try store.beginLoad(profileID: "p1")
+        fileSystem.failNextWrite = true
+        XCTAssertFalse(store.withdrawPendingLoad())
+        // In-memory cleared: the next begin succeeds without a markerMismatch.
+        try store.beginLoad(profileID: "p1")
+        XCTAssertEqual(store.recentUncleanAttemptCount(profileID: "p1"), 0)
+    }
 }
 
 private final class FaultingLoadSafetyFileSystem: LoadSafetyFileSystem, @unchecked Sendable {

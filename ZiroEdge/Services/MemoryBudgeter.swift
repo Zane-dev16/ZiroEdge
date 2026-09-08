@@ -88,10 +88,40 @@ actor MemoryBudgeter {
     func appMemoryHeadroom() -> UInt64 { metrics.processAvailableMemory() }
     func totalDeviceRAM() -> UInt64 { metrics.totalRAM() }
 
-    /// Samples os_proc_available_memory exactly once after the caller has completed unload recovery.
+    /// P1-1: single fresh sample after the caller completes unload recovery.
+    /// A transient zero (jetsam pressure settling) retries once immediately
+    /// before failing closed as metricsUnavailable. Callers must NOT reuse a
+    /// pre-teardown decision: re-invoke this immediately pre-mmap/context init
+    /// (see constructAndCommit fresh resample + InferenceService pre-mmap gate).
+    /// P1-4: malformed catalog sizes fail closed here as well (profileUnvalidated,
+    /// artifact quantity still never used — sentinel stays nil).
     func decision(for model: AIModel, allowUnvalidatedCalibration: Bool = false) -> MemoryLoadDecision {
-        let processAvailable = metrics.processAvailableMemory()
-        let total = metrics.totalRAM()
+        // P1-4 fail-closed validity gate: quantity never admits, but malformed
+        // sizes must refuse even before profile checks. IDs public.
+        let needsProjector = model.requiresMMProj || model.mmprojURL != nil
+        let hasValidSizes = model.baseFileSizeBytes > 0
+            && (!needsProjector || (model.mmprojFileSizeBytes ?? 0) > 0)
+        if !hasValidSizes {
+            logger.fault("Load refused malformed artifact size \(model.id, privacy: .public)")
+            let refused = MemoryLoadDecision(
+                recommendation: .insufficientRAM,
+                processAvailableBytes: metrics.processAvailableMemory(),
+                totalPhysicalBytes: metrics.totalRAM(),
+                profileID: MemoryProfileRegistry.profile(for: model)?.id,
+                requiredBytes: nil,
+                reason: .profileUnvalidated
+            )
+            lastDecision = refused
+            return refused
+        }
+        var processAvailable = metrics.processAvailableMemory()
+        var total = metrics.totalRAM()
+        if processAvailable == 0 || total == 0 {
+            // P1-1 retry-once: one immediate resample before failing closed.
+            logger.fault("Memory metrics transient zero \(model.id, privacy: .public) retrying once")
+            processAvailable = metrics.processAvailableMemory()
+            total = metrics.totalRAM()
+        }
         let profile = MemoryProfileRegistry.profile(for: model)
         var required = try? profile?.requiredProcessHeadroomBytes()
         let reason: MemoryAdmissionFailure?

@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 enum LoadSafetyError: Error, Equatable {
     case profileDisabled
@@ -55,6 +56,7 @@ final class LoadSafetyStore: @unchecked Sendable {
     private let lock = NSLock()
     private let stateURL: URL
     private let fileSystem: any LoadSafetyFileSystem
+    private let logger = Logger(subsystem: "com.zanish-labs.ziroedge", category: "load-safety")
     private var state: LoadSafetyState
     private(set) var lastLaunchClassification: NativeFailureKind?
     private(set) var lastInterruptedProfileID: String?
@@ -147,6 +149,42 @@ final class LoadSafetyStore: @unchecked Sendable {
             )
             next.pending = nil
         }
+    }
+
+    /// Withdraw a deliberately cancelled load without recording an outcome.
+    /// Epoch invalidation (background/foreground/memory pressure) stops a
+    /// load that never crashed: leaving its marker pending would either
+    /// block the next `beginLoad` or be misread as an unclean attempt at
+    /// next launch — blaming the model for an OS-initiated teardown (e.g. a
+    /// background-exit watchdog while a load was merely in flight).
+    /// Intentionally profile-agnostic: cancellation races profile admission
+    /// (the epoch may fire before a profile resolves), so ANY pending marker
+    /// is cleared regardless of which profile it names. Asserts nothing about
+    /// the caller — the store owns the single pending slot, not per-profile slots.
+    /// Returns whether the cleared state persisted. Infallible by design:
+    /// cancellation must never fail its caller — the marker is always cleared
+    /// in memory; persistence is best-effort and a write failure fault-logs.
+    @discardableResult
+    func withdrawPendingLoad() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let pending = state.pending else { return true }
+        let pendingProfileID = pending.profileID
+        var next = state
+        next.pending = nil
+        do {
+            try Self.persist(next, to: stateURL, fileSystem: fileSystem)
+        } catch {
+            // Best-effort: still clear in memory so the caller never blocks,
+            // but report persistence so a stale on-disk marker can't silently
+            // masquerade as a future jetsam event.
+            state = next
+            logger.fault("Withdraw persist failed profile=\(pendingProfileID, privacy: .public)")
+            logger.fault("Withdraw persist error=\(String(describing: error), privacy: .private)")
+            return false
+        }
+        state = next
+        return true
     }
 
     func isDisabled(profileID: String) -> Bool {

@@ -164,6 +164,81 @@ final class ModelAvailabilitySurfaceTests: XCTestCase {
                        "Quarantine must move invalid artifact away from installed path")
     }
 
+    // MARK: - P0-1 cached-status + async refresh (ModelManagerServiceTests equivalent)
+
+    /// `quickAvailability` must be hash-free: no SHA-256 compute, ready for a valid fixture.
+    /// Proves the cached/seed path never hashes multi-GB on the MainActor.
+    func testP01QuickAvailabilityIsHashFree() throws {
+        ModelManagerService.resetSHA256CacheForTests()
+        defer { ModelManagerService.resetSHA256CacheForTests() }
+        let data = validGGUFData(length: 32)
+        let id = "p01-quick-\(UUID().uuidString.lowercased())"
+        let model = AIModel(
+            id: id, displayName: "P01 Quick", description: "Test", modelType: .text,
+            baseURL: URL(string: "https://example.com/\(id).gguf")!,
+            mmprojURL: nil, baseFileSizeBytes: Int64(data.count), mmprojFileSizeBytes: nil,
+            baseSHA256: sha256(data), mmprojSHA256: nil, quantization: "Q4_K_M",
+            config: .llama32,
+            license: LicenseInfo(name: "Test", url: URL(string: "https://example.com/license")!, copyright: "Test")
+        )
+        defer { ModelManagerService.deleteModel(model) }
+        try data.write(to: ModelManagerService.baseModelPath(for: model), options: .atomic)
+        guard case .ready = ModelManagerService.quickAvailability(for: model) else {
+            return XCTFail("quick must report ready for valid fixture")
+        }
+        XCTAssertEqual(ModelManagerService.sha256ComputeCount, 0, "quick must never hash")
+    }
+
+    /// Full `availability` remains authoritative: same-size hash mismatch is repairNeeded.
+    /// Documents the production async correction (quick optimistic ready -> async repair).
+    func testP01SameSizeMismatchFullIsRepairQuickIsOptimistic() throws {
+        ModelManagerService.resetSHA256CacheForTests()
+        defer { ModelManagerService.resetSHA256CacheForTests() }
+        let good = validGGUFData(length: 32)
+        var bad = good
+        bad[bad.count - 1] = 0xFF
+        let id = "p01-optimistic-\(UUID().uuidString.lowercased())"
+        let model = AIModel(
+            id: id, displayName: "P01 Optimistic", description: "Test", modelType: .text,
+            baseURL: URL(string: "https://example.com/\(id).gguf")!,
+            mmprojURL: nil, baseFileSizeBytes: Int64(good.count), mmprojFileSizeBytes: nil,
+            baseSHA256: sha256(good), mmprojSHA256: nil, quantization: "Q4_K_M",
+            config: .llama32,
+            license: LicenseInfo(name: "Test", url: URL(string: "https://example.com/license")!, copyright: "Test")
+        )
+        defer { ModelManagerService.deleteModel(model) }
+        try bad.write(to: ModelManagerService.baseModelPath(for: model), options: .atomic)
+        guard case .ready = ModelManagerService.quickAvailability(for: model) else {
+            return XCTFail("quick is size+header only, so same-size corrupt reads optimistic ready")
+        }
+        guard case .repairNeeded(let issues) = ModelManagerService.availability(for: model) else {
+            return XCTFail("full must detect hash mismatch")
+        }
+        XCTAssertTrue(issues.contains { if case .sha256Mismatch = $0 { return true }; return false })
+    }
+
+    /// `refreshStatusesFromDisk` (async off-main) must land authoritative truth.
+    /// Covers the async-refresh half of cached-status + async refresh for status.
+    func testP01RefreshStatusesLandsAuthoritativeTruth() async throws {
+        ModelManagerService.resetSHA256CacheForTests()
+        defer { ModelManagerService.resetSHA256CacheForTests() }
+        let data = validGGUFData(length: 32)
+        let id = "p01-refresh-\(UUID().uuidString.lowercased())"
+        let model = AIModel(
+            id: id, displayName: "P01 Refresh", description: "Test", modelType: .text,
+            baseURL: URL(string: "https://example.com/\(id).gguf")!,
+            mmprojURL: nil, baseFileSizeBytes: Int64(data.count), mmprojFileSizeBytes: nil,
+            baseSHA256: sha256(data), mmprojSHA256: nil, quantization: "Q4_K_M",
+            config: .llama32,
+            license: LicenseInfo(name: "Test", url: URL(string: "https://example.com/license")!, copyright: "Test")
+        )
+        defer { ModelManagerService.deleteModel(model) }
+        try data.write(to: ModelManagerService.baseModelPath(for: model), options: .atomic)
+        let manager = DownloadManager()
+        await manager.refreshStatusesFromDisk()
+        XCTAssertTrue(manager.status(for: model).isReady, "async refresh must publish verified ready")
+    }
+
     private func validGGUFData(length: Int) -> Data {
         TestModelFixtures.gguf(count: length)
     }
