@@ -625,6 +625,7 @@ struct DoneStepView: View {
             VStack(spacing: ZiroTheme.Spacing.small) {
                 Button { onStartChatting(model) } label: {
                     Label("Start Chatting", systemImage: "bubble.left.and.text.bubble.right")
+                        .flipsForRightToLeft(true)
                 }
                 .buttonStyle(ZiroPrimaryButtonStyle())
 

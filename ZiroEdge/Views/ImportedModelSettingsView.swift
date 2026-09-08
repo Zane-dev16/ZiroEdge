@@ -67,7 +67,9 @@ struct ImportedModelSettingsView: View {
 
     @ViewBuilder
     private var adjustableControls: some View {
-        Stepper("Context: \(contextLength) tokens", value: $contextLength, in: 512...4096, step: 512)
+        Stepper(value: $contextLength, in: 512...4096, step: 512) {
+            Text("Context: \(contextLength) tokens").monospacedDigit()
+        }
 
         VStack(alignment: .leading, spacing: ZiroTheme.Spacing.xSmall) {
             // Numeric readouts use the technical voice; the label side stays
@@ -98,9 +100,13 @@ struct ImportedModelSettingsView: View {
                 .accessibilityValue("\(topP, specifier: "%.2f")")
         }
 
-        Stepper("Max Tokens: \(maxTokens)", value: $maxTokens, in: 64...4096, step: 64)
+        Stepper(value: $maxTokens, in: 64...4096, step: 64) {
+            Text("Max Tokens: \(maxTokens)").monospacedDigit()
+        }
 
-        Stepper("Top-K: \(topK)", value: $topK, in: 1...100, step: 1)
+        Stepper(value: $topK, in: 1...100, step: 1) {
+            Text("Top-K: \(topK)").monospacedDigit()
+        }
 
         VStack(alignment: .leading, spacing: ZiroTheme.Spacing.xSmall) {
             Text("Repeat Penalty: ")
@@ -120,7 +126,8 @@ struct ImportedModelSettingsView: View {
 
     private var estimatedMemory: UInt64 {
         ImportRAMAssessment.estimatedBytes(
-            artifactBytes: model.totalFileSizeBytes,
+            baseBytes: model.baseFileSizeBytes,
+            mmprojBytes: model.mmprojFileSizeBytes,
             contextLength: contextLength
         )
     }

@@ -74,8 +74,11 @@ struct ModelDetailView: View {
                 HStack(spacing: ZiroTheme.Spacing.medium) {
                     Image(systemName: modelIconName)
                         .font(.largeTitle)
-                        .foregroundStyle(ZiroTheme.accent)
+                        .foregroundStyle(modelIconTint)
                         .symbolRenderingMode(.hierarchical)
+                        // text.bubble is directional — mirror in RTL;
+                        // eye.circle is symmetric (no-op).
+                        .flipsForRightToLeft(true)
                         .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: ZiroTheme.Spacing.xSmall) {
                         Text(model.displayName)
@@ -106,10 +109,17 @@ struct ModelDetailView: View {
     }
 
     private var modelIconName: String {
-        guard model.modelType == .vision else { return "text.bubble.fill" }
-        return viewModel.status(for: model).isVisionReady
-            ? "eye.circle.fill"
-            : "eye.slash.circle.fill"
+        // Single base symbol per kind (outline), matching ModelRow — state
+        // is carried by tint, never by swapping .fill/.slash assets.
+        guard model.modelType == .vision else { return "text.bubble" }
+        return "eye.circle"
+    }
+
+    private var modelIconTint: Color {
+        if model.modelType == .vision && !viewModel.status(for: model).isVisionReady {
+            return ZiroTheme.secondaryText
+        }
+        return ZiroTheme.accent
     }
 
     // MARK: - Primary Action (download / ready)
@@ -203,6 +213,7 @@ struct ModelDetailView: View {
 
             Button { onStartChatting(model) } label: {
                 Label("Start Chatting", systemImage: "bubble.left.and.text.bubble.right")
+                    .flipsForRightToLeft(true)
             }
             .buttonStyle(ZiroPrimaryButtonStyle())
 
@@ -229,6 +240,7 @@ struct ModelDetailView: View {
                     "Text Only · \(StorageByteFormatter.string(fromByteCount: model.baseFileSizeBytes))",
                     systemImage: "text.bubble"
                 )
+                .flipsForRightToLeft(true)
             }
             .buttonStyle(ZiroPrimaryButtonStyle())
 
@@ -262,6 +274,7 @@ struct ModelDetailView: View {
             StorageProvenancePage(model: model, viewModel: viewModel)
         } label: {
             Label(label, systemImage: symbol)
+                .font(ZiroType.body.monospacedDigit())
         }
     }
 
@@ -282,11 +295,11 @@ struct ModelDetailView: View {
                         .foregroundStyle(ZiroTheme.dangerText)
                 case .baseDownloading(let progress):
                     Label("Base downloading (\(Int(progress * 100))%)", systemImage: "arrow.down.circle")
-                        .font(ZiroType.caption)
+                        .font(ZiroType.caption.monospacedDigit())
                         .foregroundStyle(ZiroTheme.secondaryText)
                 case .basePaused(let progress):
                     Label("Base paused (\(Int(progress * 100))%)", systemImage: "pause.circle")
-                        .font(ZiroType.caption)
+                        .font(ZiroType.caption.monospacedDigit())
                         .foregroundStyle(ZiroTheme.secondaryText)
                 case .projectorDownloaded:
                     Label("Projector verified", systemImage: "checkmark.circle.fill")
@@ -298,11 +311,11 @@ struct ModelDetailView: View {
                         .foregroundStyle(ZiroTheme.dangerText)
                 case .projectorDownloading(let progress):
                     Label("Projector downloading (\(Int(progress * 100))%)", systemImage: "arrow.down.circle")
-                        .font(ZiroType.caption)
+                        .font(ZiroType.caption.monospacedDigit())
                         .foregroundStyle(ZiroTheme.secondaryText)
                 case .projectorPaused(let progress):
                     Label("Projector paused (\(Int(progress * 100))%)", systemImage: "pause.circle")
-                        .font(ZiroType.caption)
+                        .font(ZiroType.caption.monospacedDigit())
                         .foregroundStyle(ZiroTheme.secondaryText)
                     }
                 }

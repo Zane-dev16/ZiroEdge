@@ -70,13 +70,20 @@ struct OnboardingView: View {
             .padding(.top, ZiroTheme.Spacing.large)
 
             TabView(selection: $currentPage) {
-                ForEach(Array(pages.enumerated()), id: \.offset) { index, page in
+                // PERF: indices directly — no Array(enumerated()) copy
+                // (static 3-page list; positional identity never shifts).
+                ForEach(pages.indices, id: \.self) { index in
+                    let page = pages[index]
                     ScrollView {
                         VStack(spacing: ZiroTheme.Spacing.xLarge) {
                             Image(systemName: page.symbol)
                                 .font(.system(size: heroIconSize, weight: .medium))
                                 .foregroundStyle(page.color)
                                 .symbolRenderingMode(.hierarchical)
+                                // Decorative 72pt heroes stay .fill by design
+                                // (contrast-exempt); the bubble hero still
+                                // mirrors in RTL, others ignore the flip.
+                                .flipsForRightToLeft(page.symbol.contains("bubble"))
                                 .accessibilityHidden(true)
 
                             VStack(spacing: ZiroTheme.Spacing.medium) {

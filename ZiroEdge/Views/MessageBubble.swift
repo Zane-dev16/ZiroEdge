@@ -6,6 +6,7 @@
 // the page (no card, no hairline).
 
 import SwiftUI
+import UIKit
 
 struct MessageBubble: View {
     let message: ChatMessagePayload
@@ -45,13 +46,26 @@ struct MessageBubble: View {
                 if !message.attachments.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: ZiroTheme.Spacing.small) {
-                            ForEach(Array(message.attachments.enumerated()), id: \.offset) { _, imageData in
+                            // PERF: indices directly — no per-body Array(enumerated()) copy.
+                            ForEach(message.attachments.indices, id: \.self) { attachmentIndex in
+                                let imageData = message.attachments[attachmentIndex]
                                 if let uiImage = UIImage(data: imageData) {
                                     Image(uiImage: uiImage)
                                         .resizable()
                                         .scaledToFit()
                                         .frame(maxWidth: 240, maxHeight: 240)
                                         .clipShape(RoundedRectangle(cornerRadius: ZiroTheme.Radius.small, style: .continuous))
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: ZiroTheme.Radius.small, style: .continuous)
+                                                .stroke(
+                                                    Color(uiColor: UIColor { traits in
+                                                        traits.userInterfaceStyle == .dark
+                                                            ? UIColor.white.withAlphaComponent(0.1)
+                                                            : UIColor.black.withAlphaComponent(0.1)
+                                                    }),
+                                                    lineWidth: 1
+                                                )
+                                        )
                                         .accessibilityLabel("Message attachment")
                                 }
                             }
@@ -129,6 +143,8 @@ struct MessageBubble: View {
                             Image(systemName: "arrow.triangle.branch")
                                 .font(.caption)
                                 .foregroundStyle(ZiroTheme.secondaryText)
+                                // Directional — mirror in RTL.
+                                .flipsForRightToLeft(true)
                                 .frame(width: actionControlSide, height: actionControlSide)
                                 .contentShape(Rectangle())
                         }

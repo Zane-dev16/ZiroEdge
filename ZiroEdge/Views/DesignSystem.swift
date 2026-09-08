@@ -469,6 +469,7 @@ enum ZiroTone: CaseIterable {
 struct ZiroPrimaryButtonStyle: ButtonStyle {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.isEnabled) private var isEnabled
+    var isStatic = false
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -485,7 +486,7 @@ struct ZiroPrimaryButtonStyle: ButtonStyle {
             .clipShape(Capsule())
             .modifier(ZiroShadowModifier(level: .raised))
             .opacity(isEnabled ? 1 : 0.9)
-            .scaleEffect(reduceMotion || !configuration.isPressed ? 1 : 0.98)
+            .scaleEffect(reduceMotion || isStatic || !configuration.isPressed ? 1 : 0.96)
             .animation(reduceMotion ? nil : ZiroMotion.press, value: configuration.isPressed)
     }
 }
@@ -495,6 +496,7 @@ struct ZiroPrimaryButtonStyle: ButtonStyle {
 struct ZiroSecondaryButtonStyle: ButtonStyle {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.isEnabled) private var isEnabled
+    var isStatic = false
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -507,7 +509,7 @@ struct ZiroSecondaryButtonStyle: ButtonStyle {
                 Capsule().fill(ZiroTheme.accentContainer)
                     .overlay(configuration.isPressed && isEnabled ? Color.accentColor.opacity(0.12) : Color.clear)
             )
-            .scaleEffect(reduceMotion || !configuration.isPressed ? 1 : 0.98)
+            .scaleEffect(reduceMotion || isStatic || !configuration.isPressed ? 1 : 0.96)
             .animation(reduceMotion ? nil : ZiroMotion.press, value: configuration.isPressed)
     }
 }
@@ -517,6 +519,7 @@ struct ZiroSecondaryButtonStyle: ButtonStyle {
 struct ZiroDestructiveButtonStyle: ButtonStyle {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.isEnabled) private var isEnabled
+    var isStatic = false
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -529,7 +532,7 @@ struct ZiroDestructiveButtonStyle: ButtonStyle {
                 Capsule().fill(ZiroTheme.dangerContainer)
                     .overlay(configuration.isPressed && isEnabled ? ZiroTheme.dangerText.opacity(0.12) : Color.clear)
             )
-            .scaleEffect(reduceMotion || !configuration.isPressed ? 1 : 0.98)
+            .scaleEffect(reduceMotion || isStatic || !configuration.isPressed ? 1 : 0.96)
             .animation(reduceMotion ? nil : ZiroMotion.press, value: configuration.isPressed)
     }
 }
@@ -676,6 +679,10 @@ struct ZiroCard<Content: View>: View {
                 RoundedRectangle(cornerRadius: ZiroTheme.Radius.card, style: .continuous)
                     .fill(ZiroTheme.raisedBackground)
             )
+            .overlay(
+                RoundedRectangle(cornerRadius: ZiroTheme.Radius.card, style: .continuous)
+                    .stroke(ZiroTheme.hairline, lineWidth: 1)
+            )
             .ziroShadow(showsShadow ? ZiroShadowLevel.raised : nil)
     }
 }
@@ -734,7 +741,9 @@ struct ZiroSuggestionChip: View {
             HStack(spacing: ZiroTheme.Spacing.xSmall) {
                 if let systemImage {
                     Image(systemName: systemImage)
-                        .font(.footnote.weight(.semibold))
+                        // Match the chip text voice (supporting.medium) — one
+                        // weight/size set per surface.
+                        .font(ZiroType.supporting.weight(.medium))
                         .foregroundStyle(Color.accentColor)
                         .accessibilityHidden(true)
                 }
@@ -756,6 +765,7 @@ struct ZiroSuggestionChip: View {
 /// micro press-down scale. Reduce Motion drops the scale/animation.
 private struct ZiroSuggestionChipButtonStyle: ButtonStyle {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    var isStatic = false
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -765,7 +775,7 @@ private struct ZiroSuggestionChipButtonStyle: ButtonStyle {
             .overlay(
                 Capsule().stroke(configuration.isPressed ? Color.accentColor : .clear, lineWidth: 1)
             )
-            .scaleEffect(reduceMotion || !configuration.isPressed ? 1 : 0.97)
+            .scaleEffect(reduceMotion || isStatic || !configuration.isPressed ? 1 : 0.96)
             .animation(reduceMotion ? nil : ZiroMotion.press, value: configuration.isPressed)
     }
 }
@@ -837,6 +847,13 @@ struct ZiroSectionHeader: View {
                 Image(systemName: systemImage)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(Color.accentColor)
+                    // Directional glyphs (text.bubble, bubble.left.*) mirror
+                    // in RTL; other symbols ignore the flip.
+                    .flipsForRightToLeft(
+                        systemImage.contains("bubble")
+                            || systemImage.contains("chevron.right")
+                            || systemImage.contains("arrow.triangle.branch")
+                    )
                     .accessibilityHidden(true)
             }
             Text(title)
@@ -871,7 +888,6 @@ struct ZiroProgressRing: View {
                 .rotationEffect(.degrees(-90))
         }
         .frame(width: size, height: size)
-        .ziroAnimation(ZiroMotion.stream, value: progress)
         .accessibilityHidden(true)
     }
 }

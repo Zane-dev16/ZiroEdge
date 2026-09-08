@@ -126,11 +126,15 @@ extension ChatView {
             ) {
                 VStack(alignment: .leading, spacing: ZiroTheme.Spacing.xSmall) {
                     HStack(spacing: ZiroTheme.Spacing.small) {
-                        if viewModel.isModelRetryInFlight { ProgressView().controlSize(.small) }
+                        if viewModel.isModelRetryInFlight {
+                            ProgressView().controlSize(.small)
+                                .transition(.asymmetric(insertion: .scale(scale: 0.25).combined(with: .opacity), removal: .scale(scale: 0.25).combined(with: .opacity)))
+                        }
                         Button("Retry") { viewModel.retryModelLoad() }
                             .disabled(viewModel.isModelRetryInFlight)
                             .accessibilityIdentifier(ModelEvictionPresentation.retryButtonID)
                     }
+                    .ziroAnimation(ZiroMotion.press, value: viewModel.isModelRetryInFlight)
                     if let hint = viewModel.retryIneligibilityHint, !viewModel.isModelRetryInFlight {
                         Text(hint)
                             .font(ZiroType.caption)
@@ -149,11 +153,15 @@ extension ChatView {
             ) {
                 VStack(alignment: .leading, spacing: ZiroTheme.Spacing.xSmall) {
                     HStack(spacing: ZiroTheme.Spacing.small) {
-                        if viewModel.isModelRetryInFlight { ProgressView().controlSize(.small) }
+                        if viewModel.isModelRetryInFlight {
+                            ProgressView().controlSize(.small)
+                                .transition(.asymmetric(insertion: .scale(scale: 0.25).combined(with: .opacity), removal: .scale(scale: 0.25).combined(with: .opacity)))
+                        }
                         Button(ModelEvictionPresentation.reloadButtonTitle) { viewModel.retryModelLoad() }
                             .disabled(viewModel.isModelRetryInFlight)
                             .accessibilityIdentifier(ModelEvictionPresentation.retryButtonID)
                     }
+                    .ziroAnimation(ZiroMotion.press, value: viewModel.isModelRetryInFlight)
                     if let hint = viewModel.retryIneligibilityHint, !viewModel.isModelRetryInFlight {
                         Text(hint)
                             .font(ZiroType.caption)

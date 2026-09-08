@@ -78,6 +78,8 @@ struct ZiroCapabilityCard: View {
                 Image(systemName: "chevron.right")
                     .font(.footnote.weight(.semibold))
                     .foregroundStyle(ZiroTheme.tertiaryText)
+                    // Directional — mirror in RTL.
+                    .flipsForRightToLeft(true)
                     .accessibilityHidden(true)
             }
             .padding(.horizontal, ZiroTheme.Spacing.large)
@@ -108,7 +110,7 @@ private struct ZiroCapabilityCardStyle: ButtonStyle {
                 RoundedRectangle(cornerRadius: ZiroTheme.Radius.control, style: .continuous)
                     .stroke(configuration.isPressed ? Color.accentColor : .clear, lineWidth: 1)
             )
-            .scaleEffect(reduceMotion || !configuration.isPressed ? 1 : 0.98)
+            .scaleEffect(reduceMotion || !configuration.isPressed ? 1 : 0.96)
             .animation(reduceMotion ? nil : ZiroMotion.press, value: configuration.isPressed)
     }
 }
@@ -170,7 +172,10 @@ struct ZiroEmptyState<Actions: View>: View {
 
             if !suggestionItems.isEmpty, let onSuggestion {
                 VStack(spacing: ZiroTheme.Spacing.small) {
-                    ForEach(Array(suggestionItems.enumerated()), id: \.offset) { index, item in
+                    // PERF: indices directly — no per-body Array(enumerated()) copy
+                    // (static card list; positional identity never shifts).
+                    ForEach(suggestionItems.indices, id: \.self) { index in
+                        let item = suggestionItems[index]
                         ZiroCapabilityCard(item: item) { onSuggestion(item.text) }
                             .accessibilityLabel(item.text)
                             .accessibilityHint("Inserts this starter prompt into the message field")
@@ -221,7 +226,7 @@ struct ZiroHero: View {
                 .foregroundStyle(ZiroTheme.primaryText)
                 .multilineTextAlignment(.center)
             Text(message)
-                .font(.subheadline)
+                .font(ZiroType.supporting)
                 .foregroundStyle(ZiroTheme.secondaryText)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)

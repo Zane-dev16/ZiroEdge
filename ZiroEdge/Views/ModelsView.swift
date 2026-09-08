@@ -265,7 +265,9 @@ struct ModelsView: View {
             }
             if status.isDownloading {
                 Button { viewModel.requestCancelDownload(for: model) } label: {
-                    Image(systemName: "xmark.circle.fill")
+                    // Same xmark.circle outline at .title3 as statusIndicator's
+                    // cancelled state — tinted, not a separate .fill asset.
+                    Image(systemName: "xmark.circle")
                         .font(.title3)
                         .frame(width: cancelControlSide, height: cancelControlSide)
                         .contentShape(Rectangle())
@@ -318,8 +320,11 @@ private struct ModelRow: View {
         HStack(spacing: ZiroTheme.Spacing.medium) {
             Image(systemName: iconName)
                 .font(.title3)
-                .foregroundStyle(ZiroTheme.accent)
+                .foregroundStyle(iconTint)
                 .symbolRenderingMode(.hierarchical)
+                // text.bubble is directional — mirror in RTL; eye.circle
+                // is symmetric so the modifier is a no-op for it.
+                .flipsForRightToLeft(true)
                 .frame(width: iconColumnWidth)
                 .accessibilityHidden(true)
 
@@ -366,8 +371,20 @@ private struct ModelRow: View {
     }
 
     private var iconName: String {
-        guard model.modelType == .vision else { return "text.bubble.fill" }
-        return status.isVisionReady ? "eye.circle.fill" : "eye.slash.circle.fill"
+        // One base symbol per kind (outline), recolored per state — never
+        // separate .fill/.slash assets. Vision-ready vs pair-incomplete
+        // is carried by iconTint + the VISION/PAIR badge, not the glyph.
+        guard model.modelType == .vision else { return "text.bubble" }
+        return "eye.circle"
+    }
+
+    private var iconTint: Color {
+        // Ready states keep the accent voice; an incomplete vision pair
+        // quiets to secondary so the row reads as pending, not active.
+        if model.modelType == .vision && !status.isVisionReady {
+            return ZiroTheme.secondaryText
+        }
+        return ZiroTheme.accent
     }
 
     @ViewBuilder
@@ -423,15 +440,21 @@ private struct ModelRow: View {
             .accessibilityHidden(true)
         case .failed:
             // Hard failure → the danger token (raw .red fails AA for this size).
-            Image(systemName: "exclamationmark.circle.fill")
+            // Outline-default: sibling trailing states share one size
+            // (.title3) with .fill reserved for the installed state below.
+            Image(systemName: "exclamationmark.circle")
+                .font(.title3)
                 .foregroundStyle(ZiroTheme.dangerText)
                 .accessibilityLabel("Download failed")
         case .cancelled:
             Image(systemName: "xmark.circle")
+                .font(.title3)
                 .foregroundStyle(ZiroTheme.secondaryText)
                 .accessibilityLabel("Download cancelled")
         case .downloaded:
+            // The one .fill on this surface: installed/active state.
             Image(systemName: "checkmark.circle.fill")
+                .font(.title3)
                 .foregroundStyle(ZiroTheme.positiveText)
                 .accessibilityHidden(true)
         case .notDownloaded:
@@ -442,7 +465,7 @@ private struct ModelRow: View {
                     .accessibilityLabel("Repair \(model.displayName)")
             } else {
                 Image(systemName: "arrow.down.circle")
-                    .font(.title2)
+                    .font(.title3)
                     .foregroundStyle(ZiroTheme.accent)
                     .accessibilityHidden(true)
             }

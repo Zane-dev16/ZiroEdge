@@ -53,6 +53,8 @@ struct VariantRow: View {
                 Text(artifact.filename)
                     .font(ZiroType.technical(.subheadline))
                     .lineLimit(1)
+                    .truncationMode(.middle)
+                    .minimumScaleFactor(0.85)
                 HStack(spacing: ZiroTheme.Spacing.small) {
                     QuantizationBadge(label: artifact.quantization)
                     Text(artifact.architecture)

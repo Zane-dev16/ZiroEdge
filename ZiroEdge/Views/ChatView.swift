@@ -24,9 +24,10 @@ struct ChatView: View {
     @State private var hasScrolledUp = false
     // Composer hit targets: scale with Dynamic Type so glyphs never overflow
     // their frames at accessibility sizes, while meeting the repo's 44×44
-    // minimum hit-target standard at the default size.
+    // minimum hit-target standard at the default size. Composer cluster
+    // shares one size (.title3) — send included, state via tint only.
     @ScaledMetric(relativeTo: .title3) private var composerControlSide: CGFloat = 44
-    @ScaledMetric(relativeTo: .title) private var sendControlSide: CGFloat = 44
+    @ScaledMetric(relativeTo: .title3) private var sendControlSide: CGFloat = 44
     @ScaledMetric(relativeTo: .title3) private var imageRemoveControlSide: CGFloat = 44
     // Pending-attachment thumbnail: decorative image size that grows with
     // Dynamic Type (design-system §6.2 — Radius.small corners, no shadow).
@@ -219,11 +220,20 @@ struct ChatView: View {
                 else { await viewModel.sendMessage() }
             }
         } label: {
-            Image(systemName: viewModel.isStreaming ? "stop.circle.fill" : "arrow.up.circle.fill")
-                .font(.title)
-                .foregroundStyle(sendTint)
-                .frame(width: sendControlSide, height: sendControlSide)
-                .contentShape(Rectangle())
+            Group {
+                if viewModel.isStreaming {
+                    Image(systemName: "stop.circle.fill")
+                        .transition(.asymmetric(insertion: .scale(scale: 0.25).combined(with: .opacity), removal: .scale(scale: 0.25).combined(with: .opacity)))
+                } else {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .transition(.asymmetric(insertion: .scale(scale: 0.25).combined(with: .opacity), removal: .scale(scale: 0.25).combined(with: .opacity)))
+                }
+            }
+            .font(.title3)
+            .foregroundStyle(sendTint)
+            .frame(width: sendControlSide, height: sendControlSide)
+            .contentShape(Rectangle())
+            .ziroAnimation(ZiroMotion.press, value: viewModel.isStreaming)
         }
         .disabled(sendDisabled)
         .accessibilityLabel(viewModel.isStreaming ? "Stop generating" : "Send message")
@@ -242,22 +252,45 @@ struct ChatView: View {
     var imagePreviewRow: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: ZiroTheme.Spacing.small) {
-                ForEach(Array(viewModel.pendingImages.enumerated()), id: \.offset) { index, data in
+                // PERF: indices directly — avoids the per-body Array(enumerated())
+                // copy (positional identity is correct for this tiny append/remove strip).
+                ForEach(viewModel.pendingImages.indices, id: \.self) { index in
+                    let data = viewModel.pendingImages[index]
                     if let image = UIImage(data: data) {
                         ZStack(alignment: .topTrailing) {
                             Image(uiImage: image)
                                 .resizable().scaledToFill()
                                 .frame(width: pendingImageSide, height: pendingImageSide)
                                 .clipShape(RoundedRectangle(cornerRadius: ZiroTheme.Radius.small, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: ZiroTheme.Radius.small, style: .continuous)
+                                        .stroke(
+                                            Color(uiColor: UIColor { traits in
+                                                traits.userInterfaceStyle == .dark
+                                                    ? UIColor.white.withAlphaComponent(0.1)
+                                                    : UIColor.black.withAlphaComponent(0.1)
+                                            }),
+                                            lineWidth: 1
+                                        )
+                                )
                                 .accessibilityLabel("Attached image \(index + 1)")
                             Button { viewModel.removeImage(at: index) } label: {
                                 Image(systemName: "xmark.circle.fill")
                                     .font(.title3).foregroundStyle(.white)
                                     // Depth without a shadow (shadows only ever
-                                    // accompany a hairline): the hairline-strong
+                                    // accompany a hairline): the pure black/white
                                     // edge keeps the white disc legible over
                                     // bright photo content in both appearances.
-                                    .overlay(Circle().stroke(ZiroTheme.hairlineStrong, lineWidth: 1))
+                                    .overlay(
+                                        Circle().stroke(
+                                            Color(uiColor: UIColor { traits in
+                                                traits.userInterfaceStyle == .dark
+                                                    ? UIColor.white.withAlphaComponent(0.35)
+                                                    : UIColor.black.withAlphaComponent(0.2)
+                                            }),
+                                            lineWidth: 1
+                                        )
+                                    )
                                     .frame(width: imageRemoveControlSide, height: imageRemoveControlSide)
                                     .contentShape(Rectangle())
                             }
@@ -293,7 +326,11 @@ extension ChatView {
             onDelete: { Task { await viewModel.deleteMessage(messageID) } }
         )
         .id(messageID)
-        .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+        // PERF: opacity-only insert (GPU-composited, no layout pass). The
+        // previous move(edge:)+opacity forced layout/offscreen work for every
+        // inserted row on this high-churn path; the fade keeps the appear cue
+        // in both motion modes.
+        .transition(.opacity)
     }
 
     var messageList: some View {
@@ -306,8 +343,12 @@ extension ChatView {
                         emptyState
                     }
 
-                    ForEach(Array(viewModel.messages.enumerated()), id: \.element.id) { index, message in
-                        if let divider = dayDividerText(at: index) {
+                    // PERF: stable-id ForEach over the live array — no per-body
+                    // Array(enumerated()) copy on every streaming token, and row
+                    // identity survives inserts/deletes. Day dividers come from
+                    // one O(n) labels pass (lazy enumerated, no copy).
+                    ForEach(viewModel.messages, id: \.id) { message in
+                        if let divider = dayDividerLabels[message.id] {
                             DayDivider(label: divider)
                         }
                         messageRow(message)
@@ -516,19 +557,25 @@ extension ChatView {
 
     // MARK: Day Dividers
 
-    /// Day-separator label for the message at `index`, or nil when the
-    /// message continues the previous message's day. Messages without a
-    /// timestamp never open a divider — they join the running day.
-    private func dayDividerText(at index: Int) -> String? {
+    /// Day-separator labels keyed by message id, computed in one O(n) pass
+    /// per body evaluation (PERF: replaces per-row index math driven by a
+    /// per-token Array(enumerated()) copy). Semantics match the previous
+    /// per-index lookup: a message opens a divider unless its immediate
+    /// predecessor carries a same-day timestamp; undated messages never open
+    /// one — they join the running day.
+    private var dayDividerLabels: [UUID: String] {
+        var labels: [UUID: String] = [:]
         let messages = viewModel.messages
-        guard messages.indices.contains(index),
-              let date = messages[index].createdAt else { return nil }
-        if index > 0,
-           let previous = messages[index - 1].createdAt,
-           Calendar.current.isDate(previous, inSameDayAs: date) {
-            return nil
+        for (index, message) in messages.enumerated() {
+            guard let date = message.createdAt else { continue }
+            if index > 0,
+               let previous = messages[index - 1].createdAt,
+               Calendar.current.isDate(previous, inSameDayAs: date) {
+                continue
+            }
+            labels[message.id] = Self.dayDividerFormatter.string(from: date)
         }
-        return Self.dayDividerFormatter.string(from: date)
+        return labels
     }
 
     private static let dayDividerFormatter: DateFormatter = {

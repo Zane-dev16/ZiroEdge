@@ -134,11 +134,13 @@ struct ChatModelPickerMenuContent: View {
                 Button {
                     onSelectModel(model)
                 } label: {
-                    Label(
-                        model.displayName,
-                        systemImage: ChatModelPicker.isSelected(modelName: modelName, model: model)
-                            ? "checkmark" : "cpu"
-                    )
+                    // One symbol per slot (cpu), recolored per state — never
+                    // swap to a checkmark glyph. Selection reads via tint;
+                    // the Menu system supplies its own checkmark affordance.
+                    let selected = ChatModelPicker.isSelected(modelName: modelName, model: model)
+                    Label(model.displayName, systemImage: "cpu")
+                        .foregroundStyle(selected ? ZiroTheme.accent : ZiroTheme.primaryText)
+                        .opacity(selected ? 1 : 0.85)
                 }
             }
         }
@@ -231,7 +233,10 @@ struct ComposerModelPicker: View {
                 .allowsTightening(true)
                 .foregroundStyle(ChatModelPicker.titleTint(phase: phase))
             Image(systemName: "chevron.down")
-                .font(.caption2.weight(.semibold))
+                // Match the picker text voice (ZiroType.footnote, regular) —
+                // one weight/size set per surface. chevron.down is vertical,
+                // so no RTL flip.
+                .font(ZiroType.footnote)
                 .foregroundStyle(ZiroTheme.tertiaryText)
                 .accessibilityHidden(true)
         }
@@ -253,11 +258,14 @@ struct ComposerModelPicker: View {
         Group {
             if phase == .loading {
                 ProgressView().controlSize(.small)
+                    .transition(.asymmetric(insertion: .scale(scale: 0.25).combined(with: .opacity), removal: .scale(scale: 0.25).combined(with: .opacity)))
             } else {
                 Color.clear
+                    .transition(.asymmetric(insertion: .scale(scale: 0.25).combined(with: .opacity), removal: .scale(scale: 0.25).combined(with: .opacity)))
             }
         }
         .frame(width: 16, height: 16)
+        .ziroAnimation(ZiroMotion.press, value: phase)
         .accessibilityHidden(true)
     }
 }

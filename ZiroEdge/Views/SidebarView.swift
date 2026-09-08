@@ -148,7 +148,12 @@ struct SidebarView: View {
         Button(action: action) {
             HStack(spacing: ZiroTheme.Spacing.small) {
                 Image(systemName: systemImage)
+                    // Match the row title voice (.body, regular) — one set
+                    // per surface. Directional glyphs (bubble.left.*, branch)
+                    // mirror in RTL; vertical/circular ones ignore the flip.
+                    .font(.body)
                     .foregroundStyle(ZiroTheme.secondaryText)
+                    .flipsForRightToLeft(systemImageNeedsRTLFlip(systemImage))
                     .frame(width: 24)
                 Text(title)
                     .font(.body)
@@ -162,6 +167,15 @@ struct SidebarView: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier(identifier)
+    }
+
+    /// Directional symbols mirror in RTL; vertical/circular ones
+    /// (arrow.down.circle, arrow.clockwise, chevron.down) do not.
+    private func systemImageNeedsRTLFlip(_ name: String) -> Bool {
+        name.contains("chevron.right")
+            || name.contains("bubble.left")
+            || name.contains("text.bubble")
+            || name.contains("arrow.triangle.branch")
     }
 
     // MARK: - Bottom Bar
@@ -224,6 +238,8 @@ struct SidebarView: View {
                     systemImage: "bubble.left.and.bubble.right",
                     description: Text("Create a conversation to get started.")
                 )
+                // Directional hero glyph — mirror in RTL.
+                .flipsForRightToLeft(true)
                 .listRowBackground(Color.clear)
             }
         } else {
@@ -311,6 +327,8 @@ struct ConversationRow: View {
                     .foregroundStyle(ZiroTheme.primaryText)
                     .lineLimit(1)
                     .truncationMode(.tail)
+                    .allowsTightening(true)
+                    .minimumScaleFactor(0.9)
 
                 Text(metaLine)
                     .font(ZiroType.caption)
@@ -323,7 +341,7 @@ struct ConversationRow: View {
         }
         .padding(.horizontal, ZiroTheme.Spacing.medium)
         .padding(.vertical, ZiroTheme.Spacing.small)
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, minHeight: 44)
         .background(
             RoundedRectangle(cornerRadius: ZiroTheme.Radius.small, style: .continuous)
                 .fill(isSelected ? ZiroTheme.accentContainer : Color.clear)
@@ -532,6 +550,8 @@ struct ChatsView: View {
                         systemImage: "bubble.left.and.bubble.right",
                         description: Text("Create a conversation to get started.")
                     )
+                    // Directional hero glyph — mirror in RTL.
+                    .flipsForRightToLeft(true)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if visibleSections.isEmpty {
                     ContentUnavailableView.search(text: searchText)
@@ -574,7 +594,8 @@ struct ChatsView: View {
                     Label("New chat", systemImage: "plus")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(ZiroTheme.accentForeground)
-                        .padding(.horizontal, ZiroTheme.Spacing.medium)
+                        .padding(.leading, ZiroTheme.Spacing.medium - 2)
+                        .padding(.trailing, ZiroTheme.Spacing.medium)
                         .frame(minHeight: 44)
                         .background(Color.accentColor, in: Capsule())
                 }
