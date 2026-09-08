@@ -32,7 +32,7 @@ enum DownloadTransportValidator {
 
         let statusCode = response.statusCode
         let contentLength = response.expectedContentLength
-        logger.info("[TRANSPORT] HTTP \(statusCode), contentLength=\(contentLength), expectedBytes=\(expectedBytes), expectedOffset=\(expectedOffset)")
+        logger.info("[TRANSPORT] HTTP \(statusCode, privacy: .public), contentLength=\(contentLength, privacy: .public), expectedBytes=\(expectedBytes, privacy: .public), expectedOffset=\(expectedOffset, privacy: .public)")
 
         guard (200...299).contains(statusCode) else {
             if statusCode == 401 || statusCode == 403 {

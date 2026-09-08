@@ -211,4 +211,55 @@ final class Batch05MainThreadIOTests: XCTestCase {
         XCTAssertEqual(breakdown.totalManagedBytes, breakdown.installedBytes + breakdown.stagingBytes + breakdown.resumeBytes + breakdown.quarantineBytes)
         XCTAssertFalse(breakdown.formattedTotal.isEmpty)
     }
+
+    // MARK: - P3 Token-Count Batching, Off-Main Status, Background Reads
+
+    func testP3BatchFlushIsPerTokenCountNotCharacters() throws {
+        let now = Date()
+        // 19 tokens must not flush on count (time gate closed).
+        XCTAssertFalse(ChatSessionActor.isBatchFlushDue(tokenCount: 19, lastBatchTime: now, now: now))
+        // 20 tokens flushes even with no elapsed time.
+        XCTAssertTrue(ChatSessionActor.isBatchFlushDue(tokenCount: 20, lastBatchTime: now, now: now))
+        // Time gate still flushes a single token after 0.5s.
+        XCTAssertTrue(ChatSessionActor.isBatchFlushDue(
+            tokenCount: 1, lastBatchTime: now.addingTimeInterval(-1), now: now
+        ))
+        // Legacy alias forwards identically.
+        XCTAssertTrue(ChatSessionActor.isBatchFlushDue(batchCount: 20, lastBatchTime: now, now: now))
+    }
+
+    @MainActor
+    func testP3UpdateStatusStaysSynchronousInTests() throws {
+        // XCTest path keeps authoritative truth synchronously (byte-scale
+        // fixtures); production seeds quick + verifies off-main instead.
+        ModelMigrationService.ensureManagedDirectories()
+        let manager = DownloadManager()
+        let model = ModelRegistry.llama32_3B
+        manager.updateStatus(model: model)
+        XCTAssertNotNil(manager.downloadStatuses[model.id])
+        XCTAssertNil(manager.lastStatusRefreshWasOffMain, "XCTest path must not schedule async refresh")
+    }
+
+    func testP3BackgroundReadsReturnIdenticalData() async throws {
+        // Fetch helpers now read on a background context; correctness (order,
+        // content, attachments) must be unchanged.
+        let persistence = PersistenceController(inMemory: true)
+        let convID = try await persistence.createConversation(title: "P3 Reads", modelID: "fixture")
+        for index in 0..<10 {
+            let attachments: [Data]? = (index % 2 == 0) ? [Data([UInt8(index)])] : nil
+            _ = await persistence.insertMessage(
+                conversationID: convID, role: index % 2 == 0 ? .user : .assistant,
+                content: "P3 message \(index)", attachments: attachments
+            )
+        }
+        let result = await persistence.fetchMessagesResult(conversationID: convID)
+        guard case .success(let payloads) = result else { return XCTFail("fetch failed") }
+        XCTAssertEqual(payloads.count, 10)
+        for (index, payload) in payloads.enumerated() {
+            XCTAssertEqual(payload.content, "P3 message \(index)")
+            XCTAssertEqual(payload.sequenceIndex, Int32(index))
+        }
+        // Off-main placement is structural (background readContext instead of
+        // main-queue viewContext); correctness above is the hermetic contract.
+    }
 }

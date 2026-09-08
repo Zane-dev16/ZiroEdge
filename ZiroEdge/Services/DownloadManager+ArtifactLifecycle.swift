@@ -18,12 +18,9 @@ extension DownloadManager {
         guard task.isPaused || task.state == .failed(error: .networkError) else { return }
 
         // Recheck storage before resuming — space may have changed since the pause.
-        let stagedBytes = ((try? fileManager.attributesOfItem(atPath: task.stagingURL.path))?[.size] as? NSNumber)?.int64Value ?? 0
-        let remaining = max(0, task.expectedBytes - stagedBytes)
-        let required = SaturatedArithmetic.add(
-            remaining,
-            remaining > 0 ? Self.storageSafetyMarginBytes : 0
-        )
+        // R4: credit resumable bytes (staging, else the in-memory progress
+        // estimate) so a resume is not refused for bytes it already holds.
+        let required = resumeRemainingBytes(for: task)
         if required > 0 && availableDiskSpace < required {
             task.state = .failed(error: .diskSpaceInsufficient)
             updateStatus(model: model)
@@ -54,9 +51,17 @@ extension DownloadManager {
             chunkedDownload(task: task, key: key)
             return
         }
-        if let resumeData = task.resumeData ?? (try? Data(contentsOf: task.resumeDataURL)) {
+        // R2: empty in-memory blobs never resume; the freshness probe below
+        // discards stale/corrupt bytes on disk (fault-level log, ID public).
+        let memoryBlob = task.resumeData.flatMap { $0.isEmpty ? nil : $0 }
+        if let resumeData = memoryBlob ?? loadFreshResumeData(for: task) {
+            task.resumeData = resumeData
             task.task = getSession().downloadTask(withResumeData: resumeData)
         } else {
+            // R5: resumes never send bytes to a non-allowlisted host.
+            let freshURL = task.downloadURL ?? task.sourceURL
+            task.downloadURL = Self.isAllowedDownloadURL(freshURL) ? freshURL : task.sourceURL
+            task.resumeData = nil
             task.task = getSession().downloadTask(with: task.downloadURL ?? task.sourceURL)
         }
         task.state = .downloading(progress: task.progress)
