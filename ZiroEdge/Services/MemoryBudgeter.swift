@@ -30,6 +30,10 @@ struct MemoryLoadDecision: Equatable, Sendable {
     let profileID: String?
     let requiredBytes: UInt64?
     let reason: MemoryAdmissionFailure?
+    /// Post-teardown projection (raw headroom + reclaimable resident) and
+    /// the reclaimable credit used. Nil for pre-credit callers/tests.
+    var projectedAvailableBytes: UInt64? = nil
+    var reclaimableBytes: UInt64? = nil
 
     /// A regression sentinel: admission never consumes download/storage byte counts.
     var artifactBytesUsedForAdmission: UInt64? { nil }
@@ -44,6 +48,8 @@ struct MemoryLoadDecision: Equatable, Sendable {
         [
             "recommendation=\(recommendation)",
             "processHeadroomBytes=\(processAvailableBytes)",
+            "projectedAvailableBytes=\(projectedAvailableBytes.map(String.init) ?? "none")",
+            "reclaimableBytes=\(reclaimableBytes.map(String.init) ?? "none")",
             "totalPhysicalBytes=\(totalPhysicalBytes)",
             "profileID=\(profileID ?? "unknown")",
             "requiredBytes=\(requiredBytes.map(String.init) ?? "unknown")",
@@ -95,7 +101,29 @@ actor MemoryBudgeter {
     /// (see constructAndCommit fresh resample + InferenceService pre-mmap gate).
     /// P1-4: malformed catalog sizes fail closed here as well (profileUnvalidated,
     /// artifact quantity still never used — sentinel stays nil).
-    func decision(for model: AIModel, allowUnvalidatedCalibration: Bool = false) -> MemoryLoadDecision {
+    /// Pre-teardown switch callers pass the resident model's reclaimable
+    /// credit: raw headroom failing while the projected (post-eviction)
+    /// headroom passes returns .unloadCurrentFirst (proceed to teardown)
+    /// instead of .insufficientRAM. Post-teardown gates pass reclaimable 0.
+    /// Projected headroom after evicting the resident model. Saturated add:
+    /// the projection never wraps and the decision caps it at total RAM.
+    static func projectedAvailableAfterEviction(currentAvailable: UInt64, reclaimableBytes: UInt64) -> UInt64 {
+        SaturatedArithmetic.add(currentAvailable, reclaimableBytes)
+    }
+
+    /// Reclaimable credit for evicting `priorActive`: the required headroom
+    /// its own profile would demand (validated peak first, then experimental
+    /// load evidence). Zero when nothing is resident or no evidence exists.
+    /// Conservative by construction — it derives from the same profile the
+    /// post-teardown hard gate enforces.
+    static func reclaimableBytes(for priorActive: AIModel?) -> UInt64 {
+        guard let priorActive,
+              let profile = MemoryProfileRegistry.profile(for: priorActive) else { return 0 }
+        if let required = try? profile.requiredProcessHeadroomBytes() { return required }
+        return (try? profile.experimentalRequiredProcessHeadroomBytes()) ?? 0
+    }
+
+    func decision(for model: AIModel, allowUnvalidatedCalibration: Bool = false, reclaimableBytes: UInt64 = 0) -> MemoryLoadDecision {
         // P1-4 fail-closed validity gate: quantity never admits, but malformed
         // sizes must refuse even before profile checks. IDs public.
         let needsProjector = model.requiresMMProj || model.mmprojURL != nil
@@ -124,42 +152,72 @@ actor MemoryBudgeter {
         }
         let profile = MemoryProfileRegistry.profile(for: model)
         var required = try? profile?.requiredProcessHeadroomBytes()
+        // Projected post-eviction headroom: only the memory comparison may
+        // use it — every fail-closed gate stays on raw samples. Capped at
+        // total RAM so eviction can never free more than exists.
+        let projected = min(
+            Self.projectedAvailableAfterEviction(currentAvailable: processAvailable, reclaimableBytes: reclaimableBytes),
+            total
+        )
+        // Raw pass → proceed. Raw fail but projected pass → unloadCurrentFirst
+        // (proceed to teardown; the post-teardown hard gate re-samples with
+        // zero credit). Both fail → insufficientRAM.
+        func memoryVerdict(required: UInt64) -> (MemoryRecommendation, MemoryAdmissionFailure?) {
+            if processAvailable >= required { return (.proceed, nil) }
+            if projected >= required { return (.unloadCurrentFirst, nil) }
+            return (.insufficientRAM, .insufficientProcessHeadroom)
+        }
+        let recommendation: MemoryRecommendation
         let reason: MemoryAdmissionFailure?
 
         if processAvailable == 0 || total == 0 {
+            recommendation = .insufficientRAM
             reason = .metricsUnavailable
         } else if profile == nil {
+            recommendation = .insufficientRAM
             reason = .profileMissing
         } else if let profile, total < profile.minimumPhysicalRAMBytes {
+            recommendation = .insufficientRAM
             reason = .physicalRAMBelowMinimum
         } else if let profile, required == nil, allowUnvalidatedCalibration {
             // Normal experimental consent still requires measured runtime evidence.
             // DEBUG controlled calibration is the only path that may gather first evidence.
             if let experimentalRequired = try? profile.experimentalRequiredProcessHeadroomBytes() {
                 required = experimentalRequired
-                reason = processAvailable < experimentalRequired ? .insufficientProcessHeadroom : nil
+                (recommendation, reason) = memoryVerdict(required: experimentalRequired)
             } else {
 #if DEBUG
-                reason = MemoryDiagnosticRecorder.shared.controlledWorkloadEnabled ? nil : .profileUnvalidated
+                if MemoryDiagnosticRecorder.shared.controlledWorkloadEnabled {
+                    recommendation = .proceed
+                    reason = nil
+                } else {
+                    recommendation = .insufficientRAM
+                    reason = .profileUnvalidated
+                }
 #else
+                recommendation = .insufficientRAM
                 reason = .profileUnvalidated
 #endif
             }
         } else if required == nil {
+            recommendation = .insufficientRAM
             reason = .profileUnvalidated
-        } else if let required, processAvailable < required {
-            reason = .insufficientProcessHeadroom
+        } else if let required {
+            (recommendation, reason) = memoryVerdict(required: required)
         } else {
+            recommendation = .proceed
             reason = nil
         }
 
         let decision = MemoryLoadDecision(
-            recommendation: reason == nil ? .proceed : .insufficientRAM,
+            recommendation: recommendation,
             processAvailableBytes: processAvailable,
             totalPhysicalBytes: total,
             profileID: profile?.id,
             requiredBytes: required,
-            reason: reason
+            reason: reason,
+            projectedAvailableBytes: projected,
+            reclaimableBytes: reclaimableBytes
         )
         lastDecision = decision
         logger.info("Memory load decision for \(model.id, privacy: .public): \(decision.logSummary, privacy: .public)")

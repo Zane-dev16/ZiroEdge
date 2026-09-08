@@ -29,13 +29,15 @@ struct VariantCapabilityEstimate: Equatable, Sendable {
         artifact: HFArtifact,
         candidates: [HFArtifact],
         physicalRAM: UInt64?,
-        contextLength: Int
+        contextLength: Int,
+        projector: HFArtifact? = nil
     ) {
         precisionBits = Self.precisionBits(for: artifact.quantization)
         footprint = Self.footprint(for: artifact, among: candidates)
         if let physicalRAM, physicalRAM > 0 {
             let estimate = ImportRAMAssessment.estimatedBytes(
-                artifactBytes: artifact.size,
+                baseBytes: artifact.size,
+                mmprojBytes: projector?.size,
                 contextLength: contextLength
             )
             memoryFit = estimate < physicalRAM ? .likelyFits : .mayExceed

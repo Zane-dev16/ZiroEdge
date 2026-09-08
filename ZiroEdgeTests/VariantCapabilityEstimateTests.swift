@@ -29,7 +29,7 @@ final class VariantCapabilityEstimateTests: XCTestCase {
 
     func testMemoryFitEqualToPhysicalRAMMayExceed() {
         let model = artifact("model.gguf", size: 3)
-        let bytes = ImportRAMAssessment.estimatedBytes(artifactBytes: model.size, contextLength: 512)
+        let bytes = ImportRAMAssessment.estimatedBytes(baseBytes: model.size, mmprojBytes: nil, contextLength: 512)
         let value = VariantCapabilityEstimate(
             artifact: model,
             candidates: [model],

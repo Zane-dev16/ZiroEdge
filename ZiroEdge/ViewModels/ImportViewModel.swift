@@ -51,11 +51,15 @@ final class ImportViewModel: ObservableObject {
     var baseCandidates: [HFArtifact] { review?.baseArtifacts ?? [] }
 
     func capabilityEstimate(for artifact: HFArtifact) -> VariantCapabilityEstimate {
-        VariantCapabilityEstimate(
+        // Pair-resolved projector so the picker card counts the 150-559MB
+        // vision adapter at full weight, matching the post-import profile.
+        let projector = review.flatMap { pairResolver.bestPair(for: artifact, in: $0)?.projector }
+        return VariantCapabilityEstimate(
             artifact: artifact,
             candidates: baseCandidates,
             physicalRAM: physicalRAM(),
-            contextLength: artifact.metadata.contextLength ?? 2048
+            contextLength: artifact.metadata.contextLength ?? 2048,
+            projector: projector
         )
     }
 
@@ -133,8 +137,11 @@ final class ImportViewModel: ObservableObject {
     }
 
     var ramAssessment: ImportRAMAssessment {
+        // Canonical split: base/3 + FULL projector (previously combined/3
+        // understated the pinned projector by 2/3*mmproj) with clamped ctx.
         let estimate = ImportRAMAssessment.estimatedBytes(
-            artifactBytes: selectedBytes,
+            baseBytes: selectedBase?.size ?? 0,
+            mmprojBytes: selectedProjector?.size,
             contextLength: selectedBase?.metadata.contextLength ?? 2048
         )
         let physical = physicalRAM()
@@ -349,9 +356,9 @@ final class ImportedModelUpdateCoordinator: ObservableObject {
     }
 
     func ramAssessment(base: HFArtifact, projector: HFArtifact?) -> ImportRAMAssessment {
-        let bytes = SaturatedArithmetic.add(base.size, projector?.size ?? 0)
         let estimated = ImportRAMAssessment.estimatedBytes(
-            artifactBytes: bytes,
+            baseBytes: base.size,
+            mmprojBytes: projector?.size,
             contextLength: base.metadata.contextLength ?? 2048
         )
         let physical = physicalRAM()

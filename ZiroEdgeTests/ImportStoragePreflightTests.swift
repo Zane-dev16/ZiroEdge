@@ -106,13 +106,31 @@ final class ImportStoragePreflightTests: XCTestCase {
         XCTAssertNil(assessment.warning)
     }
 
-    func testExtremeRAMInputsSaturateWithoutTrapping() {
+    func testExtremeRAMInputsClampContextInsteadOfTrapping() {
+        // Raw GGUF context_length clamps to the 512...4096 imported range:
+        // a 32k-class context estimates exactly like a clamped 4096 one.
+        let raw32k = ImportRAMAssessment.estimatedBytes(
+            baseBytes: 1_000_000_000,
+            mmprojBytes: nil,
+            contextLength: 32_768
+        )
+        let clamped = ImportRAMAssessment.estimatedBytes(
+            baseBytes: 1_000_000_000,
+            mmprojBytes: nil,
+            contextLength: 4_096
+        )
+        XCTAssertEqual(raw32k, clamped)
+        // Huge artifacts still saturate without trapping via Int64.max base.
+        // NB: base is mmap-discounted (/3), so Int64.max+Int64.max no longer
+        // overflows UInt64: 3074457345618258602 + 9223372036854775807 +
+        // 1048576000 (ctx) + 750000000 (reserve) = 12297829384271610409.
         XCTAssertEqual(
             ImportRAMAssessment.estimatedBytes(
-                artifactBytes: Int64.max,
-                contextLength: Int.max
+                baseBytes: Int64.max,
+                mmprojBytes: Int64.max,
+                contextLength: 4_096
             ),
-            UInt64.max
+            12_297_829_384_271_610_409
         )
     }
 

@@ -475,7 +475,12 @@ extension ModelLifecycleManager {
         }
         let override = MemoryDiagnosticRecorder.shared.controlledWorkloadEnabled && model.id == MemoryDiagnosticRecorder.targetModelID
         let consent = model.runtimeEligibility == .experimental && ExperimentalModelConsent.isGranted(for: model)
-        let decision = await memoryBudgeter.decision(for: model, allowUnvalidatedCalibration: override || consent)
+        // Pre-teardown sample WHILE priorActive is still resident: credit its
+        // reclaimable footprint so a B-alone-fits switch is not refused as
+        // if A+B had to coexist. .unloadCurrentFirst proceeds to teardown;
+        // only a projected miss refuses with the resident preserved.
+        let reclaimable = MemoryBudgeter.reclaimableBytes(for: priorActive)
+        let decision = await memoryBudgeter.decision(for: model, allowUnvalidatedCalibration: override || consent, reclaimableBytes: reclaimable)
         if Task.isCancelled {
             logger.info("Load budget check cancelled \(model.id, privacy: .public)")
             return (nil, await invalidateLoadAttempt())
@@ -483,6 +488,10 @@ extension ModelLifecycleManager {
         guard loadEpoch == safetyEpoch else {
             logger.info("Load budget check invalidated by epoch \(model.id, privacy: .public)")
             return (nil, await invalidateLoadAttempt())
+        }
+        if decision.recommendation == .unloadCurrentFirst {
+            logger.info("Load proceeds to teardown reclaiming resident \(model.id, privacy: .public) \(decision.logSummary, privacy: .public)")
+            return (profile, nil)
         }
         guard decision.recommendation == .proceed else {
             logger.error("Load refused insufficient memory \(model.id, privacy: .public) \(decision.logSummary, privacy: .public)")
@@ -625,7 +634,10 @@ extension ModelLifecycleManager {
     ) async -> ModelLoadResult? {
         let override = MemoryDiagnosticRecorder.shared.controlledWorkloadEnabled && model.id == MemoryDiagnosticRecorder.targetModelID
         let consent = model.runtimeEligibility == .experimental && ExperimentalModelConsent.isGranted(for: model)
-        let fresh = await memoryBudgeter.decision(for: model, allowUnvalidatedCalibration: override || consent)
+        // Same reclaimable credit as preflight: a projected pass proceeds to
+        // teardown instead of refusing with the resident preserved.
+        let reclaimable = MemoryBudgeter.reclaimableBytes(for: priorActive)
+        let fresh = await memoryBudgeter.decision(for: model, allowUnvalidatedCalibration: override || consent, reclaimableBytes: reclaimable)
         if Task.isCancelled {
             logger.info("Load pre-teardown resample cancelled \(model.id, privacy: .public)")
             return await invalidateLoadAttempt()
@@ -633,6 +645,10 @@ extension ModelLifecycleManager {
         guard loadEpoch == safetyEpoch else {
             logger.info("Load pre-teardown resample invalidated by epoch \(model.id, privacy: .public)")
             return await invalidateLoadAttempt()
+        }
+        if fresh.recommendation == .unloadCurrentFirst {
+            logger.info("Load pre-teardown resample proceeds to teardown \(model.id, privacy: .public) \(fresh.logSummary, privacy: .public)")
+            return nil
         }
         guard fresh.recommendation == .proceed else {
             logger.fault("Load refused pre-teardown resample \(model.id, privacy: .public) \(fresh.logSummary, privacy: .public)")

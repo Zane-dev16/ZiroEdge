@@ -787,13 +787,35 @@ struct ImportRAMAssessment: Equatable, Sendable {
     let physicalBytes: UInt64
     let classification: Classification
 
-    static func estimatedBytes(artifactBytes: Int64, contextLength: Int) -> UInt64 {
-        let artifact = UInt64(clamping: artifactBytes / 3)
-        let context = SaturatedArithmetic.multiply(UInt64(clamping: max(contextLength, 512)), 256_000)
+    /// Canonical pre-import RAM estimator. Matches MemoryProfile.importedProfile:
+    /// mmap'd base is ~1/3 resident while the vision projector pins fully
+    /// during vision init, plus a context scale and the fixed reserve.
+    /// Context clamps to the same 512...4096 range as
+    /// ModelConfiguration.imported so a raw GGUF context_length (e.g. 32k
+    /// qwen2-class) cannot inflate the pre-import estimate past the
+    /// post-import profile.
+    static func clampedContextLength(_ raw: Int?) -> Int {
+        min(max(raw ?? 2048, 512), 4096)
+    }
+
+    static func estimatedBytes(baseBytes: Int64, mmprojBytes: Int64?, contextLength: Int) -> UInt64 {
+        let base = UInt64(clamping: baseBytes / 3)
+        let projector: UInt64 = {
+            guard let mmprojBytes, mmprojBytes > 0 else { return 0 }
+            return UInt64(clamping: mmprojBytes)
+        }()
+        let context = SaturatedArithmetic.multiply(UInt64(clamping: clampedContextLength(contextLength)), 256_000)
         return SaturatedArithmetic.add(
-            SaturatedArithmetic.add(artifact, context),
+            SaturatedArithmetic.add(SaturatedArithmetic.add(base, projector), context),
             MemoryProfile.productionReserveBytes
         )
+    }
+
+    // TODO: remove once all call sites migrate to base/mmproj split — the
+    // combined path understates pinned vision projectors by 2/3*mmproj.
+    @available(*, deprecated, message: "Use estimatedBytes(baseBytes:mmprojBytes:contextLength:) so vision projectors get full weight.")
+    static func estimatedBytes(artifactBytes: Int64, contextLength: Int) -> UInt64 {
+        estimatedBytes(baseBytes: artifactBytes, mmprojBytes: 0, contextLength: contextLength)
     }
 
     var warning: String? {
