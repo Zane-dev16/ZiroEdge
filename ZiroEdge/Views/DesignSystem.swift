@@ -955,3 +955,14 @@ extension View {
         modifier(ZiroComposerFieldModifier(isActive: isActive))
     }
 }
+
+// MARK: - RTL Mirroring
+
+extension View {
+    /// Mirrors directional glyphs (chevrons, bubbles, branch arrows) in
+    /// right-to-left layouts. Pass `false` for symmetric symbols. Wraps
+    /// SwiftUI's `flipsForRightToLeftLayoutDirection(_:)`.
+    func flipsForRightToLeft(_ flag: Bool) -> some View {
+        flipsForRightToLeftLayoutDirection(flag)
+    }
+}
