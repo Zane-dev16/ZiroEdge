@@ -52,7 +52,9 @@ struct ZiroSuggestion {
 }
 
 /// Reference-style capability card: full-width row with a tinted dot,
-/// two-line title, and a disclosure chevron on a raised + hairline card.
+/// two-line title, and a disclosure chevron on a raised-background card with
+/// a `ZiroTheme.hairline` stroke (depth pair: stroke + `.ziroShadow(.raised)`
+/// at the call site when floating).
 /// 44pt minimum height meets the repo touch floor exactly; pressed state mirrors
 /// `ZiroSuggestionChip` (accent container + accent edge). Reduce Motion
 /// drops the press scale like the chip style does.
@@ -83,6 +85,10 @@ struct ZiroCapabilityCard: View {
             .background(
                 RoundedRectangle(cornerRadius: ZiroTheme.Radius.control, style: .continuous)
                     .fill(ZiroTheme.raisedBackground)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: ZiroTheme.Radius.control, style: .continuous)
+                    .stroke(ZiroTheme.hairline, lineWidth: 1)
             )
         }
         .buttonStyle(ZiroCapabilityCardStyle())

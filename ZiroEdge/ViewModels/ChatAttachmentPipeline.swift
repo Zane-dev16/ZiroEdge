@@ -157,3 +157,153 @@ extension ChatViewModel {
         selectedModel?.modelType == .vision
     }
 }
+
+// MARK: - Composer Focus + Draft Persistence (P2 items 6-8)
+
+/// Composer chrome state, housed with the attachment pipeline (the composer's
+/// other input state) to keep ChatViewModel.swift within the file-length
+/// gate. Owns the shell-driven keyboard-resign token (P2-6) and the
+/// per-conversation draft park/persist/restore cycle (P2-8). Reaches the
+/// main file's stored draft/input state through internal (not private)
+/// members; behavior is pinned hermetically in P2BatchTests.
+extension ChatViewModel {
+    /// Request the composer to resign keyboard/focus (P2-6). `reason` is a
+    /// stable short tag (`openSidebar`, `selectConversation`,
+    /// `newConversation`, `openRoute`) naming the navigation that covered the
+    /// composer. Bumps `composerResignGeneration`, which ChatView observes to
+    /// clear its `@FocusState`. The reason is logged with public privacy;
+    /// only the generation counter is recorded.
+    func requestComposerResign(reason: String) {
+        composerResignGeneration &+= 1
+        let generation = composerResignGeneration
+        logger.info("Composer resign reason=\(reason, privacy: .public) generation=\(generation, privacy: .public)")
+    }
+
+    /// Suggestion-tap focus gate (P2-6): the field takes focus only while the
+    /// composer is enabled. Requesting focus on the disabled field is ignored
+    /// by the system but leaves the accent ring stuck on, so the refusal is
+    /// the correct outcome — logged, never silent.
+    func shouldTakeSuggestionFocus() -> Bool {
+        let ready = modelLoadPhase == .ready
+        if !ready {
+            logger.info("Suggestion focus refused: composer not ready")
+        }
+        return ready
+    }
+
+    /// Release-focus condition (P2-7): true exactly when the composer's
+    /// enabled condition fails. ChatView releases `@FocusState` on this so a
+    /// focused field never slides into disabled with the keyboard up or the
+    /// accent ring stuck on. Pure over published state for hermetic tests.
+    var composerShouldReleaseFocus: Bool {
+        modelLoadPhase != .ready || isLoadingConversation
+    }
+
+    /// Mirror the live composer text into the per-conversation memory store
+    /// (P2-8). Called on every keystroke (via ChatView's
+    /// `onChange(of: inputText)`), on conversation switches, and on
+    /// backgrounding. Memory-only — the UserDefaults flush stays
+    /// background/explicit-only so typing never pays I/O per keystroke.
+    func parkCurrentDraft() {
+        parkInputTextIntoMemory()
+    }
+
+    /// Background entry point (P2-8): park the live text, then flush the
+    /// store so an OS kill still recovers every per-conversation draft.
+    func noteBackgroundTransition() {
+        parkInputTextIntoMemory()
+        persistDraftsToDefaults()
+    }
+
+    /// Foreground entry point (P2-8): re-hydrate the memory store from
+    /// UserDefaults (merge-only — live memory always wins), then restore the
+    /// current context's draft into an *empty* composer. Never clobbers live
+    /// typing. Idempotent: repeated foreground kicks converge.
+    func noteForegroundTransition() {
+        restoreDraftsFromDefaults()
+        guard inputText.isEmpty else { return }
+        if let id = activeConversationID {
+            if let parked = draftStore[id], !parked.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                inputText = parked
+            }
+        } else if !draftForNewChat.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            inputText = draftForNewChat
+        }
+    }
+
+    /// Test seam (P2-8): parked text for a conversation, nil when none/blank.
+    func parkedDraft(for conversationID: UUID) -> String? {
+        guard let parked = draftStore[conversationID],
+              !parked.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return parked
+    }
+
+    /// Test seam (P2-8): parked unsaved-draft text (empty when none).
+    var parkedNewChatDraft: String { draftForNewChat }
+
+    /// Shared park implementation (internal: used by the conversation
+    /// switches in the main file): persisted conversations keep their UUID
+    /// key; the unsaved draft (nil ID) lands in the new-chat slot instead of
+    /// being dropped.
+    func parkInputTextIntoMemory() {
+        if let id = activeConversationID {
+            draftStore[id] = inputText
+        } else {
+            draftForNewChat = inputText
+        }
+    }
+
+    /// Flush non-blank drafts to UserDefaults (P2-8; internal: also flushed
+    /// by explicit fresh-draft starts in the main file). Blanks remove their
+    /// key so empty composers never linger in storage. Logs counts only —
+    /// draft content is user text and never logged.
+    func persistDraftsToDefaults() {
+        let defaults = UserDefaults.standard
+        let nonBlank = draftStore.filter {
+            !$0.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        if nonBlank.isEmpty {
+            defaults.removeObject(forKey: DefaultsKeys.draftsByConversation)
+        } else {
+            defaults.set(
+                Dictionary(uniqueKeysWithValues: nonBlank.map { ($0.key.uuidString, $0.value) }),
+                forKey: DefaultsKeys.draftsByConversation
+            )
+        }
+        if draftForNewChat.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            defaults.removeObject(forKey: DefaultsKeys.newChatDraft)
+        } else {
+            defaults.set(draftForNewChat, forKey: DefaultsKeys.newChatDraft)
+        }
+        let hasNewChat = draftForNewChat.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0 : 1
+        logger.info("Drafts persisted conversations=\(nonBlank.count, privacy: .public) newChat=\(hasNewChat, privacy: .public)")
+    }
+
+    /// Merge persisted drafts into memory (P2-8; internal: also hydrated at
+    /// init in the main file): fills only keys absent from memory so live
+    /// (fresher) state always wins within a session, while a fresh launch
+    /// hydrates everything the previous run flushed.
+    func restoreDraftsFromDefaults() {
+        let defaults = UserDefaults.standard
+        var restored = 0
+        if let stored = defaults.dictionary(forKey: DefaultsKeys.draftsByConversation) {
+            for (key, value) in stored {
+                guard let id = UUID(uuidString: key),
+                      let text = value as? String,
+                      !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                      draftStore[id] == nil else { continue }
+                draftStore[id] = text
+                restored += 1
+            }
+        }
+        if draftForNewChat.isEmpty,
+           let newChat = defaults.string(forKey: DefaultsKeys.newChatDraft),
+           !newChat.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            draftForNewChat = newChat
+            restored += 1
+        }
+        if restored > 0 {
+            logger.info("Drafts restored count=\(restored, privacy: .public)")
+        }
+    }
+}

@@ -49,6 +49,21 @@ struct ModelDetailView: View {
         } message: {
             Text("Cancelling stops the current transfer and removes its partial download data for \(viewModel.pendingCancelModel?.displayName ?? "this model").")
         }
+        // Dead-button fix (MEDIUM): `confirmDelete` failures set
+        // `updateMessage` — without this binding they never surface.
+        // Mirrors the SettingsPage deletion-failure alert verbatim.
+        .alert(
+            ModelEvictionPresentation.deleteFailureTitle,
+            isPresented: Binding(
+                get: { viewModel.updateMessage != nil },
+                set: { if !$0 { viewModel.updateMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { viewModel.updateMessage = nil }
+        } message: {
+            Text(viewModel.updateMessage ?? "The model could not be removed.")
+                .accessibilityIdentifier(ModelEvictionPresentation.deleteFailureID)
+        }
     }
 
     // MARK: - Identity
@@ -112,7 +127,7 @@ struct ModelDetailView: View {
         switch status.displayState {
         case .notDownloaded:
             if status.isRepairNeeded || ModelManagerService.isRepairNeeded(for: model) {
-                Label("This model needs repair. Downloading again will replace damaged files.", systemImage: "wrench.and.screwdriver")
+                Label(ArtifactIntegrityPresentation.repairBannerMessage, systemImage: "wrench.and.screwdriver")
                     .font(.subheadline)
                     .foregroundStyle(ZiroTheme.warningText)
             }

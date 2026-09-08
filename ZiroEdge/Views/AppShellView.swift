@@ -69,22 +69,35 @@ struct AppShellView: View {
                 splitShell
             }
         }
-        .alert("Model Unloaded", isPresented: $lifecycleManager.showMemoryWarning) {
-            Button("OK", role: .cancel) { lifecycleManager.dismissMemoryWarning() }
-        } message: {
-            Text("ZiroEdge released the model to protect your device under memory pressure. Reload it when you are ready to continue.")
-        }
-        .alert("Model Load Failed", isPresented: $lifecycleManager.showLoadFailure) {
-            Button("Choose Another Model") { openShellRoute(.models) }
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(lifecycleManager.loadFailureMessage ?? "The local model could not be loaded.")
-        }
-        .alert("Model Needs More Memory", isPresented: $lifecycleManager.showInsufficientMemoryWarning) {
-            Button("Choose Another Model") { openShellRoute(.models) }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text(lifecycleManager.insufficientMemoryMessage ?? "This model cannot be loaded safely on the available memory.")
+        // Single queued alert (P1-4): eviction, load-failure, and
+        // insufficient-memory share one alert driven by the `ZiroAlert`
+        // queue, so only one modal can win (stacked `.alert` modifiers
+        // compete and silently drop all but one). Buttons/messages mirror
+        // the pre-queue alerts verbatim; dismissal clears only the presented
+        // case. There is no modern `.alert(item:)` in this SDK (deprecated
+        // since iOS 15 — use presenting-data instead), so the queue drives
+        // `isPresented` + `presenting:` with a dynamic title.
+        // The onboarding cover gates the queue (nil while up) so a modal
+        // never stacks over it.
+        .alert(
+            Text(shellAlertQueue?.title ?? ""),
+            isPresented: shellAlertPresented,
+            presenting: shellAlertQueue
+        ) { (alert: ZiroAlert) in
+            switch alert {
+            case .memoryWarning:
+                Button(ModelEvictionPresentation.okButtonTitle, role: .cancel) {}
+            case .loadFailure:
+                Button("Choose Another Model") { openShellRoute(.models) }
+                Button("OK", role: .cancel) {}
+            case .insufficientMemory:
+                Button("Choose Another Model") { openShellRoute(.models) }
+                Button("Cancel", role: .cancel) {}
+            default:
+                Button("OK", role: .cancel) {}
+            }
+        } message: { (alert: ZiroAlert) in
+            Text(alert.message)
         }
         .fullScreenCover(isPresented: $onboardingManager.showOnboarding) {
             OnboardingView(isPresented: $onboardingManager.showOnboarding)
@@ -280,7 +293,13 @@ struct AppShellView: View {
                         viewModel: chatViewModel,
                         showsSidebarToggle: true,
                         onNavigateToRoute: openShellRoute,
-                        onOpenSidebar: { setSidebarDrawer(true) },
+                        // P2-6: the drawer covers the composer — resign first via
+                        // the generation token (ChatView also resigns locally
+                        // before invoking this closure).
+                        onOpenSidebar: {
+                            chatViewModel.requestComposerResign(reason: "openSidebar")
+                            setSidebarDrawer(true)
+                        },
                         onDeleteConversation: deleteActiveConversation
                     )
                     .navigationDestination(for: ShellRoute.self) { route in
@@ -376,6 +395,9 @@ struct AppShellView: View {
     /// rows stay tappable while that page is open (the "Choose Another Model"
     /// alert actions reach here through the same path).
     private func openShellRoute(_ route: ShellRoute) {
+        // P2-6: pushed routes cover the composer — resign its keyboard/focus
+        // (the chat stays mounted beneath, so nothing else resigns for us).
+        chatViewModel.requestComposerResign(reason: "openRoute")
         setSidebarDrawer(false)
         if let existingIndex = detailRoutes.firstIndex(of: route) {
             detailRoutes.removeSubrange(detailRoutes.index(after: existingIndex)...)
@@ -401,10 +423,15 @@ struct AppShellView: View {
     /// conversation never disturbs a live stream into another one.
     private func handleSidebarDelete(_ id: UUID) {
         Task {
+            // R5: suppress the cancel's trailing reload — the row is doomed;
+            // reloading it before the cascade deletes it races the delete.
             if chatViewModel.isStreaming, chatViewModel.streamedConversationID == id {
-                await chatViewModel.cancelStream()
+                await chatViewModel.cancelStream(suppressReload: true)
             }
             await conversationListViewModel.deleteConversation(id)
+            // P1-5: a recovery retained for the deleted conversation must
+            // never surface elsewhere.
+            await chatViewModel.noteConversationDeleted(id)
         }
     }
 
@@ -414,10 +441,14 @@ struct AppShellView: View {
     /// selectedConversationID), yet selection must still win over a pushed
     /// Models/Settings page (plan §A.4/§7).
     private func selectConversation(_ id: UUID) {
+        // P2-6: switching chats covers the composer mid-typing — resign first.
+        chatViewModel.requestComposerResign(reason: "selectConversation")
         conversationListViewModel.selectConversation(id)
         detailRoutes.removeAll()
         setSidebarDrawer(false)
-        Task { await chatViewModel.loadConversation(id) }
+        // R4: single funnel — the selectedConversationID onChange owns the
+        // load. A direct Task load here double-fires with it (tap + selection
+        // write) and races loadGeneration/selectModel.
     }
 
     /// New Conversation shows an unsaved draft immediately; model loading is
@@ -426,6 +457,8 @@ struct AppShellView: View {
     /// §A.2/§A.4), so routed pages are popped just like the onChange nil
     /// branch — the draft chat surface must be the visible one.
     private func handleNewConversation() {
+        // P2-6: the fresh draft replaces the composer mid-typing — resign.
+        chatViewModel.requestComposerResign(reason: "newConversation")
         setSidebarDrawer(false)
         detailRoutes.removeAll()
         chatViewModel.beginNewDraft()
@@ -492,6 +525,50 @@ struct AppShellView: View {
         return "\(lifecycleManager.currentState)-\(targetID)"
     }
 #endif
+}
+
+// MARK: - Queued Alert
+
+/// Shell alert queue (P1-4) housed here so the AppShellView struct body
+/// stays within the type-body-length gate. Same file, so `private` members
+/// of the struct remain reachable.
+extension AppShellView {
+    /// Queue backing the single shell alert: eviction wins over load
+    /// failure, which wins over insufficient memory. The onboarding cover
+    /// takes precedence (nil while up). Dismissal clears only the presented
+    /// case so a second queued flag survives to present next.
+    private var shellAlertQueue: ZiroAlert? {
+        ZiroAlert.shellQueue(
+            onboarding: onboardingManager.showOnboarding,
+            memoryWarning: lifecycleManager.showMemoryWarning,
+            memoryModelName: lifecycleManager.activeModel?.displayName,
+            loadFailure: lifecycleManager.showLoadFailure
+                ? (lifecycleManager.loadFailureMessage
+                    ?? "The local model could not be loaded.")
+                : nil,
+            insufficientMemory: lifecycleManager.showInsufficientMemoryWarning
+                ? (lifecycleManager.insufficientMemoryMessage
+                    ?? "This model cannot be loaded safely on the available memory.")
+                : nil
+        )
+    }
+
+    private var shellAlertPresented: Binding<Bool> {
+        Binding(
+            get: { shellAlertQueue != nil },
+            set: { newValue in
+                guard !newValue else { return }
+                if onboardingManager.showOnboarding { return }
+                if lifecycleManager.showMemoryWarning {
+                    lifecycleManager.dismissMemoryWarning()
+                } else if lifecycleManager.showLoadFailure {
+                    lifecycleManager.showLoadFailure = false
+                } else if lifecycleManager.showInsufficientMemoryWarning {
+                    lifecycleManager.showInsufficientMemoryWarning = false
+                }
+            }
+        )
+    }
 }
 
 // MARK: - Compact slide-over

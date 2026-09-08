@@ -203,9 +203,11 @@ enum ZiroTheme {
 
     /// One shadow language, two levels. In light mode a soft neutral-gray drop;
     /// in dark mode shadows sink deeper but tighter (dark surfaces swallow
-    /// soft shadows, so the lift reads through the hairline + shadow pair).
-    /// Shadows never substitute for the hairline — they always travel
-    /// together (see `ziroShadow(_:)`).
+    /// soft shadows, so the lift reads through the hairline-stroke + shadow
+    /// pair). Shadows never substitute for the stroke — they always travel
+    /// together via `.ziroShadow(_:)` plus a `ZiroTheme.hairline` stroke
+    /// (see `ziroShadow(_:)`). The one sanctioned shadow-color fill is
+    /// `scrim`, never `shadowFloating` directly.
     static let shadowRaised = ziroShadowColor(lightAlpha: 0.14, darkAlpha: 0.50)
     static let shadowFloating = ziroShadowColor(lightAlpha: 0.20, darkAlpha: 0.55)
 
@@ -362,7 +364,8 @@ extension View {
 // MARK: - Shadow Language
 
 /// The two shadow levels. Apply with `.ziroShadow(_:)` together with a
-/// hairline stroke — the pair (stroke + shadow) is the depth system.
+/// `ZiroTheme.hairline` stroke — the pair (stroke + shadow) is the depth
+/// system. `ZiroTheme.scrim` is the only sanctioned shadow-color fill.
 enum ZiroShadowLevel {
     /// Resting content: cards, primary buttons, floating pill controls.
     case raised

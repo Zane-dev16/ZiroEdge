@@ -95,7 +95,13 @@ final class ConversationListViewModel: ObservableObject {
     /// Commit the title rename.
     func commitRename(_ conversationID: UUID) async {
         let newTitle = editingTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !newTitle.isEmpty else { return }
+        // The Save buttons disable while empty; this gate stays as the
+        // fail-closed backstop and logs instead of silently returning so a
+        // no-op rename is distinguishable from a tap never received.
+        guard Self.canCommitRename(title: newTitle) else {
+            logger.info("Rename refused: empty title")
+            return
+        }
         switch await persistence.updateConversationTitle(id: conversationID, title: newTitle) {
         case .success:
             await loadConversations()
@@ -104,6 +110,13 @@ final class ConversationListViewModel: ObservableObject {
         }
     }
     // MARK: - Selection
+
+    /// Save-enable rule for the rename alerts (SidebarView + ChatsView),
+    /// shared with `commitRename` so the button and the guard never drift.
+    /// Pure for tests.
+    static func canCommitRename(title: String) -> Bool {
+        !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     /// Select a conversation.
     func selectConversation(_ id: UUID) {

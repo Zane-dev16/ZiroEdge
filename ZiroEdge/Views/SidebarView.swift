@@ -65,6 +65,10 @@ struct SidebarView: View {
                     Task { await viewModel.commitRename(conversation.id) }
                 }
             }
+            // Dead-button guard (MEDIUM): an empty title commits nothing —
+            // disable instead of tapping into a silent `commitRename` guard.
+            .disabled(!ConversationListViewModel.canCommitRename(title: renameText))
+            .accessibilityIdentifier(ModelEvictionPresentation.renameSaveButtonID)
             Button("Cancel", role: .cancel) {
                 conversationToRename = nil
             }
@@ -476,7 +480,9 @@ struct ChatsView: View {
     /// the selected scope reads in the recessed-well fill with primary
     /// text). Each pill keeps the 44pt-minimum-height touch floor and grows
     /// with Dynamic Type; the selected pill carries `.isSelected` for
-    /// VoiceOver.
+    /// VoiceOver. The row groups as one "Archive scope" container
+    /// (children `.contain`) so rotor users land on the group once, then
+    /// swipe through the All/Recent/Earlier pills with their own labels.
     private var archiveScopePills: some View {
         HStack(spacing: ZiroTheme.Spacing.small) {
             ForEach(ArchiveScope.allCases, id: \.self) { item in
@@ -498,6 +504,7 @@ struct ChatsView: View {
                 .accessibilityAddTraits(item == scope ? .isSelected : [])
             }
         }
+        .accessibilityElement(children: .contain)
         .accessibilityLabel("Archive scope")
         .padding(.horizontal, ZiroTheme.Spacing.large)
         .padding(.vertical, ZiroTheme.Spacing.small)
@@ -586,6 +593,11 @@ struct ChatsView: View {
                     Task { await viewModel.commitRename(conversation.id) }
                 }
             }
+            // Dead-button guard (MEDIUM): mirrors the sidebar rename — an
+            // empty title commits nothing, so disable instead of tapping
+            // into a silent `commitRename` guard.
+            .disabled(!ConversationListViewModel.canCommitRename(title: renameText))
+            .accessibilityIdentifier(ModelEvictionPresentation.renameSaveButtonID)
             Button("Cancel", role: .cancel) {
                 conversationToRename = nil
             }

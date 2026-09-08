@@ -3,6 +3,7 @@
 
 import PhotosUI
 import SwiftUI
+import UIKit
 
 /// The chat surface. Identity/loading feedback lives in the composer model
 /// picker (`ComposerModelPicker`); the composer enables only while the model is resident;
@@ -69,31 +70,78 @@ struct ChatView: View {
             // gate inside startDeferredModelLoadIfNeeded.
             if phase == .active {
                 viewModel.handleForegroundTransition()
+            } else if phase == .background {
+                // P2-6/8: the system dismisses the keyboard out from under us
+                // on background — drop the focus affordance with it (otherwise
+                // the accent ring sticks with no keyboard) and park + persist
+                // per-conversation drafts for kill-recovery.
+                resignComposerFocus()
+                viewModel.noteBackgroundTransition()
+            }
+        }
+        .onDisappear {
+            // P2-6: leaving the surface resigns focus and drops any coalesced
+            // scroll so a stale task cannot scroll a recycled view.
+            resignComposerFocus()
+            pendingScrollTask?.cancel()
+            pendingScrollTask = nil
+        }
+        .onChange(of: viewModel.composerResignGeneration) { _, _ in
+            // P2-6: shell navigation (sidebar open, conversation switch, new
+            // draft, route push) resigns the composer even though the chat
+            // stays mounted beneath the pushed surface.
+            resignComposerFocus()
+        }
+        .onChange(of: viewModel.inputText) { _, _ in
+            // P2-8: mirror every keystroke into the per-conversation memory
+            // store (the UserDefaults flush stays background-only).
+            viewModel.parkCurrentDraft()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            // P2-8: the system can dismiss the keyboard without touching our
+            // focus state (backgrounding, hardware-keyboard detach). Reset
+            // the affordance — but only off the active phase, so a keyboard
+            // type-switch (hide+show while active) never steals focus.
+            if scenePhase != .active {
+                resignComposerFocus()
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIPasteboard.changedNotification)) { _ in
             refreshPasteboardState()
         }
-        .alert("Enable Experimental Runtime?", isPresented: $viewModel.showingExperimentalConsent) {
-            Button("Enable Experimental Use") {
-                Task { await viewModel.confirmExperimentalConsent() }
+        // Single queued alert (P1-4): the experimental-consent and delete
+        // confirmations share one alert driven by the `ZiroAlert` queue, so
+        // only one modal can win (stacked `.alert` modifiers compete and
+        // silently drop all but one). Buttons/messages mirror the pre-queue
+        // alerts verbatim. There is no modern `.alert(item:)` in this SDK
+        // (deprecated since iOS 15 — use presenting-data instead), so the
+        // queue drives `isPresented` + `presenting:` with a dynamic title.
+        .alert(
+            Text(chatAlertQueue?.title ?? ""),
+            isPresented: chatAlertPresented,
+            presenting: chatAlertQueue
+        ) { (alert: ZiroAlert) in
+            switch alert {
+            case .experimentalConsent:
+                Button("Enable Experimental Use") {
+                    Task { await viewModel.confirmExperimentalConsent() }
+                }
+                Button("Cancel", role: .cancel) {
+                    viewModel.cancelExperimentalConsent()
+                }
+            case .deleteConversation:
+                Button("Delete", role: .destructive) {
+                    showDeleteChatConfirmation = false
+                    onDeleteConversation?()
+                }
+                Button("Cancel", role: .cancel) {
+                    showDeleteChatConfirmation = false
+                }
+            default:
+                Button("OK", role: .cancel) {}
             }
-            Button("Cancel", role: .cancel) {
-                viewModel.cancelExperimentalConsent()
-            }
-        } message: {
-            Text("This imported profile has not passed the full physical workload. ZiroEdge will still enforce its measured admission floor and reserve.")
-        }
-        .alert("Delete Conversation?", isPresented: $showDeleteChatConfirmation) {
-            Button("Delete", role: .destructive) {
-                showDeleteChatConfirmation = false
-                onDeleteConversation?()
-            }
-            Button("Cancel", role: .cancel) {
-                showDeleteChatConfirmation = false
-            }
-        } message: {
-            Text("This will permanently delete the conversation and all its messages.")
+        } message: { (alert: ZiroAlert) in
+            Text(alert.message)
         }
     }
 
@@ -301,6 +349,15 @@ extension ChatView {
                 .frame(maxWidth: ZiroMeasure.full)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, ZiroTheme.Spacing.medium)
+                // P2-7: background-only tap-to-dismiss. Sitting behind the
+                // rows, this never sees taps consumed by bubble buttons, the
+                // inline Retry/Reload row, or the jump button — unlike the
+                // previous ScrollView-level gesture, which fired alongside
+                // those controls and stole their taps' keyboard state.
+                .background(
+                    Color.clear.contentShape(Rectangle())
+                        .onTapGesture { resignComposerFocus() }
+                )
                 .background {
                     GeometryReader { geometry in
                         Color.clear.preference(
@@ -312,7 +369,6 @@ extension ChatView {
             }
             .coordinateSpace(name: "scrollView")
             .scrollDismissesKeyboard(.interactively)
-            .onTapGesture { isInputFocused = false }
             .onPreferenceChange(ScrollOffsetKey.self) { maxY in
                 // BATCH-04: avoid withAnimation per scroll-offset frame
                 hasScrolledUp = maxY < 0
@@ -347,6 +403,11 @@ extension ChatView {
                         UIAccessibility.post(
                             notification: .announcement,
                             argument: "Assistant response complete"
+                        )
+                    case .truncated:
+                        UIAccessibility.post(
+                            notification: .announcement,
+                            argument: "Assistant response complete, older messages removed to fit context"
                         )
                     case .stopped:
                         UIAccessibility.post(
@@ -383,13 +444,17 @@ extension ChatView {
             suggestionItems: viewModel.availableModels.isEmpty ? [] : Self.samplePrompts,
             onSuggestion: { suggestion in
                 // Reuses the existing send flow: the prompt lands in the
-                // composer (trailing space so typing continues naturally)
-                // and the field takes focus. No new ViewModel API.
+                // composer (trailing space so typing continues naturally).
+                // Focus follows only while the composer is enabled (P2-6):
+                // requesting focus on the disabled field is ignored by the
+                // system but leaves the accent ring stuck on.
                 let existing = viewModel.inputText.trimmingCharacters(in: .whitespacesAndNewlines)
                 viewModel.inputText = existing.isEmpty
                     ? suggestion + " "
                     : existing + " " + suggestion + " "
-                isInputFocused = true
+                if viewModel.shouldTakeSuggestionFocus() {
+                    isInputFocused = true
+                }
             }
         ) {
             // A.2: with no models installed, the empty state gains a direct
@@ -504,11 +569,23 @@ extension ChatView {
 
     func refreshPasteboardState() { canPasteImage = UIPasteboard.general.hasImages }
 
+    // MARK: Focus (P2-6)
+
+    /// Single funnel for resigning the composer: keyboard down, focus ring
+    /// off. Shell navigation additionally bumps the view model's resign
+    /// generation (observed above), so shell-driven and view-local resigns
+    /// converge here.
+    private func resignComposerFocus() {
+        isInputFocused = false
+    }
+
     // MARK: Routes
 
     /// Shell route hook when provided (AppShellView); falls back to the legacy
     /// redirect flag so previews and tests keep working bare.
     func navigateToRoute(_ route: ShellRoute) {
+        // P2-6: pushed routes cover the composer — resign before navigating.
+        resignComposerFocus()
         if let onNavigateToRoute {
             onNavigateToRoute(route)
         } else if route == .models {
@@ -522,7 +599,13 @@ extension ChatView {
     var chatToolbar: some ToolbarContent {
         if showsSidebarToggle, let onOpenSidebar {
             ToolbarItem(placement: .topBarLeading) {
-                Button(action: onOpenSidebar) {
+                Button {
+                    // P2-6: the drawer covers the composer — resign first so
+                    // the keyboard never lingers over it (the shell also bumps
+                    // the resign generation for the mounted-chat path).
+                    resignComposerFocus()
+                    onOpenSidebar()
+                } label: {
                     Image(systemName: "line.3.horizontal")
                 }
                 .accessibilityLabel("Conversations")
@@ -568,6 +651,29 @@ extension ChatView {
             .accessibilityLabel("More actions")
             .accessibilityIdentifier("more-actions-menu")
         }
+    }
+
+    // MARK: Queued Alert
+
+    /// Queue backing the single chat alert: experimental consent wins over
+    /// the delete confirmation; dismissal clears the presented flags.
+    private var chatAlertQueue: ZiroAlert? {
+        ZiroAlert.chatQueue(
+            experimentalConsent: viewModel.showingExperimentalConsent,
+            deleteConversation: showDeleteChatConfirmation
+        )
+    }
+
+    private var chatAlertPresented: Binding<Bool> {
+        Binding(
+            get: { chatAlertQueue != nil },
+            set: { newValue in
+                if !newValue {
+                    if viewModel.showingExperimentalConsent { viewModel.cancelExperimentalConsent() }
+                    showDeleteChatConfirmation = false
+                }
+            }
+        )
     }
 
     // MARK: Recovery Actions

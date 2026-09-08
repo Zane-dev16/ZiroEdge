@@ -112,6 +112,21 @@ struct ModelsView: View {
         } message: {
             Text("Cancelling stops the current transfer and removes its partial download data for \(viewModel.pendingCancelModel?.displayName ?? "this model").")
         }
+        // Dead-button fix (MEDIUM): `confirmDelete` failures set
+        // `updateMessage` — without this binding they never surface.
+        // Mirrors the SettingsPage deletion-failure alert verbatim.
+        .alert(
+            ModelEvictionPresentation.deleteFailureTitle,
+            isPresented: Binding(
+                get: { viewModel.updateMessage != nil },
+                set: { if !$0 { viewModel.updateMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { viewModel.updateMessage = nil }
+        } message: {
+            Text(viewModel.updateMessage ?? "The model could not be removed.")
+                .accessibilityIdentifier(ModelEvictionPresentation.deleteFailureID)
+        }
     }
 
     // MARK: - Scope
@@ -275,7 +290,7 @@ struct ModelsView: View {
             // the Repair affordance; keep the subtitle truthful instead of
             // reusing the pending copy so a real failure never masquerades
             // as loading.
-            details.append("Needs repair")
+            details.append(ArtifactIntegrityPresentation.needsRepairSubtitle)
         }
         return details.joined(separator: " · ")
     }
@@ -460,7 +475,7 @@ extension ModelDownloadStatus {
         case .cancelled: return "download cancelled"
         case .downloaded: return "installed"
         case .notDownloaded:
-            return presentsAsRepairNeeded(for: model) ? "needs repair" : "available to download"
+            return presentsAsRepairNeeded(for: model) ? ArtifactIntegrityPresentation.needsRepairSpoken : "available to download"
         }
     }
 }

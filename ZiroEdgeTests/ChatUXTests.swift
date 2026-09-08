@@ -373,11 +373,625 @@ final class ChatUXTests: XCTestCase {
         XCTAssertFalse(viewModel.isStartupError, "isStartupError should be cleared")
     }
 
+    // MARK: - P3 Context-Window Preflight
+
+    private func p3History(_ contents: [String]) -> [ChatMessagePayload] {
+        contents.map { ChatMessagePayload(role: .user, content: $0) }
+    }
+
+    func testP3TruncationKeepsNewestDropsOldest() throws {
+        let history = p3History([String(repeating: "a", count: 4000), String(repeating: "b", count: 4000), "newest"])
+        let result = ChatViewModel.truncatedHistoryForContextWindow(
+            history, systemPrompt: nil, contextWindowSize: 64, reserveTokens: 16
+        )
+        XCTAssertGreaterThan(result.dropped, 0)
+        XCTAssertEqual(result.kept.last?.content, "newest")
+        XCTAssertEqual(result.kept.count + result.dropped, history.count)
+    }
+
+    func testP3TruncationFitsWithoutDropping() throws {
+        let history = p3History(["hi", "hello"])
+        let result = ChatViewModel.truncatedHistoryForContextWindow(
+            history, systemPrompt: nil, contextWindowSize: 4096, reserveTokens: 1024
+        )
+        XCTAssertEqual(result.dropped, 0)
+        XCTAssertEqual(result.kept.count, 2)
+    }
+
+    func testP3TruncatedEndReasonAndBannerWiring() throws {
+        let viewModel = makeViewModel()
+        XCTAssertNil(viewModel.lastStreamEndReason)
+        // The preflight caller is startStreaming (first non-test caller of
+        // notifyTruncation): simulate its two calls directly.
+        let history = p3History([String(repeating: "x", count: 8000), "tail"])
+        let preflight = ChatViewModel.truncatedHistoryForContextWindow(
+            history, systemPrompt: nil, contextWindowSize: 64, reserveTokens: 16
+        )
+        XCTAssertGreaterThan(preflight.dropped, 0)
+        viewModel.notifyTruncation(messageCount: preflight.dropped)
+        XCTAssertNotNil(viewModel.truncationWarning)
+        XCTAssertTrue(viewModel.truncationWarning!.contains("removed"))
+        // The truncated terminal reason exists alongside the historic cases.
+        let reason = ChatViewModel.StreamEndReason.truncated
+        switch reason {
+        case .truncated: break
+        case .completed, .stopped, .failed: XCTFail("wrong reason")
+        }
+    }
+
+    func testP3SamplingPenaltyDefaultsAndBounding() throws {
+        let def = SamplingConfig.default
+        XCTAssertEqual(def.penaltyLastN, 64)
+        XCTAssertEqual(def.frequencyPenalty, 0.0)
+        XCTAssertEqual(def.presencePenalty, 0.0)
+        let bounded = ModelConfiguration.imported(
+            promptPath: .chatTemplate,
+            contextLength: 4096,
+            sampling: SamplingConfig(
+                temperature: 9, topP: -1, topK: 900, maxTokens: 99_999,
+                repeatPenalty: 5, penaltyLastN: 9999, frequencyPenalty: 9, presencePenalty: -3
+            )
+        )
+        XCTAssertEqual(bounded.defaultSampling.penaltyLastN, 512)
+        XCTAssertEqual(bounded.defaultSampling.frequencyPenalty, 2, accuracy: 0.001)
+        XCTAssertEqual(bounded.defaultSampling.presencePenalty, 0, accuracy: 0.001)
+    }
+
+    func testP3SamplingBackwardCompatibleDecode() throws {
+        let legacy = """
+        {"temperature":0.7,"topP":0.9,"topK":40,"maxTokens":2048,"repeatPenalty":1.1}
+        """.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(SamplingConfig.self, from: legacy)
+        XCTAssertEqual(decoded.penaltyLastN, 64)
+        XCTAssertEqual(decoded.frequencyPenalty, 0.0)
+        XCTAssertEqual(decoded.presencePenalty, 0.0)
+    }
+
+    func testP3AccessibilityIDsPreserved() throws {
+        XCTAssertEqual(ModelEvictionPresentation.retryButtonID, "modelRetryButton")
+        XCTAssertEqual(ModelEvictionPresentation.retryBannerID, "modelRetryBanner")
+    }
+
     // MARK: - Cleanup
 
     override func tearDown() {
         super.tearDown()
         UserDefaults.standard.removeObject(forKey: ChatViewModel.DefaultsKeys.lastUsedModelID)
         UserDefaults.standard.removeObject(forKey: ChatViewModel.DefaultsKeys.defaultSystemPrompt)
+    }
+}
+
+// MARK: - P0 per-conversation drafts (synthesis item 2)
+
+/// inputText must behave like pendingImages: scoped to the conversation being
+/// left, restored on return, cleared together with attachments on new drafts.
+@MainActor
+final class DraftTests: XCTestCase {
+    private final class DraftStatusProvider: ModelDownloadStatusProvider {
+        var readyIDs: Set<String> = []
+        func status(for model: AIModel) -> ModelDownloadStatus {
+            guard readyIDs.contains(model.id) else {
+                return ModelDownloadStatus(baseState: .notDownloaded, mmprojState: nil)
+            }
+            return ModelDownloadStatus(modelID: model.id, baseState: .downloaded, mmprojState: .downloaded)
+        }
+    }
+
+    private actor DraftInferenceStub: InferenceServiceProtocol {
+        private var loadedID: String?
+        var isModelLoaded: Bool { loadedID != nil }
+        var loadedModelID: String? { loadedID }
+        func loadModel(_ model: AIModel, baseURL: URL, mmprojURL: URL?) async throws { loadedID = model.id }
+        func unloadModel() async { loadedID = nil }
+        func streamChat(messages: [ChatMessagePayload], systemPrompt: String?, sampling: SamplingConfig) async throws -> AsyncThrowingStream<String, Error> {
+            throw InferenceError.modelNotLoaded
+        }
+        func streamVisionChat(messages: [ChatMessagePayload], images: [Data], systemPrompt: String?, sampling: SamplingConfig) async throws -> AsyncThrowingStream<String, Error> {
+            throw InferenceError.modelNotLoaded
+        }
+        func cancelCurrentStream() async {}
+    }
+
+    private struct DraftHarness {
+        let viewModel: ChatViewModel
+        let persistence: PersistenceController
+        let modelA: AIModel
+        let modelB: AIModel
+    }
+
+    private func makePriorImportB() -> AIModel {
+        let data = TestModelFixtures.gguf()
+        let sha = TestModelFixtures.sha256(data)
+        let provenance = HuggingFaceProvenance(
+            repositoryID: "acme/draft", revision: String(repeating: "c", count: 40),
+            baseFilename: "draft.gguf", baseSHA256: sha,
+            architecture: "llama", projectorFilename: nil, projectorSHA256: nil
+        )
+        var model = TestModelFixtures.text(id: "hf-draft-\(UUID().uuidString.prefix(8))", data: data)
+        model.source = .huggingFace(provenance)
+        return model
+    }
+
+    private func makeHarness() throws -> DraftHarness {
+        let persistence = PersistenceController(inMemory: true)
+        let inference = DraftInferenceStub()
+        let budgeter = MemoryBudgeter(metrics: FixedMemoryMetricsProvider(
+            processAvailable: 4_000_000_000, total: 8_054_095_872
+        ))
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("DraftTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let lifecycle = ModelLifecycleManager(
+            inferenceService: inference,
+            memoryBudgeter: budgeter,
+            loadSafetyStore: try LoadSafetyStore(directory: root.appendingPathComponent("safety")),
+            importedModelStore: ImportedModelStore(directory: root.appendingPathComponent("imports")),
+            availabilityProvider: { _ in .ready },
+            recoveryDelay: .zero
+        )
+        let session = ChatSessionActor(inferenceService: inference, persistence: persistence)
+        let modelA = ModelRegistry.gemma4_e2b
+        let modelB = makePriorImportB()
+        ExperimentalModelConsent.setGranted(true, for: modelB)
+        let status = DraftStatusProvider()
+        status.readyIDs = [modelA.id, modelB.id]
+        let viewModel = ChatViewModel(
+            persistence: persistence,
+            inferenceService: inference,
+            sessionActor: session,
+            lifecycleManager: lifecycle,
+            downloadStatusProvider: status,
+            modelProvider: { [modelA, modelB] }
+        )
+        return DraftHarness(viewModel: viewModel, persistence: persistence, modelA: modelA, modelB: modelB)
+    }
+
+    /// Typed text must not follow a conversation switch; returning restores it.
+    func testTextDoesNotFollowSwitch() async throws {
+        let harness = try makeHarness()
+        defer { ExperimentalModelConsent.setGranted(false, for: harness.modelB) }
+        let viewModel = harness.viewModel
+        let convA = try await harness.persistence.createConversation(title: "A", modelID: harness.modelA.id)
+        let convB = try await harness.persistence.createConversation(title: "B", modelID: harness.modelB.id)
+
+        await viewModel.loadConversation(convA)
+        XCTAssertEqual(viewModel.activeConversationID, convA)
+        viewModel.inputText = "draft for A"
+
+        await viewModel.loadConversation(convB)
+        XCTAssertEqual(viewModel.inputText, "", "switching must park A's draft, not carry it into B")
+        viewModel.inputText = "draft for B"
+
+        await viewModel.loadConversation(convA)
+        XCTAssertEqual(viewModel.inputText, "draft for A", "returning must restore A's draft")
+        await viewModel.loadConversation(convB)
+        XCTAssertEqual(viewModel.inputText, "draft for B", "returning must restore B's draft")
+    }
+
+    /// Staged attachments clear together with the parked text: switching drops
+    /// images (existing guard) while the text is stashed, and a new draft
+    /// clears both.
+    func testAttachmentsClearedTogether() async throws {
+        let harness = try makeHarness()
+        defer { ExperimentalModelConsent.setGranted(false, for: harness.modelB) }
+        let viewModel = harness.viewModel
+        let convA = try await harness.persistence.createConversation(title: "A", modelID: harness.modelA.id)
+        let convB = try await harness.persistence.createConversation(title: "B", modelID: harness.modelB.id)
+
+        await viewModel.loadConversation(convA)
+        viewModel.inputText = "draft with photo"
+        viewModel.pendingImages = [Data(repeating: 0xAB, count: 16)]
+
+        await viewModel.loadConversation(convB)
+        XCTAssertTrue(viewModel.pendingImages.isEmpty, "images must not migrate into B")
+        XCTAssertEqual(viewModel.inputText, "")
+
+        await viewModel.loadConversation(convA)
+        XCTAssertEqual(viewModel.inputText, "draft with photo", "text restores without its dropped attachments")
+        XCTAssertTrue(viewModel.pendingImages.isEmpty)
+
+        viewModel.beginNewDraft()
+        XCTAssertEqual(viewModel.inputText, "", "new draft clears parked text")
+        XCTAssertTrue(viewModel.pendingImages.isEmpty)
+        await viewModel.loadConversation(convA)
+        XCTAssertEqual(viewModel.inputText, "draft with photo", "new-draft parks (not drops) the outgoing draft")
+    }
+
+    override func tearDown() {
+        super.tearDown()
+        UserDefaults.standard.removeObject(forKey: ChatViewModel.DefaultsKeys.lastUsedModelID)
+        UserDefaults.standard.removeObject(forKey: ChatViewModel.DefaultsKeys.defaultSystemPrompt)
+    }
+}
+
+// MARK: - P0 new-chat during stream (synthesis item 3)
+
+/// Starting a new draft mid-stream must synchronously park the streaming UI:
+/// no Stop glyph, no thinking row, no transcript on the empty draft.
+@MainActor
+final class StreamSwitchTests: XCTestCase {
+    private final class StreamStatusProvider: ModelDownloadStatusProvider {
+        var readyIDs: Set<String> = []
+        func status(for model: AIModel) -> ModelDownloadStatus {
+            guard readyIDs.contains(model.id) else {
+                return ModelDownloadStatus(baseState: .notDownloaded, mmprojState: nil)
+            }
+            return ModelDownloadStatus(modelID: model.id, baseState: .downloaded, mmprojState: .downloaded)
+        }
+    }
+
+    private actor CannedStreamInferenceService: InferenceServiceProtocol {
+        private var loadedID: String?
+        private let delay: Duration
+        init(delay: Duration = .milliseconds(300)) { self.delay = delay }
+        var isModelLoaded: Bool { loadedID != nil }
+        var loadedModelID: String? { loadedID }
+        func loadModel(_ model: AIModel, baseURL: URL, mmprojURL: URL?) async throws { loadedID = model.id }
+        func unloadModel() async { loadedID = nil }
+        func cancelCurrentStream() async {}
+        func streamChat(messages: [ChatMessagePayload], systemPrompt: String?, sampling: SamplingConfig) async throws -> AsyncThrowingStream<String, Error> {
+            try? await Task.sleep(for: delay)
+            return AsyncThrowingStream { continuation in
+                continuation.yield("Canned ")
+                continuation.yield("response")
+                continuation.finish()
+            }
+        }
+        func streamVisionChat(messages: [ChatMessagePayload], images: [Data], systemPrompt: String?, sampling: SamplingConfig) async throws -> AsyncThrowingStream<String, Error> {
+            try await streamChat(messages: messages, systemPrompt: systemPrompt, sampling: sampling)
+        }
+    }
+
+    func testNewDraftStartsIdle() async throws {
+        let persistence = PersistenceController(inMemory: true)
+        let inference = CannedStreamInferenceService()
+        let budgeter = MemoryBudgeter(metrics: FixedMemoryMetricsProvider(
+            processAvailable: 4_000_000_000, total: 8_054_095_872
+        ))
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("StreamSwitch-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let lifecycle = ModelLifecycleManager(
+            inferenceService: inference,
+            memoryBudgeter: budgeter,
+            loadSafetyStore: try LoadSafetyStore(directory: root.appendingPathComponent("safety")),
+            availabilityProvider: { _ in .ready },
+            recoveryDelay: .zero
+        )
+        let session = ChatSessionActor(inferenceService: inference, persistence: persistence)
+        let model = ModelRegistry.gemma4_e2b
+        let status = StreamStatusProvider()
+        status.readyIDs = [model.id]
+        let viewModel = ChatViewModel(
+            persistence: persistence,
+            inferenceService: inference,
+            sessionActor: session,
+            lifecycleManager: lifecycle,
+            downloadStatusProvider: status,
+            modelProvider: { [model] }
+        )
+        let conversationID = try await persistence.createConversation(title: "Streaming", modelID: model.id)
+        await viewModel.loadConversation(conversationID)
+        XCTAssertEqual(viewModel.activeConversationID, conversationID)
+
+        viewModel.inputText = "hello"
+        let sendTask = Task { await viewModel.sendMessage() }
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(4))
+        while !viewModel.isStreaming {
+            guard clock.now < deadline else { return XCTFail("stream never started") }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        // New chat mid-stream: the empty draft must read idle synchronously —
+        // no Stop control state, no thinking-row state, no transcript.
+        viewModel.beginNewDraft()
+        XCTAssertFalse(viewModel.isStreaming, "fresh draft must not show Stop/streaming UI")
+        XCTAssertTrue(viewModel.streamingText.isEmpty)
+        XCTAssertTrue(viewModel.messages.isEmpty)
+        XCTAssertTrue(viewModel.isDraftConversation)
+        XCTAssertNil(viewModel.activeConversationID)
+
+        await sendTask.value
+        // The stale generation must not resurrect streaming UI on the draft.
+        XCTAssertFalse(viewModel.isStreaming)
+        XCTAssertTrue(viewModel.messages.isEmpty, "stale stream must not write into the fresh draft")
+        XCTAssertTrue(viewModel.streamingText.isEmpty)
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    override func tearDown() {
+        super.tearDown()
+        UserDefaults.standard.removeObject(forKey: ChatViewModel.DefaultsKeys.lastUsedModelID)
+        UserDefaults.standard.removeObject(forKey: ChatViewModel.DefaultsKeys.defaultSystemPrompt)
+    }
+}
+
+// MARK: - P1 flow fixtures (synthesis items 4-5)
+
+/// Hermetic ChatViewModel factory shared by the P1 flow tests: in-memory
+/// store, real-but-never-loaded engine, caller-chosen catalog. No I/O,
+/// no loads — removed-model IDs keep `loadConversation` off the engine.
+@MainActor
+private func makeP1FlowChatViewModel(
+    persistence: PersistenceController,
+    modelProvider: @escaping () -> [AIModel] = { [] }
+) -> ChatViewModel {
+    let inferenceService = InferenceService()
+    return ChatViewModel(
+        persistence: persistence,
+        inferenceService: inferenceService,
+        sessionActor: ChatSessionActor(
+            inferenceService: inferenceService,
+            persistence: persistence
+        ),
+        lifecycleManager: ModelLifecycleManager(
+            inferenceService: inferenceService,
+            memoryBudgeter: MemoryBudgeter()
+        ),
+        downloadStatusProvider: P1FlowStatusProvider(),
+        modelProvider: modelProvider
+    )
+}
+
+private final class P1FlowStatusProvider: ModelDownloadStatusProvider {
+    func status(for model: AIModel) -> ModelDownloadStatus {
+        ModelDownloadStatus(baseState: .notDownloaded, mmprojState: nil)
+    }
+}
+
+// MARK: - P1 alert queue (synthesis item 4)
+
+/// ChatView's 2 alerts + AppShellView's 3 alerts collapse into one
+/// `.alert(item:)` queue per view, backed by `ZiroAlert`. Copy, buttons,
+/// ZiroTheme/44pt treatment, and a11y IDs are preserved at the call sites —
+/// the enum owns only routing + payloads. All hermetic (no I/O, no engine).
+@MainActor
+final class AlertTests: XCTestCase {
+    func testAlertIDsAreUnique() {
+        let ids = [
+            ZiroAlert.experimentalConsent.id,
+            ZiroAlert.deleteConversation.id,
+            ZiroAlert.memoryWarning(modelName: nil).id,
+            ZiroAlert.loadFailure(message: "x").id,
+            ZiroAlert.insufficientMemory(message: "x").id,
+        ]
+        XCTAssertEqual(Set(ids).count, ids.count, "queued alerts must be distinguishable")
+    }
+
+    func testAlertCopyMatchesLegacyStrings() {
+        XCTAssertEqual(ZiroAlert.experimentalConsent.title, "Enable Experimental Runtime?")
+        XCTAssertEqual(ZiroAlert.deleteConversation.title, "Delete Conversation?")
+        XCTAssertEqual(ZiroAlert.memoryWarning(modelName: "M").title, ModelEvictionPresentation.alertTitle)
+        XCTAssertEqual(ZiroAlert.loadFailure(message: "m").title, "Model Load Failed")
+        XCTAssertEqual(ZiroAlert.insufficientMemory(message: "m").title, "Model Needs More Memory")
+        XCTAssertTrue(ZiroAlert.experimentalConsent.message.contains("measured admission floor"))
+        XCTAssertTrue(ZiroAlert.deleteConversation.message.contains("permanently delete"))
+        XCTAssertTrue(ZiroAlert.memoryWarning(modelName: "M").message.contains(
+            ModelEvictionPresentation.message(modelName: "M")
+        ))
+        XCTAssertEqual(ZiroAlert.loadFailure(message: "boom").message, "boom")
+    }
+
+    func testChatQueuePriority() {
+        XCTAssertEqual(
+            ZiroAlert.chatQueue(experimentalConsent: true, deleteConversation: true),
+            .experimentalConsent
+        )
+        XCTAssertEqual(
+            ZiroAlert.chatQueue(experimentalConsent: false, deleteConversation: true),
+            .deleteConversation
+        )
+        XCTAssertNil(ZiroAlert.chatQueue(experimentalConsent: false, deleteConversation: false))
+    }
+
+    func testShellQueuePriorityAndCoverPrecedence() {
+        XCTAssertNil(
+            ZiroAlert.shellQueue(
+                onboarding: true, memoryWarning: true, memoryModelName: "M",
+                loadFailure: "f", insufficientMemory: "i"
+            ),
+            "onboarding cover takes precedence over every alert"
+        )
+        XCTAssertEqual(
+            ZiroAlert.shellQueue(
+                onboarding: false, memoryWarning: true, memoryModelName: "M",
+                loadFailure: "f", insufficientMemory: "i"
+            ),
+            .memoryWarning(modelName: "M")
+        )
+        XCTAssertEqual(
+            ZiroAlert.shellQueue(
+                onboarding: false, memoryWarning: false, memoryModelName: nil,
+                loadFailure: "f", insufficientMemory: "i"
+            ),
+            .loadFailure(message: "f")
+        )
+        XCTAssertEqual(
+            ZiroAlert.shellQueue(
+                onboarding: false, memoryWarning: false, memoryModelName: nil,
+                loadFailure: nil, insufficientMemory: "i"
+            ),
+            .insufficientMemory(message: "i")
+        )
+        XCTAssertNil(
+            ZiroAlert.shellQueue(
+                onboarding: false, memoryWarning: false, memoryModelName: nil,
+                loadFailure: nil, insufficientMemory: nil
+            )
+        )
+    }
+
+    func testPresentationIDsArePinned() {
+        XCTAssertEqual(ModelEvictionPresentation.retryButtonID, "modelRetryButton")
+        XCTAssertEqual(ModelEvictionPresentation.retryBannerID, "modelRetryBanner")
+        XCTAssertEqual(ModelEvictionPresentation.retryHintID, "modelRetryHint")
+        XCTAssertEqual(ModelEvictionPresentation.deleteFailureTitle, "Deletion Failed")
+        XCTAssertEqual(ModelEvictionPresentation.deleteFailureID, "deleteFailureAlert")
+        XCTAssertEqual(ModelEvictionPresentation.renameSaveButtonID, "renameSaveButton")
+    }
+
+    /// P1-4: with no downloaded candidate the manual retry refuses in place —
+    /// a hint is set (not a silent guard return) and nothing is in flight.
+    func testRetryRefusedSurfacesIneligibilityHint() {
+        let viewModel = makeP1FlowChatViewModel(persistence: PersistenceController(inMemory: true))
+        viewModel.retryModelLoad()
+        XCTAssertFalse(viewModel.isModelRetryInFlight)
+        XCTAssertEqual(
+            viewModel.retryIneligibilityHint,
+            "No downloaded model is available yet. Download one to continue."
+        )
+    }
+
+    func testRetryBlockedHintNeedsDownloadVariant() {
+        let viewModel = makeP1FlowChatViewModel(persistence: PersistenceController(inMemory: true))
+        viewModel.retryModelLoad()
+        XCTAssertNotNil(viewModel.retryIneligibilityHint)
+        XCTAssertEqual(
+            viewModel.retryBlockedHint(eligible: true),
+            "Retry is not available right now."
+        )
+    }
+}
+
+// MARK: - P1 recovery scoping (synthesis item 5)
+
+/// `hasPersistenceRecovery` is scoped to `recoveryConversationID`: the banner
+/// renders only while that conversation is visible, and is cleared on new
+/// drafts and deletes. Hermetic: in-memory store, removed-model IDs (no loads).
+@MainActor
+final class RecoveryTests: XCTestCase {
+    func testRecoveryBannerScopedToActiveConversation() async throws {
+        let persistence = PersistenceController(inMemory: true)
+        let viewModel = makeP1FlowChatViewModel(persistence: persistence)
+        let convA = try await persistence.createConversation(title: "A", modelID: "removed-model")
+        let convB = try await persistence.createConversation(title: "B", modelID: "removed-model")
+        await viewModel.loadConversation(convA)
+        XCTAssertEqual(viewModel.activeConversationID, convA)
+        XCTAssertFalse(viewModel.shouldShowPersistenceRecovery)
+
+        viewModel.stagePersistenceRecoveryForTesting(conversationID: convA)
+        XCTAssertTrue(viewModel.shouldShowPersistenceRecovery)
+
+        await viewModel.loadConversation(convB)
+        XCTAssertTrue(viewModel.hasPersistenceRecovery, "switching chats retains the recovery")
+        XCTAssertFalse(
+            viewModel.shouldShowPersistenceRecovery,
+            "the banner must not follow onto another conversation"
+        )
+    }
+
+    func testBeginNewDraftClearsRecovery() async throws {
+        let persistence = PersistenceController(inMemory: true)
+        let viewModel = makeP1FlowChatViewModel(persistence: persistence)
+        let convA = try await persistence.createConversation(title: "A", modelID: "removed-model")
+        await viewModel.loadConversation(convA)
+        viewModel.stagePersistenceRecoveryForTesting(conversationID: convA)
+        XCTAssertTrue(viewModel.shouldShowPersistenceRecovery)
+
+        viewModel.beginNewDraft()
+        XCTAssertFalse(viewModel.hasPersistenceRecovery)
+        XCTAssertNil(viewModel.recoveryConversationID)
+        XCTAssertFalse(viewModel.shouldShowPersistenceRecovery)
+    }
+
+    func testDeleteClearsMatchingRecoveryOnly() async throws {
+        let persistence = PersistenceController(inMemory: true)
+        let viewModel = makeP1FlowChatViewModel(persistence: persistence)
+        let convA = try await persistence.createConversation(title: "A", modelID: "removed-model")
+        await viewModel.loadConversation(convA)
+        viewModel.stagePersistenceRecoveryForTesting(conversationID: convA)
+
+        viewModel.noteConversationDeleted(UUID())
+        XCTAssertTrue(viewModel.hasPersistenceRecovery, "unrelated deletes must not clear")
+
+        viewModel.noteConversationDeleted(convA)
+        XCTAssertFalse(viewModel.hasPersistenceRecovery)
+        XCTAssertNil(viewModel.recoveryConversationID)
+        XCTAssertFalse(viewModel.shouldShowPersistenceRecovery)
+    }
+
+    func testReleaseClearsRecoveryScope() async throws {
+        let persistence = PersistenceController(inMemory: true)
+        let viewModel = makeP1FlowChatViewModel(persistence: persistence)
+        let convA = try await persistence.createConversation(title: "A", modelID: "removed-model")
+        await viewModel.loadConversation(convA)
+        viewModel.stagePersistenceRecoveryForTesting(conversationID: convA)
+        XCTAssertTrue(viewModel.shouldShowPersistenceRecovery)
+
+        viewModel.releasePersistenceRecovery()
+        XCTAssertFalse(viewModel.hasPersistenceRecovery)
+        XCTAssertNil(viewModel.recoveryConversationID)
+        XCTAssertFalse(viewModel.shouldShowPersistenceRecovery)
+    }
+}
+
+// MARK: - P1 dead-button states (MEDIUMs)
+
+/// Every previously dead button now binds visible state: rename Save
+/// disables while empty, delete failures raise an alert, Retry/Reload
+/// disable with a spinner while a load is in flight. Hermetic.
+@MainActor
+final class ButtonStateTests: XCTestCase {
+    private func makeModelsViewModel() -> ModelsViewModel {
+        ModelsViewModel(
+            downloadManager: DownloadManager(),
+            lifecycleManager: ModelLifecycleManager(
+                inferenceService: InferenceService(),
+                memoryBudgeter: MemoryBudgeter()
+            )
+        )
+    }
+    func testRenameSaveDisabledWhileEmpty() {
+        XCTAssertFalse(ConversationListViewModel.canCommitRename(title: ""))
+        XCTAssertFalse(ConversationListViewModel.canCommitRename(title: "   \n  "))
+        XCTAssertTrue(ConversationListViewModel.canCommitRename(title: "Chat"))
+        XCTAssertTrue(ConversationListViewModel.canCommitRename(title: "  Chat  "))
+    }
+
+    func testCommitRenameEmptyIsLoggedNoOp() async {
+        let persistence = PersistenceController(inMemory: true)
+        let listViewModel = ConversationListViewModel(persistence: persistence)
+        let id = await listViewModel.createConversation(modelID: "m", title: "Original")
+        guard let id else { return XCTFail("setup conversation failed") }
+        listViewModel.editingTitle = "   "
+        await listViewModel.commitRename(id)
+        // Fresh rows are history-ineligible (sidebar list), so assert on
+        // the store: the title must be untouched and no error raised.
+        let rows = await persistence.fetchConversations()
+        XCTAssertEqual(rows.first(where: { $0.id == id })?.title, "Original")
+        XCTAssertNil(listViewModel.errorMessage)
+    }
+
+    func testConfirmDeleteWithoutPendingIsNoOp() async {
+        let viewModel = makeModelsViewModel()
+        await viewModel.confirmDelete()
+        XCTAssertNil(viewModel.updateMessage, "no pending delete means no failure alert")
+        XCTAssertFalse(viewModel.showingDeleteConfirmation)
+    }
+
+    func testRequestDeleteArmsConfirmation() {
+        let viewModel = makeModelsViewModel()
+        let model = ModelRegistry.llama32_3B
+        viewModel.requestDelete(model)
+        XCTAssertTrue(viewModel.showingDeleteConfirmation)
+        XCTAssertEqual(viewModel.pendingDeleteModel?.id, model.id)
+    }
+
+    func testDeleteFailureAlertBindingContract() {
+        let viewModel = makeModelsViewModel()
+        XCTAssertNil(viewModel.updateMessage, "alert hidden while nil")
+        viewModel.updateMessage = "boom"
+        XCTAssertNotNil(viewModel.updateMessage, "alert presented while non-nil")
+        viewModel.updateMessage = nil
+        XCTAssertNil(viewModel.updateMessage, "dismiss clears the alert")
+    }
+
+    func testRetryIdleWhenNothingInFlight() {
+        let viewModel = makeP1FlowChatViewModel(
+            persistence: PersistenceController(inMemory: true)
+        )
+        XCTAssertFalse(
+            viewModel.isModelRetryInFlight,
+            "Retry/Reload spinner rests while no load is in flight"
+        )
     }
 }

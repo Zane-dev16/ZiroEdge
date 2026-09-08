@@ -14,6 +14,10 @@ import SwiftUI
 /// former toolbar pill projected: same phases, same callbacks, no duplicated
 /// state — a stateless projection of `ChatViewModel.modelLoadPhase` /
 /// `selectedModel` / `availableModels`, so nothing can drift.
+/// Eviction copy inside (`title`/`accessibilityText` for `.evicted`) mirrors
+/// `ModelEvictionPresentation.message` — the picker tail names the model
+/// ("X unloaded") while the banner/alert carry the full sentence; keep the
+/// shared "unloaded … reload available" wording aligned on any edit.
 enum ChatModelPicker {
     /// Visible title for every phase: loading spinner text, needsDownload
     /// "No model yet", evicted/failed retry text, ready name.
@@ -219,6 +223,7 @@ struct ComposerModelPicker: View {
 
     private var pickerLabel: some View {
         HStack(spacing: ZiroTheme.Spacing.xSmall) {
+            loadingSlot
             Text(ChatModelPicker.title(phase: phase, modelName: modelName))
                 .font(ZiroType.footnote)
                 .lineLimit(1)
@@ -235,6 +240,25 @@ struct ComposerModelPicker: View {
         // a text line with no pill fill.
         .frame(maxWidth: pickerMaxWidth, minHeight: 44, alignment: .leading)
         .contentShape(Rectangle())
+    }
+
+    /// Fixed-width leading slot: reserves the indicator's space in every
+    /// phase so the label never shifts, and hosts the loading spinner.
+    /// Loading is the only phase with a mark — ready and idle show no dot
+    /// by design, the name alone is the status. The small ProgressView is
+    /// system-aware under Reduce Motion so no extra gating is needed.
+    /// Decorative: the phase already reads in the title text and the
+    /// shared accessibility label, so VoiceOver skips the slot itself.
+    private var loadingSlot: some View {
+        Group {
+            if phase == .loading {
+                ProgressView().controlSize(.small)
+            } else {
+                Color.clear
+            }
+        }
+        .frame(width: 16, height: 16)
+        .accessibilityHidden(true)
     }
 }
 

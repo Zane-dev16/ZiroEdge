@@ -47,7 +47,9 @@ extension ChatView {
 
     @ViewBuilder
     var banners: some View {
-        if viewModel.hasPersistenceRecovery {
+        // P1-5: the retained partial response belongs to one conversation —
+        // render the banner only while that conversation is visible.
+        if viewModel.shouldShowPersistenceRecovery {
             ZiroStatusBanner(
                 icon: "externaldrive.badge.exclamationmark",
                 title: "Response not saved yet",
@@ -107,6 +109,11 @@ extension ChatView {
 
     /// Inline retry surface for model-load failures and evictions — no alert
     /// dump (master plan §B.3); automatic loads recover here without modals.
+    /// Eviction copy/IDs project `ModelEvictionPresentation` (shared with the
+    /// AppShell alert) so the triple surface cannot diverge.
+    /// P1-4/MEDIUM: while a load is in flight the buttons disable with a
+    /// spinner; a refused manual retry leaves an inline hint instead of a
+    /// silent no-op. Banner buttons keep the 44pt floor via ZiroStatusBanner.
     @ViewBuilder
     var modelRetryRow: some View {
         switch viewModel.modelLoadPhase {
@@ -117,23 +124,47 @@ extension ChatView {
                 message: message,
                 tone: .warning
             ) {
-                Button("Retry") { viewModel.retryModelLoad() }
-                    .accessibilityIdentifier("modelRetryButton")
+                VStack(alignment: .leading, spacing: ZiroTheme.Spacing.xSmall) {
+                    HStack(spacing: ZiroTheme.Spacing.small) {
+                        if viewModel.isModelRetryInFlight { ProgressView().controlSize(.small) }
+                        Button("Retry") { viewModel.retryModelLoad() }
+                            .disabled(viewModel.isModelRetryInFlight)
+                            .accessibilityIdentifier(ModelEvictionPresentation.retryButtonID)
+                    }
+                    if let hint = viewModel.retryIneligibilityHint, !viewModel.isModelRetryInFlight {
+                        Text(hint)
+                            .font(ZiroType.caption)
+                            .foregroundStyle(ZiroTheme.secondaryText)
+                            .accessibilityIdentifier(ModelEvictionPresentation.retryHintID)
+                    }
+                }
             }
-            .accessibilityIdentifier("modelRetryBanner")
+            .accessibilityIdentifier(ModelEvictionPresentation.retryBannerID)
         case .evicted:
             ZiroStatusBanner(
                 icon: "memorychip",
-                title: "Model unloaded",
-                message: "\(viewModel.selectedModel?.displayName ?? "The model") was released to protect memory.",
+                title: ModelEvictionPresentation.inlineTitle(modelName: viewModel.selectedModel?.displayName),
+                message: ModelEvictionPresentation.message(modelName: viewModel.selectedModel?.displayName),
                 tone: .warning
             ) {
-                Button("Reload") { viewModel.retryModelLoad() }
-                    .accessibilityIdentifier("modelRetryButton")
+                VStack(alignment: .leading, spacing: ZiroTheme.Spacing.xSmall) {
+                    HStack(spacing: ZiroTheme.Spacing.small) {
+                        if viewModel.isModelRetryInFlight { ProgressView().controlSize(.small) }
+                        Button(ModelEvictionPresentation.reloadButtonTitle) { viewModel.retryModelLoad() }
+                            .disabled(viewModel.isModelRetryInFlight)
+                            .accessibilityIdentifier(ModelEvictionPresentation.retryButtonID)
+                    }
+                    if let hint = viewModel.retryIneligibilityHint, !viewModel.isModelRetryInFlight {
+                        Text(hint)
+                            .font(ZiroType.caption)
+                            .foregroundStyle(ZiroTheme.secondaryText)
+                            .accessibilityIdentifier(ModelEvictionPresentation.retryHintID)
+                    }
+                }
             }
-            .accessibilityIdentifier("modelRetryBanner")
+            .accessibilityIdentifier(ModelEvictionPresentation.retryBannerID)
             .announcingOnAppear(
-                "Model unloaded. \(viewModel.selectedModel?.displayName ?? "The model") was released to protect memory. Reload available."
+                ModelEvictionPresentation.announcement(modelName: viewModel.selectedModel?.displayName)
             )
         default:
             EmptyView()
@@ -206,6 +237,17 @@ extension ChatView {
                     .padding(.vertical, ZiroTheme.Spacing.xSmall)
                     .focused($isInputFocused)
                     .disabled(!chatReady || viewModel.isLoadingConversation)
+                    // P2-7: release focus as the enabled condition fails, so a
+                    // focused field never slides into disabled with the
+                    // keyboard up or the accent ring stuck on. Both inputs feed
+                    // the same `composerShouldReleaseFocus` condition the
+                    // `disabled` modifier evaluates.
+                    .onChange(of: chatReady) { _, _ in
+                        if viewModel.composerShouldReleaseFocus { isInputFocused = false }
+                    }
+                    .onChange(of: viewModel.isLoadingConversation) { _, _ in
+                        if viewModel.composerShouldReleaseFocus { isInputFocused = false }
+                    }
                     .onSubmit {
                         if !viewModel.isStreaming { Task { await viewModel.sendMessage() } }
                     }
@@ -232,7 +274,8 @@ extension ChatView {
     /// Composer top row: the quiet model status line — the sole identity
     /// surface (same phases, menu, and VoiceOver labels the toolbar pill
     /// used to carry). Text-only by design: no capsule, no fill, no token
-    /// counter, no download/unload captions.
+    /// counter, no download/unload captions. Left-aligned to the input
+    /// well's edge so the two rows read as one column.
     var statusOrTokenHintRow: some View {
         HStack {
             ComposerModelPicker(
@@ -246,6 +289,6 @@ extension ChatView {
             )
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, ZiroTheme.Spacing.medium)
+        .padding(.horizontal, ZiroTheme.Spacing.large)
     }
 }
