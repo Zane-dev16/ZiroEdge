@@ -24,6 +24,48 @@ struct SamplingConfig: Codable, Sendable, Hashable {
     var topK: Int              // Top-K sampling. Default 40.
     var maxTokens: Int         // Maximum tokens to generate. Default 2048.
     var repeatPenalty: Float   // Repetition penalty. Default 1.1.
+    var penaltyLastN: Int      // Penalty window (last N tokens). Default 64. 0 disables.
+    var frequencyPenalty: Float // Frequency penalty. Default 0.0 (disabled).
+    var presencePenalty: Float  // Presence penalty. Default 0.0 (disabled).
+
+    init(
+        temperature: Float = 0.7,
+        topP: Float = 0.9,
+        topK: Int = 40,
+        maxTokens: Int = 2048,
+        repeatPenalty: Float = 1.1,
+        penaltyLastN: Int = 64,
+        frequencyPenalty: Float = 0.0,
+        presencePenalty: Float = 0.0
+    ) {
+        self.temperature = temperature
+        self.topP = topP
+        self.topK = topK
+        self.maxTokens = maxTokens
+        self.repeatPenalty = repeatPenalty
+        self.penaltyLastN = penaltyLastN
+        self.frequencyPenalty = frequencyPenalty
+        self.presencePenalty = presencePenalty
+    }
+
+    // Backward-compatible decoding: artifacts persisted before P3 lack the
+    // penalty-window keys and must decode to the P3 defaults, not fail.
+    enum CodingKeys: String, CodingKey {
+        case temperature, topP, topK, maxTokens, repeatPenalty
+        case penaltyLastN, frequencyPenalty, presencePenalty
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        temperature = try container.decodeIfPresent(Float.self, forKey: .temperature) ?? 0.7
+        topP = try container.decodeIfPresent(Float.self, forKey: .topP) ?? 0.9
+        topK = try container.decodeIfPresent(Int.self, forKey: .topK) ?? 40
+        maxTokens = try container.decodeIfPresent(Int.self, forKey: .maxTokens) ?? 2048
+        repeatPenalty = try container.decodeIfPresent(Float.self, forKey: .repeatPenalty) ?? 1.1
+        penaltyLastN = try container.decodeIfPresent(Int.self, forKey: .penaltyLastN) ?? 64
+        frequencyPenalty = try container.decodeIfPresent(Float.self, forKey: .frequencyPenalty) ?? 0.0
+        presencePenalty = try container.decodeIfPresent(Float.self, forKey: .presencePenalty) ?? 0.0
+    }
 
     static let `default` = SamplingConfig(
         temperature: 0.7,
@@ -96,7 +138,10 @@ struct ModelConfiguration: Codable, Sendable, Hashable {
             topP: min(max(sampling.topP, 0), 1),
             topK: min(max(sampling.topK, 1), 100),
             maxTokens: min(max(sampling.maxTokens, 64), 4096),
-            repeatPenalty: min(max(sampling.repeatPenalty, 0), 2)
+            repeatPenalty: min(max(sampling.repeatPenalty, 0), 2),
+            penaltyLastN: min(max(sampling.penaltyLastN, 0), 512),
+            frequencyPenalty: min(max(sampling.frequencyPenalty, 0), 2),
+            presencePenalty: min(max(sampling.presencePenalty, 0), 2)
         )
         return ModelConfiguration(
             promptPath: promptPath,

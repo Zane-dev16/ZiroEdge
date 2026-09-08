@@ -86,6 +86,18 @@ actor PersistenceController {
         return context
     }()
 
+    /// P3: dedicated background read context. Fetch helpers previously used
+    /// `viewContext` (main-queue) with performAndWait, hopping every chat
+    /// read onto the main thread. Reads go here instead; `viewContext` stays
+    /// read-only for SwiftUI bindings.
+    private lazy var readContext: NSManagedObjectContext = {
+        let context = container.newBackgroundContext()
+        context.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
+        context.automaticallyMergesChangesFromParent = true
+        context.name = "reader"
+        return context
+    }()
+
     /// Token buffer for streaming — batched flush every N tokens or N ms.
     private var tokenBuffer: [UUID: String] = [:]     // messageID → accumulated tokens
     private var bufferFlushCount: [UUID: Int] = [:]   // messageID → tokens since last flush
@@ -958,7 +970,7 @@ extension PersistenceController {
     func fetchConversationsResult(
         historyEligibleOnly: Bool = false
     ) -> Result<[ConversationPayload], PersistenceFailure> {
-        let context = viewContext
+        let context = readContext
         var result: Result<[ConversationPayload], PersistenceFailure> = .success([])
         context.performAndWait {
             let request = CDConversation.fetchRequest()
@@ -998,7 +1010,7 @@ extension PersistenceController {
     }
 
     func fetchMessagesResult(conversationID: UUID) -> Result<[ChatMessagePayload], PersistenceFailure> {
-        let context = viewContext
+        let context = readContext
         var result: Result<[ChatMessagePayload], PersistenceFailure> = .success([])
         context.performAndWait {
             let request = CDChatMessage.fetchRequest()

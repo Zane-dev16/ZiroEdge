@@ -34,6 +34,12 @@ actor GenerationGate {
         holder
     }
 
+    /// R6: unconditional release for safety eviction. The cancelled holder's
+    /// onTermination also releases idempotently, so a double release is safe.
+    func forceReleaseAllForEviction() {
+        holder = nil
+    }
+
     /// If idle, returns true immediately. Otherwise invokes `canceller` once
     /// (e.g. to cancel the running stream) and polls `heldBy()` every 50 ms
     /// until the holder releases or `timeoutNs` elapses. Returns whether the

@@ -106,7 +106,10 @@ actor ChatSessionActor {
         // start landing inside the suspension window below moves the counter
         // from here, and that is exactly what we must detect.
         let epochAtStart = cancellationEpoch
+        // R7: refuse new work while a recovery is pending — surfaced as
+        // recoveryBufferFull instead of wedging behind it. IDs are public.
         guard recoveryHandle == nil else {
+            logger.info("Stream start refused: recovery pending conversation=\(conversationID.uuidString.prefix(8), privacy: .public)")
             await MainActor.run { onError(PersistenceFailure.recoveryBufferFull) }
             return
         }
@@ -239,6 +242,7 @@ actor ChatSessionActor {
         onToken: @Sendable @escaping (String) -> Void
     ) async throws -> Bool {
         var tokenBatch = ""
+        var tokensSinceFlush = 0
         var lastBatchTime = Date()
         for try await token in stream {
             guard !Task.isCancelled, await isCurrent(generationID) else { return false }
@@ -249,11 +253,15 @@ actor ChatSessionActor {
             // is one decode step, so the counter advances per yield regardless
             // of the batching cadence below.
             processedTokenCount += 1
+            tokensSinceFlush += 1
 
             let now = Date()
-            if Self.isBatchFlushDue(batchCount: tokenBatch.count, lastBatchTime: lastBatchTime, now: now) {
+            // P3: batch the MainActor hop per-token-count (~20 tok) or 0.5s —
+            // never per character count (20 chars ≈ 5 tokens over-hops).
+            if Self.isBatchFlushDue(tokenCount: tokensSinceFlush, lastBatchTime: lastBatchTime, now: now) {
                 let batch = tokenBatch
                 tokenBatch = ""
+                tokensSinceFlush = 0
                 lastBatchTime = now
                 await MainActor.run { onToken(batch) }
             }
@@ -267,8 +275,13 @@ actor ChatSessionActor {
         return true
     }
 
-    private static func isBatchFlushDue(batchCount: Int, lastBatchTime: Date, now: Date) -> Bool {
-        batchCount >= 20 || now.timeIntervalSince(lastBatchTime) >= 0.5
+    static func isBatchFlushDue(tokenCount: Int, lastBatchTime: Date, now: Date) -> Bool {
+        tokenCount >= 20 || now.timeIntervalSince(lastBatchTime) >= 0.5
+    }
+
+    /// Backward-compatible alias: historic callers passed a token count.
+    static func isBatchFlushDue(batchCount: Int, lastBatchTime: Date, now: Date) -> Bool {
+        isBatchFlushDue(tokenCount: batchCount, lastBatchTime: lastBatchTime, now: now)
     }
 
     /// Ends the persisted stream and reports completion or a failed finalization.
@@ -396,8 +409,16 @@ actor ChatSessionActor {
         if let messageID {
             let result = await persistence.cancelStreamingMessage(messageID: messageID)
             if case .failure(let error) = result {
-                await retainRecovery(messageID: messageID)
-                logger.error("Cancellation persistence failed: \(error.localizedDescription, privacy: .public)")
+                // R5: a notFound cancel means the row is already gone
+                // (sidebar delete cascaded it). Releasing — never retaining —
+                // so the banner cannot wedge and the next send is not blocked.
+                if error.category == .notFound {
+                    logger.info("Cancel consumed elsewhere message=\(messageID.uuidString.prefix(8), privacy: .public)")
+                    recoveryConsumedElsewhere()
+                } else {
+                    await retainRecovery(messageID: messageID)
+                    logger.error("Cancellation persistence failed: \(error.localizedDescription, privacy: .public)")
+                }
             }
         }
         await task?.value

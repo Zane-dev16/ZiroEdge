@@ -286,22 +286,36 @@ extension LlamaEngine {
                         throw LlamaError.tokenizationFailed
                     }
 
+                    // P3 context-window preflight: sliding-window truncation
+                    // keeps the instruction prefix + recent tail that fits
+                    // alongside the generation reserve. Counts are public;
+                    // prompt content never leaves the device logs.
+                    let preflight = Self.truncatedPromptTokens(
+                        tokens,
+                        contextLength: config.contextLength,
+                        maxTokens: sampling.maxTokens
+                    )
+                    if preflight.didTruncate {
+                        logger.fault("Prompt truncated promptTokens=\(tokens.count, privacy: .public) kept=\(preflight.tokens.count, privacy: .public) ctx=\(self.config.contextLength, privacy: .public)")
+                    }
+                    let promptTokens = preflight.tokens
+
                     // Clear memory.
                     let mem = llama_get_memory(ctx)
                     llama_memory_clear(mem, true)
 
                     // Bound logical prompt batches; llama.cpp further splits these at n_ubatch.
                     for range in try Self.promptBatchRanges(
-                        tokenCount: tokens.count,
+                        tokenCount: promptTokens.count,
                         batchSize: config.batchSize
                     ) {
                         var batch = llama_batch_init(Int32(range.count), 0, 1)
                         for (localIndex, tokenIndex) in range.enumerated() {
-                            batch.token[localIndex] = tokens[tokenIndex]
+                            batch.token[localIndex] = promptTokens[tokenIndex]
                             batch.pos[localIndex] = Int32(tokenIndex)
                             batch.n_seq_id[localIndex] = 1
                             batch.seq_id[localIndex]![0] = 0
-                            batch.logits[localIndex] = tokenIndex == tokens.count - 1 ? 1 : 0
+                            batch.logits[localIndex] = tokenIndex == promptTokens.count - 1 ? 1 : 0
                         }
                         batch.n_tokens = Int32(range.count)
                         let decodeResult = llama_decode(ctx, batch)
@@ -314,8 +328,8 @@ extension LlamaEngine {
                     defer { llama_sampler_free(sampler) }
 
                     // Generate tokens using shared generation loop.
-                    try generateTokens(
-                        startPos: Int32(tokens.count), sampler: sampler, vocab: vocab,
+                    _ = try await generateTokens(
+                        startPos: Int32(promptTokens.count), sampler: sampler, vocab: vocab,
                         stopStrings: stopStrings, sampling: sampling, continuation: continuation
                     )
                     continuation.finish()
@@ -448,12 +462,20 @@ extension LlamaEngine {
                         throw LlamaError.decodeFailed
                     }
 
+                    // P3 vision preflight: no token array to sliding-window,
+                    // so fail closed when the evaluated prefix already fills
+                    // the window instead of spinning a zero-step loop.
+                    if newNPast >= Int32(config.contextLength) {
+                        logger.fault("Vision prefix exceeds context window nPast=\(newNPast, privacy: .public) ctx=\(self.config.contextLength, privacy: .public)")
+                        throw LlamaError.contextWindowExceeded
+                    }
+
                     // Create sampler chain.
                     let sampler = try createSamplerChain(sampling: sampling, vocab: vocab)
                     defer { llama_sampler_free(sampler) }
 
                     // Generate tokens using shared generation loop.
-                    try generateTokens(
+                    _ = try await generateTokens(
                         startPos: newNPast, sampler: sampler, vocab: vocab,
                         stopStrings: stopStrings, sampling: sampling, continuation: continuation
                     )
@@ -507,8 +529,24 @@ private extension LlamaEngine {
             throw LlamaError.samplerCreationFailed
         }
 
+        // P3: penalty parameters are shared by both paths. A repeat of 1.0
+        // with zero freq/presence (or N == 0) is a no-op — skip the sampler
+        // so the chain stays minimal.
+        func appendPenaltiesIfNeeded() {
+            guard let params = Self.penaltyChainParameters(for: sampling) else { return }
+            let penalty = llama_sampler_init_penalties(
+                params.lastN,
+                params.repeatPenalty,
+                params.frequencyPenalty,
+                params.presencePenalty
+            )
+            llama_sampler_chain_add(chain, penalty)
+        }
+
         if sampling.temperature == 0 {
-            // Greedy decoding.
+            // Greedy decoding (penalties still apply — they shape logits
+            // before the argmax, preventing greedy loops).
+            appendPenaltiesIfNeeded()
             let greedy = llama_sampler_init_greedy()
             llama_sampler_chain_add(chain, greedy)
         } else {
@@ -528,16 +566,8 @@ private extension LlamaEngine {
             let temp = llama_sampler_init_temp(sampling.temperature)
             llama_sampler_chain_add(chain, temp)
 
-            // Repeat penalty (prevents looping and repetitive phrases).
-            if sampling.repeatPenalty != 1.0 {
-                let penalty = llama_sampler_init_penalties(
-                    64,                      // penalty last N tokens
-                    sampling.repeatPenalty,    // repeat penalty
-                    0.0,                       // frequency penalty
-                    0.0                        // presence penalty
-                )
-                llama_sampler_chain_add(chain, penalty)
-            }
+            // Repeat/frequency/presence penalties (prevents looping).
+            appendPenaltiesIfNeeded()
 
             // Distribution sampling (random from remaining candidates).
             let dist = llama_sampler_init_dist(0)
@@ -545,6 +575,85 @@ private extension LlamaEngine {
         }
 
         return chain
+    }
+
+    // MARK: - P3 Pure Helpers (hermetic, no native calls)
+
+    /// Penalty sampler parameters. Nil means "no penalty sampler".
+    public struct PenaltyParameters: Sendable, Equatable {
+        public let lastN: Int32
+        public let repeatPenalty: Float
+        public let frequencyPenalty: Float
+        public let presencePenalty: Float
+    }
+
+    /// Penalty sampler parameters, or nil when all penalties are disabled
+    /// (repeat == 1.0, freq == 0, presence == 0, or N == 0).
+    public nonisolated static func penaltyChainParameters(
+        for sampling: SamplingConfigSwift
+    ) -> PenaltyParameters? {
+        guard sampling.penaltyLastN != 0 else { return nil }
+        let hasRepeat = sampling.repeatPenalty != 1.0
+        let hasFreq = sampling.frequencyPenalty != 0.0
+        let hasPresence = sampling.presencePenalty != 0.0
+        guard hasRepeat || hasFreq || hasPresence else { return nil }
+        return PenaltyParameters(
+            lastN: Int32(max(0, sampling.penaltyLastN)),
+            repeatPenalty: sampling.repeatPenalty,
+            frequencyPenalty: sampling.frequencyPenalty,
+            presencePenalty: sampling.presencePenalty
+        )
+    }
+
+    /// True when `buffer` ends with a strict prefix of any stop string —
+    /// i.e. the tail could still grow into a stop. Such buffers must be
+    /// withheld, never flushed on maxTokens/n_ctx/cancel.
+    public nonisolated static func isPotentialStopPrefix(
+        _ buffer: String,
+        stopStrings: [String]
+    ) -> Bool {
+        guard !buffer.isEmpty else { return false }
+        for stop in stopStrings where !stop.isEmpty {
+            // Full buffer shorter than stop: classic prefix case.
+            if stop.hasPrefix(buffer) { return true }
+            // Buffer longer than stop: check whether any suffix of the
+            // buffer is a prefix of the stop (partial stop at the tail).
+            let maxOverlap = min(buffer.count, stop.count - 1)
+            guard maxOverlap > 0 else { continue }
+            for length in 1...maxOverlap {
+                if stop.hasPrefix(String(buffer.suffix(length))) { return true }
+            }
+        }
+        return false
+    }
+
+    /// Tail-flush gate: never emit a buffer that could still become a stop.
+    public nonisolated static func shouldFlushTail(
+        _ buffer: String,
+        stopStrings: [String]
+    ) -> Bool {
+        guard !buffer.isEmpty else { return false }
+        return !isPotentialStopPrefix(buffer, stopStrings: stopStrings)
+    }
+
+    /// Sliding-window truncation for an over-long prompt. Keeps the first
+    /// `keepPrefix` tokens (system/instruction anchor) plus the most recent
+    /// tail that fits alongside the generation reserve. Pure for tests.
+    public nonisolated static func truncatedPromptTokens(
+        _ tokens: [llama_token],
+        contextLength: Int,
+        maxTokens: Int,
+        keepPrefix: Int = 256
+    ) -> (tokens: [llama_token], didTruncate: Bool) {
+        let reserve = max(1, maxTokens)
+        let capacity = contextLength - reserve - 1
+        guard capacity > 0, tokens.count > capacity else {
+            return (tokens, false)
+        }
+        let prefix = min(max(0, keepPrefix), capacity / 2, tokens.count)
+        let tailCount = max(0, capacity - prefix)
+        let kept = Array(tokens.prefix(prefix)) + Array(tokens.suffix(tailCount))
+        return (kept, true)
     }
 
     // MARK: - Tokenization
@@ -611,6 +720,17 @@ private extension LlamaEngine {
 
     // MARK: - Shared Generation Loop
 
+    /// How the shared generation loop terminated. Surfaced for logging and
+    /// tests; the stream itself just ends (callers map contextFull to the
+    /// UI-level truncated reason where appropriate).
+    enum GenerationTermination: Sendable, Equatable {
+        case completed
+        case stoppedOnString
+        case maxTokens
+        case contextFull
+        case cancelled
+    }
+
     /// Shared autoregressive generation loop used by both text and vision streaming.
     private func generateTokens(
         startPos: llama_pos,
@@ -619,19 +739,41 @@ private extension LlamaEngine {
         stopStrings: [String],
         sampling: SamplingConfigSwift,
         continuation: AsyncThrowingStream<String, Error>.Continuation
-    ) throws {
+    ) async throws -> GenerationTermination {
         guard let ctx = context else { throw LlamaError.modelNotLoaded }
 
         var nPos = startPos
         var pendingBuffer = ""
         var nGenerated = 0
         let maxTokens = sampling.maxTokens > 0 ? sampling.maxTokens : 2048
+        var termination: GenerationTermination = .completed
 
-        while nPos < Int32(config.contextLength) && nGenerated < maxTokens {
-            if isGenerationCancelled || Task.isCancelled { break }
+        while true {
+            if isGenerationCancelled || Task.isCancelled {
+                termination = .cancelled
+                break
+            }
+            if nGenerated >= maxTokens {
+                termination = .maxTokens
+                break
+            }
+            if nPos >= Int32(config.contextLength) {
+                termination = .contextFull
+                break
+            }
+            // P3 perf: cooperative yield outside the native decode call so
+            // the actor stays responsive during long synchronous generations.
+            if nGenerated > 0, nGenerated % 16 == 0 {
+                await Task.yield()
+            }
 
             let newTokenID = llama_sampler_sample(sampler, ctx, -1)
-            if newTokenID == self.eosTokenID { break }
+            // P3 multi-EOS: any end-of-generation token (EOS, EOT, etc.)
+            // terminates — not just the single cached EOS id.
+            if newTokenID == self.eosTokenID || llama_vocab_is_eog(vocab, newTokenID) {
+                termination = .completed
+                break
+            }
 
             let tokenText = tokenToText(token: newTokenID, vocab: vocab)
             pendingBuffer += tokenText
@@ -647,14 +789,17 @@ private extension LlamaEngine {
                     break
                 }
             }
-            if shouldStop { break }
-
-            // Check if buffer could be start of a stop string.
-            var mightBeStop = false
-            for stop in stopStrings where !stop.isEmpty {
-                if stop.hasPrefix(pendingBuffer) { mightBeStop = true; break }
+            if shouldStop {
+                termination = .stoppedOnString
+                break
             }
-            if !mightBeStop { continuation.yield(pendingBuffer); pendingBuffer = "" }
+
+            // Withhold buffers that could still grow into a stop string
+            // (suffix-prefix overlap, not just full-buffer prefix).
+            if !Self.isPotentialStopPrefix(pendingBuffer, stopStrings: stopStrings) {
+                continuation.yield(pendingBuffer)
+                pendingBuffer = ""
+            }
 
             // Evaluate single token.
             var evalBatch = llama_batch_init(1, 0, 1)
@@ -674,7 +819,15 @@ private extension LlamaEngine {
             nGenerated += 1
         }
 
-        if !pendingBuffer.isEmpty { continuation.yield(pendingBuffer) }
+        // P3: never flush a partial-stop prefix on maxTokens/n_ctx/cancel —
+        // it is an artifact of withholding, not user-visible text.
+        if Self.shouldFlushTail(pendingBuffer, stopStrings: stopStrings) {
+            continuation.yield(pendingBuffer)
+        }
+        if termination == .contextFull {
+            logger.fault("Generation hit context window nPos=\(nPos, privacy: .public) ctx=\(self.config.contextLength, privacy: .public)")
+        }
+        return termination
     }
 }
 
@@ -723,19 +876,28 @@ public struct SamplingConfigSwift: Sendable {
     public let topK: Int
     public let maxTokens: Int
     public let repeatPenalty: Float
+    public let penaltyLastN: Int
+    public let frequencyPenalty: Float
+    public let presencePenalty: Float
 
     public init(
         temperature: Float = 0.7,
         topP: Float = 0.9,
         topK: Int = 40,
         maxTokens: Int = 2048,
-        repeatPenalty: Float = 1.1
+        repeatPenalty: Float = 1.1,
+        penaltyLastN: Int = 64,
+        frequencyPenalty: Float = 0.0,
+        presencePenalty: Float = 0.0
     ) {
         self.temperature = temperature
         self.topP = topP
         self.topK = topK
         self.maxTokens = maxTokens
         self.repeatPenalty = repeatPenalty
+        self.penaltyLastN = penaltyLastN
+        self.frequencyPenalty = frequencyPenalty
+        self.presencePenalty = presencePenalty
     }
 }
 
@@ -752,6 +914,7 @@ public enum LlamaError: Error, LocalizedError {
     case samplerCreationFailed
     case visionNotSupported
     case visionImageLoadFailed
+    case contextWindowExceeded
 
     public var errorDescription: String? {
         switch self {
@@ -765,6 +928,7 @@ public enum LlamaError: Error, LocalizedError {
         case .samplerCreationFailed: return "Failed to create sampler chain."
         case .visionNotSupported: return "Vision inference is not supported. No multimodal projector loaded."
         case .visionImageLoadFailed: return "Failed to load image for vision inference."
+        case .contextWindowExceeded: return "The conversation is too long for the context window."
         }
     }
 }
