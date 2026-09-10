@@ -399,6 +399,128 @@ final class MemoryBudgeterProjectedAvailabilityTests: XCTestCase {
         XCTAssertEqual(manager.currentState, .loaded)
         XCTAssertTrue(manager.showInsufficientMemoryWarning)
     }
+
+}
+
+// MARK: - Fix verify (a)(b)(c) (extension keeps the test class
+// body within the type_body_length gate; same-file extension
+// retains private access).
+@MainActor
+extension MemoryBudgeterProjectedAvailabilityTests {
+
+func testUnvalidatedPriorYieldsZeroCreditWithExplanation() async {
+    // Curated llama32-3B is unvalidated with nil measured peaks, so its
+    // eviction credits nothing: projected==raw by construction (genuine
+    // refuse, not a math bug). The details helper names the cause.
+    let prior = ModelRegistry.llama32_3B
+    XCTAssertEqual(MemoryBudgeter.reclaimableBytes(for: prior), 0)
+    let details = MemoryBudgeter.reclaimableCreditDetails(for: prior)
+    XCTAssertEqual(details.bytes, 0)
+    XCTAssertEqual(details.evidenceStatus, MemoryEvidenceStatus.unvalidated.rawValue)
+    XCTAssertNotNil(details.profileID)
+    XCTAssertNil(MemoryBudgeter.reclaimableCreditDetails(for: nil).profileID)
+}
+
+func testConsentMissingSurfacesProfileUnvalidatedNotHeadroom() async {
+    // Imported targets are always .experimental: without consent the
+    // experimentalRequired floor is never compared, so required stays
+    // nil and the reason must read profileUnvalidated — never a headroom
+    // number that would masquerade as a RAM shortfall.
+    let target = makeImportedModel(
+        id: "hf-consent-cause", baseBytes: 600_000_000,
+        mmprojBytes: nil, rawContext: 2_048, vision: false
+    )
+    ExperimentalModelConsent.setGranted(false, for: target)
+    let decision = await MemoryBudgeter(metrics: FixedMemoryMetricsProvider(
+        processAvailable: 16_000_000_000, total: 32_000_000_000
+    )).decision(for: target, reclaimableBytes: .max)
+    XCTAssertEqual(decision.recommendation, .insufficientRAM)
+    XCTAssertEqual(decision.reason, .profileUnvalidated)
+    XCTAssertNil(decision.requiredBytes)
+    XCTAssertTrue(decision.alertMessage(modelName: "Fixture").contains("explicit consent"))
+    XCTAssertTrue(decision.logSummary.contains("profileUnvalidated"))
+}
+
+func testConsentGrantedComparesExperimentalRequiredAgainstProjection() async throws {
+    // With consent granted, the same fixture compares its experimental
+    // floor against the projection: raw miss + projected hit yields
+    // unloadCurrentFirst instead of a refusal.
+    let resident = makeImportedModel(
+        id: "hf-consent-resident", baseBytes: 2_000_000_000,
+        mmprojBytes: 200_000_000, rawContext: 32_768, vision: true
+    )
+    let target = makeImportedModel(
+        id: "hf-consent-target2", baseBytes: 2_000_000_000,
+        mmprojBytes: 200_000_000, rawContext: 32_768, vision: true
+    )
+    ExperimentalModelConsent.setGranted(true, for: target)
+    defer { ExperimentalModelConsent.setGranted(false, for: target) }
+    let required = try requiredHeadroom(for: target)
+    let reclaimable = MemoryBudgeter.reclaimableBytes(for: resident)
+    XCTAssertGreaterThan(reclaimable, 0)
+    let available = required - reclaimable / 2
+    let decision = await MemoryBudgeter(metrics: FixedMemoryMetricsProvider(
+        processAvailable: available, total: totalRAM
+    )).decision(for: target, allowUnvalidatedCalibration: true, reclaimableBytes: reclaimable)
+    XCTAssertEqual(decision.recommendation, .unloadCurrentFirst)
+    XCTAssertNil(decision.reason)
+    XCTAssertEqual(decision.requiredBytes, required)
+}
+
+func testZeroCreditRefusalCarriesUnloadFirstGuidance() async throws {
+    // Zero-credit headroom miss with an unvalidated prior appends the
+    // unload-first remedy; the same miss without a prior stays bare.
+    // Admission math is unchanged — purely presentational.
+    let target = makeImportedModel(
+        id: "hf-zero-guidance", baseBytes: 2_000_000_000,
+        mmprojBytes: 200_000_000, rawContext: 32_768, vision: true
+    )
+    ExperimentalModelConsent.setGranted(true, for: target)
+    defer { ExperimentalModelConsent.setGranted(false, for: target) }
+    let required = try requiredHeadroom(for: target)
+    let available = required - 100_000_000
+    let prior = ModelRegistry.llama32_3B
+    XCTAssertEqual(MemoryBudgeter.reclaimableBytes(for: prior), 0)
+    let withPrior = await MemoryBudgeter(metrics: FixedMemoryMetricsProvider(
+        processAvailable: available, total: totalRAM
+    )).decision(for: target, allowUnvalidatedCalibration: true, reclaimableBytes: 0)
+    XCTAssertEqual(withPrior.reason, .insufficientProcessHeadroom)
+    XCTAssertTrue(withPrior.alertMessage(modelName: "Target", priorActive: prior).contains("unloading it first"))
+    XCTAssertFalse(withPrior.alertMessage(modelName: "Target").contains("unloading it first"))
+}
+
+func testTransientDipSettleRetryRecoversFirstLoad() async throws {
+    // Transient jetsam dip: preflight passes on high, the pre-teardown
+    // gate dips low (shortfall inside the 1GB window), settles 1s, and
+    // the resample recovers on high. Without the settle the dip refuses.
+    let target = makeImportedModel(
+        id: "hf-dip-target", baseBytes: 2_000_000_000,
+        mmprojBytes: 200_000_000, rawContext: 32_768, vision: true
+    )
+    ExperimentalModelConsent.setGranted(true, for: target)
+    defer { ExperimentalModelConsent.setGranted(false, for: target) }
+    let required = try requiredHeadroom(for: target)
+    let high = required + 200_000_000
+    let low = required - 500_000_000
+    XCTAssertLessThan(required - low, MemoryBudgeter.transientDipSettleWindowBytes)
+    let metrics = DipRecoveryMetrics(values: [high, low, high, high], total: totalRAM)
+    let manager = ModelLifecycleManager(
+        inferenceService: ProjectedAvailabilityStub(onUnload: {}),
+        memoryBudgeter: MemoryBudgeter(metrics: metrics),
+        loadSafetyStore: try LoadSafetyStore(
+            directory: FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString)
+        ),
+        availabilityProvider: { _ in .ready },
+        recoveryDelay: .zero
+    )
+    let result = await manager.loadModel(target)
+    XCTAssertEqual(result, .loaded)
+    XCTAssertEqual(manager.activeModel?.id, target.id)
+    // Preflight(1) + pre-teardown dip(1) + settle retry(1) + pre-mmap(1)
+    // + post-load reserve(1).
+    XCTAssertEqual(metrics.processAvailableCallCount, 5)
+}
 }
 
 // MARK: - Hermetic helpers (Logger only, no sysctl/os_proc calls)
@@ -430,6 +552,30 @@ private final class ReclaimOnUnloadMetrics: MemoryMetricsProviding, @unchecked S
         lock.lock(); defer { lock.unlock() }
         bonusReleased = true
     }
+}
+
+/// Scripted headroom sequence for the transient-dip settle test: replays
+/// `values` in order (one per processAvailable sample), repeating the last.
+/// Hermetic — Logger only, no sysctl/os_proc calls.
+private final class DipRecoveryMetrics: MemoryMetricsProviding, @unchecked Sendable {
+    private let lock = NSLock()
+    private let values: [UInt64]
+    private(set) var processAvailableCallCount = 0
+    let total: UInt64
+
+    init(values: [UInt64], total: UInt64) {
+        self.values = values
+        self.total = total
+    }
+
+    func processAvailableMemory() -> UInt64 {
+        lock.lock(); defer { lock.unlock() }
+        let index = min(processAvailableCallCount, values.count - 1)
+        processAvailableCallCount += 1
+        return values[index]
+    }
+
+    func totalRAM() -> UInt64 { total }
 }
 
 private actor ProjectedAvailabilityStub: InferenceServiceProtocol {
