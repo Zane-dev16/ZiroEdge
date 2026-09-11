@@ -521,6 +521,67 @@ func testTransientDipSettleRetryRecoversFirstLoad() async throws {
     // + post-load reserve(1).
     XCTAssertEqual(metrics.processAvailableCallCount, 5)
 }
+
+func testPreMmapDipSettleRetryRecoversAfterTeardown() async throws {
+    // Iterate fix: the pre-mmap sample lands after the teardown recovery
+    // sleep while jetsam pressure is still settling. Preflight and
+    // pre-teardown pass on high, pre-mmap dips low (shortfall inside the
+    // 1GB window), settles 1s, and the resample recovers on high. Without
+    // the pre-mmap settle this refuses post-teardown with the resident
+    // already displaced — the false-OOM that survives a preflight-only
+    // settle. Hermetic — Logger only, no sysctl/os_proc calls.
+    let target = makeImportedModel(
+        id: "hf-premmap-dip-target", baseBytes: 2_000_000_000,
+        mmprojBytes: 200_000_000, rawContext: 32_768, vision: true
+    )
+    ExperimentalModelConsent.setGranted(true, for: target)
+    defer { ExperimentalModelConsent.setGranted(false, for: target) }
+    let required = try requiredHeadroom(for: target)
+    let high = required + 200_000_000
+    let low = required - 500_000_000
+    XCTAssertLessThan(required - low, MemoryBudgeter.transientDipSettleWindowBytes)
+    // Preflight(1)=high, pre-teardown(1)=high, pre-mmap dip(1)=low,
+    // settle retry(1)=high, post-load reserve(1)=high.
+    let metrics = DipRecoveryMetrics(values: [high, high, low, high, high], total: totalRAM)
+    let manager = ModelLifecycleManager(
+        inferenceService: ProjectedAvailabilityStub(onUnload: {}),
+        memoryBudgeter: MemoryBudgeter(metrics: metrics),
+        loadSafetyStore: try LoadSafetyStore(
+            directory: FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString)
+        ),
+        availabilityProvider: { _ in .ready },
+        recoveryDelay: .zero
+    )
+    let result = await manager.loadModel(target)
+    XCTAssertEqual(result, .loaded)
+    XCTAssertEqual(manager.activeModel?.id, target.id)
+    XCTAssertEqual(metrics.processAvailableCallCount, 5)
+}
+
+func testPreMmapRefusalStaysBareAfterTeardown() async throws {
+    // Post-teardown the resident is already evicted, so a genuine headroom
+    // miss must stay a bare headroom refusal — never the unload-first
+    // remedy (and never a zero-credit fault against the evicted prior).
+    // Admission math is unchanged — purely presentational, fail-closed.
+    let target = makeImportedModel(
+        id: "hf-premmap-bare-target", baseBytes: 2_000_000_000,
+        mmprojBytes: 200_000_000, rawContext: 32_768, vision: true
+    )
+    ExperimentalModelConsent.setGranted(true, for: target)
+    defer { ExperimentalModelConsent.setGranted(false, for: target) }
+    let required = try requiredHeadroom(for: target)
+    let available = required - 100_000_000
+    let prior = ModelRegistry.llama32_3B
+    let decision = await MemoryBudgeter(metrics: FixedMemoryMetricsProvider(
+        processAvailable: available, total: totalRAM
+    )).decision(for: target, allowUnvalidatedCalibration: true, reclaimableBytes: 0)
+    XCTAssertEqual(decision.reason, .insufficientProcessHeadroom)
+    // Pre-teardown with the resident still present: unload-first guidance.
+    XCTAssertTrue(decision.alertMessage(modelName: "Target", priorActive: prior).contains("unloading it first"))
+    // Post-teardown (nil prior): bare headroom message.
+    XCTAssertFalse(decision.alertMessage(modelName: "Target", priorActive: nil).contains("unloading it first"))
+}
 }
 
 // MARK: - Hermetic helpers (Logger only, no sysctl/os_proc calls)

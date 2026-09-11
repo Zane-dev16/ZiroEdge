@@ -269,6 +269,9 @@ actor MemoryBudgeter {
         let allowFlag = allowUnvalidatedCalibration ? 1 : 0
         let profileID = profile?.id ?? "nil"
         logger.info("Memory decision model=\(model.id, privacy: .public) allow=\(allowFlag, privacy: .public) profile=\(profileID, privacy: .public) \(decision.logSummary, privacy: .public)")
+        // SWITCH-PROOF console mirror: Logger.info does not forward over devicectl --console.
+        print("[SWITCH-PROOF-BUDGET] model=\(model.id) allow=\(allowFlag) profile=\(profileID) raw=\(processAvailable) projected=\(projected) reclaimable=\(reclaimableBytes) required=\(decision.requiredBytes.map(String.init) ?? "nil") recommendation=\(recommendation) reason=\(reason?.rawValue ?? "none")")
+        print("[SWITCH-PROOF-BUDGET-SUMMARY] \(decision.logSummary)")
         if reason == .profileUnvalidated {
             // Fault-level: the common cause is missing experimental consent
             // (or a missing controlled-workload override) on an imported

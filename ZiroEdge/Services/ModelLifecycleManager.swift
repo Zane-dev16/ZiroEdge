@@ -451,6 +451,7 @@ final class ModelLifecycleManager: ObservableObject {
         let overrideFlag = override ? 1 : 0
         logger.info("Load gate \(phase, privacy: .public) model=\(model.id, privacy: .public) consent=\(consentFlag, privacy: .public) override=\(overrideFlag, privacy: .public)")
         logger.info("Load gate reclaim=\(reclaimable, privacy: .public) prior=\(priorID, privacy: .public) evidence=\(creditEvidence, privacy: .public)")
+        print("[SWITCH-PROOF-GATE] phase=\(phase) model=\(model.id) consent=\(consentFlag) override=\(overrideFlag) reclaimable=\(reclaimable) prior=\(priorID) evidence=\(creditEvidence) profile=\(MemoryProfileRegistry.profile(for: model)?.id ?? "nil")")
     }
 
     /// Refusal cause log (Fix verify a+b): distinguishes consent-missing
@@ -494,6 +495,7 @@ final class ModelLifecycleManager: ObservableObject {
             return nil
         }
         logger.info("Load \(phase, privacy: .public) transient dip settle model=\(model.id, privacy: .public) shortfall=\(shortfall, privacy: .public) \(first.logSummary, privacy: .public)")
+        print("[SWITCH-PROOF-SETTLE] phase=\(phase) model=\(model.id) shortfall=\(shortfall) raw=\(first.processAvailableBytes) projected=\(first.projectedAvailableBytes.map(String.init) ?? "nil") reclaimable=\(first.reclaimableBytes.map(String.init) ?? "nil") required=\(first.requiredBytes.map(String.init) ?? "nil") profile=\(first.profileID ?? "nil")")
         let start = ContinuousClock.now
         let chunk: Duration = .milliseconds(100)
         while start.duration(to: .now) < .seconds(1) {
@@ -511,6 +513,7 @@ final class ModelLifecycleManager: ObservableObject {
             reclaimableBytes: reclaimable
         )
         logger.info("Load \(phase, privacy: .public) post-settle resample model=\(model.id, privacy: .public) \(second.logSummary, privacy: .public)")
+        print("[SWITCH-PROOF-RESAMPLE] phase=\(phase) model=\(model.id) \(second.logSummary)")
         return second
     }
 }
@@ -597,11 +600,13 @@ extension ModelLifecycleManager {
         }
         if decision.recommendation == .unloadCurrentFirst {
             logger.info("Load proceeds to teardown reclaiming resident \(model.id, privacy: .public) \(decision.logSummary, privacy: .public)")
+            print("[SWITCH-PROOF-PROCEEDS] phase=preflight model=\(model.id) \(decision.logSummary)")
             return (profile, nil)
         }
         guard decision.recommendation == .proceed else {
             Self.logBudgetRefusal(logger, phase: "preflight", model: model, decision: decision, priorActive: priorActive)
             logger.error("Load refused insufficient memory \(model.id, privacy: .public) \(decision.logSummary, privacy: .public)")
+            print("[SWITCH-PROOF-REFUSED] phase=preflight model=\(model.id) \(decision.logSummary)")
             let alert = decision.alertMessage(modelName: model.displayName, priorActive: priorActive)
             let refused = refuseLoadPreservingResident(kind: .insufficientMemory, message: alert, priorActive: priorActive, priorState: priorState, modelID: model.id)
             return (nil, refused)
@@ -686,7 +691,28 @@ extension ModelLifecycleManager {
             override: freshOverride, consent: freshConsent,
             reclaimable: 0, priorActive: nil
         )
-        let freshDecision = await memoryBudgeter.decision(for: model, allowUnvalidatedCalibration: freshOverride || freshConsent)
+        var freshDecision = await memoryBudgeter.decision(for: model, allowUnvalidatedCalibration: freshOverride || freshConsent)
+        // Iterate fix: same settle-once as preflight/pre-teardown. The
+        // pre-mmap sample lands after the teardown recovery sleep while
+        // jetsam pressure is still settling — a narrow miss here previously
+        // refused post-teardown (resident already displaced) even though a
+        // 1s settle recovers. Large shortfalls skip the delay; the 1GB
+        // window is unchanged (no evidence to extend). Logger only.
+        if let settled = await settleResampleForTransientDip(
+            model, loadEpoch: loadEpoch, priorActive: nil,
+            allow: freshOverride || freshConsent, reclaimable: 0,
+            first: freshDecision, phase: "pre-mmap"
+        ) {
+            if Task.isCancelled {
+                logger.info("Load pre-mmap resample cancelled \(model.id, privacy: .public)")
+                return await invalidateLoadAttempt()
+            }
+            guard loadEpoch == safetyEpoch else {
+                logger.info("Load pre-mmap resample invalidated by epoch \(model.id, privacy: .public)")
+                return await invalidateLoadAttempt()
+            }
+            freshDecision = settled
+        }
         if Task.isCancelled {
             logger.info("Load pre-mmap resample cancelled \(model.id, privacy: .public)")
             return await invalidateLoadAttempt()
@@ -696,9 +722,14 @@ extension ModelLifecycleManager {
             return await invalidateLoadAttempt()
         }
         guard freshDecision.recommendation == .proceed else {
-            Self.logBudgetRefusal(logger, phase: "pre-mmap", model: model, decision: freshDecision, priorActive: priorActive)
+            // Post-teardown: pass nil prior so a headroom miss stays a bare
+            // headroom refusal. The resident is already evicted, so the
+            // unload-first remedy (and its zero-credit fault) would
+            // misattribute a genuine-or-dip miss to prior evidence.
+            Self.logBudgetRefusal(logger, phase: "pre-mmap", model: model, decision: freshDecision, priorActive: nil)
             logger.error("Load refused stale-budget resample \(model.id, privacy: .public) \(freshDecision.logSummary, privacy: .public)")
-            let alert = freshDecision.alertMessage(modelName: model.displayName, priorActive: priorActive)
+            print("[SWITCH-PROOF-REFUSED] phase=pre-mmap model=\(model.id) \(freshDecision.logSummary)")
+            let alert = freshDecision.alertMessage(modelName: model.displayName, priorActive: nil)
             insufficientMemoryMessage = alert
             showInsufficientMemoryWarning = true
             return await failPostTeardownOrRestorePrior(
@@ -706,6 +737,7 @@ extension ModelLifecycleManager {
                 kind: .insufficientMemory, message: alert
             )
         }
+        print("[SWITCH-PROOF-PROCEEDS] phase=pre-mmap model=\(model.id) \(freshDecision.logSummary)")
         let started = ContinuousClock.now
         do {
             try await inferenceService.loadModel(model, baseURL: baseURL, mmprojURL: mmprojURL)
@@ -720,6 +752,7 @@ extension ModelLifecycleManager {
             recordImportedLoadSuccess(for: model)
             MemoryDiagnosticRecorder.shared.capture(.afterModelLoad, elapsedMilliseconds: started.elapsedMilliseconds)
             logger.info("Model loaded: \(model.id, privacy: .public)")
+            print("[SWITCH-PROOF-LOADED] model=\(model.id)")
             return .loaded
         } catch {
             MemoryDiagnosticRecorder.shared.capture(.afterModelLoad, elapsedMilliseconds: started.elapsedMilliseconds, error: error.localizedDescription)
@@ -786,11 +819,13 @@ extension ModelLifecycleManager {
         }
         if fresh.recommendation == .unloadCurrentFirst {
             logger.info("Load pre-teardown resample proceeds to teardown \(model.id, privacy: .public) \(fresh.logSummary, privacy: .public)")
+            print("[SWITCH-PROOF-PROCEEDS] phase=pre-teardown model=\(model.id) \(fresh.logSummary)")
             return nil
         }
         guard fresh.recommendation == .proceed else {
             Self.logBudgetRefusal(logger, phase: "pre-teardown", model: model, decision: fresh, priorActive: priorActive)
             logger.fault("Load refused pre-teardown resample \(model.id, privacy: .public) \(fresh.logSummary, privacy: .public)")
+            print("[SWITCH-PROOF-REFUSED] phase=pre-teardown model=\(model.id) \(fresh.logSummary)")
             let alert = fresh.alertMessage(modelName: model.displayName, priorActive: priorActive)
             return refuseLoadPreservingResident(
                 kind: .insufficientMemory, message: alert,

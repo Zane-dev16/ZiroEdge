@@ -394,4 +394,165 @@ enum HFImportE2ERunner {
         handle?.write(Data(full.utf8))
     }
 }
+
+// MARK: - SwitchProofRunner (DEBUG-only gemma -> imported-qwen switch proof)
+@MainActor
+enum SwitchProofRunner {
+    static func run(services: RuntimeServices,
+                    arguments: [String] = CommandLine.arguments) -> Task<Void, Never> {
+        guard arguments.contains("--switch-proof"),
+              ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else {
+            return Task {}
+        }
+        return Task { await Self.execute(services: services, arguments: arguments) }
+    }
+
+    private struct Parsed {
+        var qwenID = "hf-ec6e37fe3e99bf0d922fe1fc"
+    }
+
+    private static func parse(_ arguments: [String]) -> Parsed {
+        var p = Parsed()
+        if let idx = arguments.firstIndex(of: "--switch-proof-qwen-id"),
+           arguments.indices.contains(idx + 1) {
+            p.qwenID = arguments[idx + 1]
+        }
+        return p
+    }
+
+    private static func emit(_ line: String) {
+        print("[SWITCH-PROOF] \(line)")
+    }
+
+    private static func sanitize(_ text: String) -> String {
+        text.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\r", with: "\\r")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+    }
+
+    private static func describeResult(_ r: ModelLoadResult) -> String {
+        switch r {
+        case .loaded: return "loaded"
+        case .alreadyLoaded: return "alreadyLoaded"
+        case .failed(let f): return "failed(kind=\(f.kind.rawValue) msg=\(sanitize(String(f.message.prefix(160)))))"
+        }
+    }
+
+    private static func execute(services: RuntimeServices, arguments: [String]) async {
+        let parsed = parse(arguments)
+        emit("BEGIN qwenID=\(parsed.qwenID) args=\(sanitize(arguments.joined(separator: " ")))")
+        for _ in 0..<240 where services.lifecycleManager.isLoadAttemptInFlight {
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+        try? await Task.sleep(for: .seconds(2))
+
+        guard let qwen = ModelRegistry.model(for: parsed.qwenID) else {
+            let avail = ModelRegistry.importedModels.map { $0.id }.joined(separator: ",")
+            emit("FAILURE step=lookup reason=qwen id not found available=[\(avail)]")
+            emit("SWITCH_PROOF_JSON: {\"switchAdmitted\":false,\"alertText\":\"qwen lookup failed\",\"done\":false}")
+            return
+        }
+        let gemma = ModelRegistry.gemma4_e2b
+
+        ExperimentalModelConsent.setGranted(true, for: qwen)
+        let granted = ExperimentalModelConsent.isGranted(for: qwen)
+        let qprof = MemoryProfileRegistry.profile(for: qwen)
+        emit("CONSENT granted=\(granted) profile=\(qprof?.id ?? "nil") eligibility=\(qwen.runtimeEligibility) model=\(qwen.id)")
+        guard granted else {
+            emit("FAILURE step=consent reason=consent did not persist")
+            emit("SWITCH_PROOF_JSON: {\"switchAdmitted\":false,\"alertText\":\"consent failed\",\"done\":false}")
+            return
+        }
+
+        emit("RESIDENT want=\(gemma.id) current=\(services.lifecycleManager.activeModel?.id ?? "nil") state=\(services.lifecycleManager.currentState)")
+        if services.lifecycleManager.activeModel?.id != gemma.id || !services.lifecycleManager.isModelLoaded {
+            for _ in 0..<480 where services.lifecycleManager.isLoadAttemptInFlight {
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+            if services.lifecycleManager.activeModel?.id != gemma.id || !services.lifecycleManager.isModelLoaded {
+                emit("RESIDENT loading gemma…")
+                let r = await services.lifecycleManager.loadModel(gemma)
+                emit("RESIDENT_RESULT result=\(describeResult(r)) active=\(services.lifecycleManager.activeModel?.id ?? "nil") loaded=\(services.lifecycleManager.isModelLoaded)")
+            } else {
+                emit("RESIDENT already-loaded after wait active=\(services.lifecycleManager.activeModel?.id ?? "nil")")
+            }
+        } else {
+            emit("RESIDENT already-loaded")
+        }
+        guard services.lifecycleManager.activeModel?.id == gemma.id, services.lifecycleManager.isModelLoaded else {
+            let msg = services.lifecycleManager.loadFailureMessage ?? services.lifecycleManager.insufficientMemoryMessage ?? "gemma residency failed"
+            emit("FAILURE step=resident reason=\(sanitize(msg))")
+            emit("SWITCH_PROOF_JSON: {\"switchAdmitted\":false,\"alertText\":\"\(sanitize(msg))\",\"done\":false}")
+            return
+        }
+        let priorForCheck = services.lifecycleManager.activeModel
+        let reclaimPre = MemoryBudgeter.reclaimableBytes(for: priorForCheck)
+        let creditPre = MemoryBudgeter.reclaimableCreditDetails(for: priorForCheck)
+        let reqPre: String = {
+            guard let pr = qprof else { return "nil" }
+            if let v = try? pr.experimentalRequiredProcessHeadroomBytes() { return String(v) }
+            if let v = try? pr.requiredProcessHeadroomBytes() { return String(v) }
+            return "nil-unvalidated"
+        }()
+        let headroomPre = await services.memoryBudgeter.appMemoryHeadroom()
+        let totalPre = await services.memoryBudgeter.totalDeviceRAM()
+        emit("PRECHECK target=\(qwen.id) profile=\(qprof?.id ?? "nil") allow=1 reclaimable=\(reclaimPre) creditProfile=\(creditPre.profileID ?? "nil") creditEvidence=\(creditPre.evidenceStatus ?? "nil") required=\(reqPre) raw=\(headroomPre) total=\(totalPre) prior=\(priorForCheck?.id ?? "nil")")
+
+        for i in 1...2 {
+            emit("SETTLE \(i)/2 begin sleep=10s")
+            try? await Task.sleep(for: .seconds(10))
+            let h = await services.memoryBudgeter.appMemoryHeadroom()
+            emit("SETTLE \(i)/2 end headroom=\(h)")
+        }
+
+        emit("SWITCH_DIRECT_BEGIN target=\(qwen.id) prior=\(services.lifecycleManager.activeModel?.id ?? "nil")")
+        let directResult = await services.lifecycleManager.switchToModel(qwen)
+        try? await Task.sleep(for: .milliseconds(500))
+        let directActive = services.lifecycleManager.activeModel?.id ?? "nil"
+        let directLoaded = services.lifecycleManager.isModelLoaded
+        let directWarn = services.lifecycleManager.showInsufficientMemoryWarning
+        let directAlert = services.lifecycleManager.insufficientMemoryMessage ?? services.lifecycleManager.loadFailureMessage ?? ""
+        let directShowFail = services.lifecycleManager.showLoadFailure
+        emit("SWITCH_DIRECT_RESULT result=\(describeResult(directResult)) active=\(directActive) loaded=\(directLoaded) warn=\(directWarn) showFail=\(directShowFail) alert=\(sanitize(directAlert))")
+        let switchAdmitted = (directActive == qwen.id && directLoaded)
+        emit("SWITCH_DIRECT_ADMITTED admitted=\(switchAdmitted)")
+
+        emit("CONTROL_BEGIN")
+        if switchAdmitted {
+            emit("CONTROL_RESTORE_GEMMA begin")
+            let rr = await services.lifecycleManager.loadModel(gemma)
+            emit("CONTROL_RESTORE_GEMMA result=\(describeResult(rr)) active=\(services.lifecycleManager.activeModel?.id ?? "nil")")
+            emit("CONTROL_RESTORE_SETTLE sleep=5s")
+            try? await Task.sleep(for: .seconds(5))
+        }
+        if services.lifecycleManager.activeModel?.id != gemma.id || !services.lifecycleManager.isModelLoaded {
+            emit("CONTROL_ENSURE_GEMMA loading gemma for control…")
+            let er = await services.lifecycleManager.loadModel(gemma)
+            emit("CONTROL_ENSURE_GEMMA result=\(describeResult(er)) active=\(services.lifecycleManager.activeModel?.id ?? "nil")")
+        }
+        emit("CONTROL_UNLOAD begin prior=\(services.lifecycleManager.activeModel?.id ?? "nil")")
+        _ = await services.lifecycleManager.unloadCurrentModel()
+        emit("CONTROL_UNLOAD done active=\(services.lifecycleManager.activeModel?.id ?? "nil") state=\(services.lifecycleManager.currentState)")
+        try? await Task.sleep(for: .seconds(2))
+        let ctrlHeadroom = await services.memoryBudgeter.appMemoryHeadroom()
+        emit("CONTROL_PRELOAD headroom=\(ctrlHeadroom) prior=nil reclaimable=0")
+        emit("CONTROL_LOAD begin target=\(qwen.id)")
+        let ctrlResult = await services.lifecycleManager.loadModel(qwen)
+        try? await Task.sleep(for: .milliseconds(500))
+        let ctrlActive = services.lifecycleManager.activeModel?.id ?? "nil"
+        let ctrlLoaded = services.lifecycleManager.isModelLoaded
+        let ctrlWarn = services.lifecycleManager.showInsufficientMemoryWarning
+        let ctrlAlert = services.lifecycleManager.insufficientMemoryMessage ?? services.lifecycleManager.loadFailureMessage ?? ""
+        let ctrlShowFail = services.lifecycleManager.showLoadFailure
+        emit("CONTROL_RESULT result=\(describeResult(ctrlResult)) active=\(ctrlActive) loaded=\(ctrlLoaded) warn=\(ctrlWarn) showFail=\(ctrlShowFail) alert=\(sanitize(ctrlAlert))")
+        let ctrlAdmitted = (ctrlActive == qwen.id && ctrlLoaded)
+        emit("CONTROL_ADMITTED admitted=\(ctrlAdmitted)")
+
+        let finalAlert = switchAdmitted ? "" : directAlert
+        emit("DONE switchAdmitted=\(switchAdmitted) ctrlAdmitted=\(ctrlAdmitted)")
+        emit("SWITCH_PROOF_JSON: {\"switchAdmitted\":\(switchAdmitted),\"ctrlAdmitted\":\(ctrlAdmitted),\"alertText\":\"\(sanitize(finalAlert))\",\"done\":true}")
+    }
+}
+
 #endif

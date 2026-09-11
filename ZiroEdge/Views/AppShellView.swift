@@ -248,6 +248,12 @@ struct AppShellView: View {
             if CommandLine.arguments.contains("--e2e-hf-import") {
                 _ = HFImportE2ERunner.run(services: services, arguments: CommandLine.arguments)
             }
+
+            // SWITCH-PROOF: gemma -> imported-qwen direct switch + control.
+            // Mirrors --e2e-hf-import style; skipped under XCTest hosts.
+            if CommandLine.arguments.contains("--switch-proof") {
+                _ = SwitchProofRunner.run(services: services, arguments: CommandLine.arguments)
+            }
 #endif
         }
 #if DEBUG
