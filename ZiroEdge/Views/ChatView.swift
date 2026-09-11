@@ -37,8 +37,10 @@ struct ChatView: View {
     /// half the frame minus the 8pt glyph margin (14pt at the 44pt default).
     private var imageRemoveCornerInset: CGFloat { imageRemoveControlSide / 2 - 8 }
     @State private var selectedPhotos: [PhotosPickerItem] = []
-    @State private var canPasteImage = UIPasteboard.general.hasImages
     @State private var showDeleteChatConfirmation = false
+    @State private var pendingBranchMessageID: UUID?
+    @State private var pendingRetryMessageID: UUID?
+    @State private var toastMessage: String?
     // BATCH-04: throttle scrollToBottom to avoid stacked withAnimation per token
     @State private var lastScrollTime: Date = .distantPast
     @State private var pendingScrollTask: Task<Void, Never>?
@@ -52,13 +54,66 @@ struct ChatView: View {
             modelRetryRow
             inputBar
         }
+        .overlay(alignment: .center) {
+            if pendingBranchMessageID != nil {
+                ZiroConfirmationModal(
+                    title: "Branch conversation?",
+                    message: "A new conversation starts from this message. The current transcript is unchanged.",
+                    confirmTitle: "Branch",
+                    isDestructive: false,
+                    onConfirm: {
+                        if let id = pendingBranchMessageID {
+                            pendingBranchMessageID = nil
+                            Task {
+                                await viewModel.branchFromMessage(id)
+                                showToast("Branched into a new conversation")
+                            }
+                        }
+                    },
+                    onCancel: { pendingBranchMessageID = nil }
+                )
+            }
+            if pendingRetryMessageID != nil {
+                ZiroConfirmationModal(
+                    title: "Retry response?",
+                    message: "Regenerate this response? replacing previous reply",
+                    confirmTitle: "Retry",
+                    isDestructive: false,
+                    onConfirm: {
+                        pendingRetryMessageID = nil
+                        Task { await viewModel.retryLastResponse() }
+                    },
+                    onCancel: { pendingRetryMessageID = nil }
+                )
+            }
+        }
+        .overlay(alignment: .bottom) {
+            if let toastMessage {
+                HStack(spacing: ZiroTheme.Spacing.small) {
+                    Image(systemName: "checkmark.circle.fill")
+                    Text(toastMessage)
+                        .font(ZiroType.footnote)
+                }
+                .foregroundStyle(ZiroTheme.primaryText)
+                .padding(.horizontal, ZiroTheme.Spacing.large)
+                .padding(.vertical, ZiroTheme.Spacing.medium)
+                .background(ZiroTheme.raisedBackground)
+                .clipShape(RoundedRectangle(cornerRadius: ZiroTheme.Radius.control))
+                .overlay(
+                    RoundedRectangle(cornerRadius: ZiroTheme.Radius.control)
+                        .stroke(ZiroTheme.hairline, lineWidth: 1)
+                )
+                .padding(.bottom, ZiroTheme.Spacing.large)
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("chat-toast")
+            }
+        }
         .background(ZiroTheme.pageBackground)
         // The bar names the conversation (or the draft), never a placeholder.
         .navigationTitle(viewModel.activeConversationTitle ?? "New chat")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { chatToolbar }
         .onAppear {
-            refreshPasteboardState()
             // Deferred autoload lives here rather than at startup: reaching
             // the chat never waits on model work (master plan §B).
             viewModel.startDeferredModelLoadIfNeeded()
@@ -106,9 +161,6 @@ struct ChatView: View {
             if scenePhase != .active {
                 resignComposerFocus()
             }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIPasteboard.changedNotification)) { _ in
-            refreshPasteboardState()
         }
         // Single queued alert (P1-4): the experimental-consent and delete
         // confirmations share one alert driven by the `ZiroAlert` queue, so
@@ -176,30 +228,6 @@ struct ChatView: View {
                     selectedPhotos.removeAll()
                 }
             }
-
-            Button {
-                Task {
-                    if await viewModel.pasteImage() { refreshPasteboardState() }
-                }
-            } label: {
-                Image(systemName: "doc.on.clipboard")
-                    .font(.title3)
-                    // Match sendTint's disabled treatment: the HStack-level
-                    // accent tint below keeps plain buttons full-color when
-                    // disabled, so the paste glyph must dim itself explicitly.
-                    // `tertiaryText` is the quiet-metadata token — the closest
-                    // verified "disabled voice" in the design system.
-                    .foregroundStyle(pasteTint)
-                    .frame(width: composerControlSide, height: composerControlSide)
-                    .contentShape(Rectangle())
-            }
-            .disabled(!canPasteImage || !attachmentsEnabled)
-            .accessibilityLabel("Paste image")
-            .accessibilityHint(
-                attachmentsEnabled
-                    ? "Paste an image from the clipboard"
-                    : "Paste image, unavailable until a vision-capable model is loaded"
-            )
         }
         .foregroundStyle(attachmentsEnabled ? Color.accentColor : ZiroTheme.tertiaryText)
     }
@@ -209,8 +237,13 @@ struct ChatView: View {
     /// never reflows and VoiceOver keeps a stable landmark.
     private var attachmentsEnabled: Bool { chatReady && viewModel.isVisionModel }
 
-    private var pasteTint: Color {
-        (canPasteImage && attachmentsEnabled) ? Color.accentColor : ZiroTheme.tertiaryText
+    private func showToast(_ message: String) {
+        toastMessage = message
+        UIAccessibility.post(notification: .announcement, argument: message)
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            if toastMessage == message { toastMessage = nil }
+        }
     }
 
     var sendButton: some View {
@@ -316,14 +349,18 @@ extension ChatView {
     // MARK: Transcript
 
     /// One transcript row. Extracted so the LazyVStack body stays within
-    /// the compiler's type-check budget with four action closures.
+    /// the compiler's type-check budget with five action closures.
     private func messageRow(_ message: ChatMessagePayload) -> some View {
         let messageID = message.id
+        let isLastAssistant = message.role == .assistant
+            && message.id == viewModel.messages.last(where: { $0.role == .assistant })?.id
         return MessageBubble(
             message: message,
-            onBranch: { Task { await viewModel.branchFromMessage(messageID) } },
+            onBranch: { pendingBranchMessageID = messageID },
             onCopy: { [content = message.content] in viewModel.copyMessageText(content) },
-            onDelete: { Task { await viewModel.deleteMessage(messageID) } }
+            onRetry: isLastAssistant && viewModel.canRetryLastResponse
+                ? { pendingRetryMessageID = messageID }
+                : nil
         )
         .id(messageID)
         // PERF: opacity-only insert (GPU-composited, no layout pass). The
@@ -354,11 +391,12 @@ extension ChatView {
                         messageRow(message)
                     }
 
-                    if viewModel.canRetryLastResponse && !viewModel.messages.isEmpty {
-                        // Quiet text button under the failed turn — not a
-                        // full-width capsule in the transcript.
+                    if viewModel.canRetryLastResponse && !viewModel.messages.isEmpty
+                        && viewModel.messages.last?.role != .assistant {
+                        // Fallback when no assistant bubble hosts the retry
+                        // icon (the failed turn left a trailing user message).
                         Button {
-                            Task { await viewModel.retryLastResponse() }
+                            pendingRetryMessageID = viewModel.messages.last(where: { $0.role == .user })?.id
                         } label: {
                             Label("Retry response", systemImage: "arrow.clockwise")
                                 .font(ZiroType.footnote.weight(.semibold))
@@ -613,8 +651,6 @@ extension ChatView {
             }
         }
     }
-
-    func refreshPasteboardState() { canPasteImage = UIPasteboard.general.hasImages }
 
     // MARK: Focus (P2-6)
 

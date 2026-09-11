@@ -13,26 +13,27 @@ struct MessageBubble: View {
     let isStreaming: Bool
     let onBranch: (() -> Void)?
     let onCopy: (() -> Void)?
-    let onDelete: (() -> Void)?
+    let onRetry: (() -> Void)?
 
     // Copy/branch hit targets: scale with Dynamic Type (like ChatView's
     // composerControlSide) so the caption glyphs never overflow their frames
     // at accessibility sizes, while meeting the 44×44 minimum at the default
     // size.
     @ScaledMetric(relativeTo: .body) private var actionControlSide: CGFloat = 44
+    @State private var showCopiedAck = false
 
     init(
         message: ChatMessagePayload,
         isStreaming: Bool = false,
         onBranch: (() -> Void)? = nil,
         onCopy: (() -> Void)? = nil,
-        onDelete: (() -> Void)? = nil
+        onRetry: (() -> Void)? = nil
     ) {
         self.message = message
         self.isStreaming = isStreaming
         self.onBranch = onBranch
         self.onCopy = onCopy
-        self.onDelete = onDelete
+        self.onRetry = onRetry
     }
 
     var body: some View {
@@ -112,32 +113,28 @@ struct MessageBubble: View {
                     .padding(.vertical, ZiroTheme.Spacing.small)
                 }
 
-                // Action buttons. Assistant rows offer copy/branch/delete;
-                // user rows offer delete. Each button keeps the scaled
-                // 44pt-square hit target.
-                if message.role == .user && !isStreaming {
-                    HStack(spacing: 0) {
-                        Button(action: { onDelete?() }) {
-                            Image(systemName: "trash")
-                                .font(.caption)
-                                .foregroundStyle(ZiroTheme.secondaryText)
-                                .frame(width: actionControlSide, height: actionControlSide)
-                                .contentShape(Rectangle())
-                        }
-                        .accessibilityLabel("Delete message")
-                    }
-                    .padding(.trailing, ZiroTheme.Spacing.xSmall)
-                }
+                // Action buttons. Only assistant rows offer actions
+                // (copy/branch/retry); user rows offer none. Each
+                // button keeps the scaled 44pt-square hit target.
                 if message.role == .assistant && !isStreaming {
                     HStack(spacing: 0) {
-                        Button(action: { onCopy?() }) {
-                            Image(systemName: "doc.on.doc")
+                        Button(action: {
+                            onCopy?()
+                            showCopiedAck = true
+                            UIAccessibility.post(notification: .announcement, argument: "Copied")
+                            Task { @MainActor in
+                                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                                showCopiedAck = false
+                            }
+                        }) {
+                            Image(systemName: showCopiedAck ? "checkmark" : "doc.on.doc")
                                 .font(.caption)
                                 .foregroundStyle(ZiroTheme.secondaryText)
                                 .frame(width: actionControlSide, height: actionControlSide)
                                 .contentShape(Rectangle())
                         }
-                        .accessibilityLabel("Copy message")
+                        .accessibilityLabel(showCopiedAck ? "Copied" : "Copy message")
+                        .accessibilityIdentifier("copy-message-button")
 
                         Button(action: { onBranch?() }) {
                             Image(systemName: "arrow.triangle.branch")
@@ -149,15 +146,27 @@ struct MessageBubble: View {
                                 .contentShape(Rectangle())
                         }
                         .accessibilityLabel("Branch from this message")
+                        .accessibilityIdentifier("branch-message-button")
 
-                        Button(action: { onDelete?() }) {
-                            Image(systemName: "trash")
-                                .font(.caption)
-                                .foregroundStyle(ZiroTheme.secondaryText)
-                                .frame(width: actionControlSide, height: actionControlSide)
-                                .contentShape(Rectangle())
+                        if onRetry != nil {
+                            Button(action: { onRetry?() }) {
+                                Image(systemName: "arrow.clockwise")
+                                    .font(.caption)
+                                    .foregroundStyle(ZiroTheme.secondaryText)
+                                    .frame(width: actionControlSide, height: actionControlSide)
+                                    .contentShape(Rectangle())
+                            }
+                            .accessibilityLabel("Retry response")
+                            .accessibilityIdentifier("retry-message-button")
                         }
-                        .accessibilityLabel("Delete message")
+
+                        if showCopiedAck {
+                            Text("Copied")
+                                .font(ZiroType.footnote)
+                                .foregroundStyle(ZiroTheme.secondaryText)
+                                .accessibilityLabel("Copied")
+                                .accessibilityIdentifier("copied-ack")
+                        }
                     }
                     .padding(.leading, ZiroTheme.Spacing.xSmall)
                 }

@@ -86,6 +86,15 @@ extension ChatViewModel {
             visionWarning = "Vision not supported with text-only model. Switch to a vision model."
             isStreaming = false; return
         }
+        // REPLACE not duplicate: drop the previous assistant reply
+        // (everything after the last user message) from disk + memory
+        // before regenerating, so the transcript ends with one reply.
+        if lastUserIndex + 1 < messages.count {
+            for stale in messages[(lastUserIndex + 1)...] {
+                _ = await persistence.deleteMessageResult(messageID: stale.id)
+            }
+            messages.removeSubrange((lastUserIndex + 1)...)
+        }
         let history = Array(messages[...lastUserIndex])
         streamingText = ""; errorMessage = nil; visionWarning = nil
         resetStreamingBuffer()

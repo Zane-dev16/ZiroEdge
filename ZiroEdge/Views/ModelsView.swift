@@ -85,32 +85,28 @@ struct ModelsView: View {
         } message: {
             Text("This profile has measured load evidence but has not passed the full physical workload. ZiroEdge will still enforce its measured admission floor and reserve.")
         }
-        .confirmationDialog(
-            viewModel.pendingDeleteModel.map(viewModel.canForgetImport) == true ? "Forget Import" : "Delete Model",
-            isPresented: $viewModel.showingDeleteConfirmation
-        ) {
-            Button(
-                viewModel.pendingDeleteModel.map(viewModel.canForgetImport) == true ? "Forget Import" : "Delete",
-                role: .destructive
-            ) { Task { await viewModel.confirmDelete() } }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            if let model = viewModel.pendingDeleteModel, viewModel.canForgetImport(model) {
-                Text("Forget \(model.displayName)? Its import record and unreferenced partial transfer data will be removed.")
-            } else {
-                Text("Delete \(viewModel.pendingDeleteModel?.displayName ?? "this model")? You can download it again later.")
+        .overlay(alignment: .center) {
+            if viewModel.showingDeleteConfirmation {
+                ZiroConfirmationModal(
+                    title: viewModel.pendingDeleteModel.map(viewModel.canForgetImport) == true ? "Forget Import" : "Delete Model",
+                    message: forgetOrDeleteMessage,
+                    confirmTitle: viewModel.pendingDeleteModel.map(viewModel.canForgetImport) == true ? "Forget Import" : "Delete",
+                    onConfirm: { Task { await viewModel.confirmDelete() } },
+                    onCancel: { viewModel.showingDeleteConfirmation = false }
+                )
             }
         }
-        .confirmationDialog(
-            "Cancel Download",
-            isPresented: $viewModel.showingCancelConfirmation
-        ) {
-            Button("Cancel Download", role: .destructive) {
-                viewModel.confirmCancelDownload()
+        .overlay(alignment: .center) {
+            if viewModel.showingCancelConfirmation {
+                ZiroConfirmationModal(
+                    title: "Cancel Download",
+                    message: "Cancelling stops the current transfer and removes its partial download data for \(viewModel.pendingCancelModel?.displayName ?? "this model").",
+                    confirmTitle: "Cancel Download",
+                    cancelTitle: "Keep Downloading",
+                    onConfirm: { viewModel.confirmCancelDownload() },
+                    onCancel: { viewModel.showingCancelConfirmation = false }
+                )
             }
-            Button("Keep Downloading", role: .cancel) {}
-        } message: {
-            Text("Cancelling stops the current transfer and removes its partial download data for \(viewModel.pendingCancelModel?.displayName ?? "this model").")
         }
         // Dead-button fix (MEDIUM): `confirmDelete` failures set
         // `updateMessage` — without this binding they never surface.
@@ -127,6 +123,13 @@ struct ModelsView: View {
             Text(viewModel.updateMessage ?? "The model could not be removed.")
                 .accessibilityIdentifier(ModelEvictionPresentation.deleteFailureID)
         }
+    }
+
+    private var forgetOrDeleteMessage: String {
+        if let model = viewModel.pendingDeleteModel, viewModel.canForgetImport(model) {
+            return "Forget \(model.displayName)? Its import record and unreferenced partial transfer data will be removed."
+        }
+        return "Delete \(viewModel.pendingDeleteModel?.displayName ?? "this model")? You can download it again later."
     }
 
     // MARK: - Scope
