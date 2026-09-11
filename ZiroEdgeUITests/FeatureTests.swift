@@ -90,6 +90,71 @@ final class FeatureTests: UITestBase {
         XCTAssertTrue(responded, "No AI response within 120s")
     }
 
+    // MARK: - Chat message actions (confirmation modal + buttons)
+
+    /// Hermetic sendtest seeds 1 user + 1 assistant message: assistant-only
+    /// actions (copy/branch/retry/delete) must exist exactly once (no user
+    /// trash), copy shows the ack, and branch presents the confirmation modal.
+    func testChatMessageActions() throws {
+        let chatApp = XCUIApplication()
+        chatApp.launchArguments = [
+            "--uitesting",
+            "--uitesting-sendtest",
+            "--uitesting-hermetic-model",
+        ]
+        chatApp.launch()
+        app = chatApp
+
+        let input = app.textFields["chatInput"].firstMatch
+        guard input.waitForExistence(timeout: 120) else {
+            XCTFail("ChatView did not appear within 120s")
+            return
+        }
+
+        // Assistant action row renders only after streaming ends.
+        let copy = app.descendants(matching: .any)["copy-message-button"].firstMatch
+        guard copy.waitForExistence(timeout: 120) else {
+            XCTFail("Copy button never appeared — no assistant reply")
+            return
+        }
+
+        // Retry icon exists on the last assistant bubble.
+        let retry = app.descendants(matching: .any)["retry-message-button"].firstMatch
+        XCTAssertTrue(retry.waitForExistence(timeout: 5),
+                      "Retry button missing on the last assistant message")
+
+        // No message trash: chat message rows never offer delete.
+        let deletes = app.descendants(matching: .any).matching(identifier: "delete-message-button")
+        XCTAssertEqual(deletes.count, 0,
+                       "Chat messages must offer no delete button")
+
+        // Copy ack appears after tapping copy.
+        copy.tap()
+        let ack = app.descendants(matching: .any)["copied-ack"].firstMatch
+        XCTAssertTrue(ack.waitForExistence(timeout: 5),
+                      "Copied ack should appear after tapping copy")
+        capture("chat_message_copied")
+
+        // Branch presents the confirmation modal; cancel leaves state clean.
+        let branch = app.descendants(matching: .any)["branch-message-button"].firstMatch
+        guard branch.waitForExistence(timeout: 5) else {
+            XCTFail("Branch button missing on the assistant message")
+            return
+        }
+        branch.tap()
+        let modal = app.descendants(matching: .any)["confirmation-modal"].firstMatch
+        XCTAssertTrue(modal.waitForExistence(timeout: 5),
+                      "Branch must present the confirmation modal")
+        capture("chat_branch_confirmation")
+        let cancel = app.descendants(matching: .any)["confirmation-cancel"].firstMatch
+        if cancel.waitForExistence(timeout: 5) {
+            cancel.tap()
+        }
+        sleep(1) // Wait for dismissal animation
+        XCTAssertFalse(modal.exists,
+                       "Cancelling the branch confirmation must dismiss the modal")
+    }
+
     func testChatStreamingStop() throws {
         // Launch the test's own hermetic app like the sibling tests: the
         // validation simulator holds no verified real model, so the bare

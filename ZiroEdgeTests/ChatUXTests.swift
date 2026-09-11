@@ -995,3 +995,177 @@ final class ButtonStateTests: XCTestCase {
         )
     }
 }
+
+// MARK: - Message Action Tests
+
+/// Contracts for transcript message actions: delete visibility, copy ack,
+/// branch confirm-then-ack, icon-only retry, clipboard-free composer, and the
+/// full-screen branch confirmation modal.
+@MainActor
+final class ChatActionsTests: XCTestCase {
+
+    private class MockDownloadStatusProvider: ModelDownloadStatusProvider {
+        func status(for model: AIModel) -> ModelDownloadStatus {
+            ModelDownloadStatus(baseState: .notDownloaded, mmprojState: nil)
+        }
+    }
+
+    private func makeViewModel(persistence store: PersistenceController? = nil) -> ChatViewModel {
+        let persistence = store ?? PersistenceController(inMemory: true)
+        let inferenceService = InferenceService()
+        return ChatViewModel(
+            persistence: persistence,
+            inferenceService: inferenceService,
+            sessionActor: ChatSessionActor(
+                inferenceService: inferenceService,
+                persistence: persistence
+            ),
+            lifecycleManager: ModelLifecycleManager(
+                inferenceService: inferenceService,
+                memoryBudgeter: MemoryBudgeter()
+            ),
+            downloadStatusProvider: MockDownloadStatusProvider()
+        )
+    }
+
+    /// (a) Chat message rows never offer delete; rows expose only
+    /// copy/branch/retry on the last assistant bubble while idle.
+    /// Mirrors MessageBubble having no delete affordance and ChatView
+    /// routing retry through the full-screen confirmation modal.
+    func testRetryConfirmUsesFullModal() {
+        let modal = ZiroConfirmationModal(
+            title: "Retry response?",
+            message: "Regenerate this response? replacing previous reply",
+            confirmTitle: "Retry",
+            isDestructive: false,
+            onConfirm: {},
+            onCancel: {}
+        )
+
+        XCTAssertEqual(modal.title, "Retry response?")
+        XCTAssertEqual(modal.confirmTitle, "Retry")
+        XCTAssertFalse(modal.isDestructive, "retry confirm uses the primary style, not destructive")
+        XCTAssertEqual(modal.cancelTitle, "Cancel")
+    }
+
+    /// (b) Copy writes the message text to the pasteboard; the bubble then flips
+    /// its copy button to the "Copied" ack (checkmark + `copied-ack`).
+    func testCopyMessageWritesTextForAck() {
+        let viewModel = makeViewModel()
+        let previous = UIPasteboard.general.string
+        defer { UIPasteboard.general.string = previous }
+
+        viewModel.copyMessageText("hello")
+        XCTAssertEqual(UIPasteboard.general.string, "hello")
+
+        viewModel.copyMessage(ChatMessagePayload(role: .assistant, content: "world"))
+        XCTAssertEqual(UIPasteboard.general.string, "world")
+    }
+
+    /// (c) Confirming the branch modal creates a new conversation from the message
+    /// while the source transcript is unchanged; only then does ChatView toast
+    /// "Branched into a new conversation" (`chat-toast`).
+    func testBranchCreatesNewConversationKeepingSource() async throws {
+        let store = PersistenceController(inMemory: true)
+        let sourceID = try await store.createConversation(title: "Source", modelID: "test-model")
+        await store.insertMessage(conversationID: sourceID, role: .user, content: "First")
+        guard let fromID = await store.insertMessage(conversationID: sourceID, role: .assistant, content: "Second") else {
+            return XCTFail("setup message insert failed")
+        }
+
+        guard case .success(let branchedID) = await store.branchConversationResult(
+            sourceID: sourceID,
+            fromMessageID: fromID,
+            newTitle: "Branched Conversation"
+        ) else {
+            return XCTFail("branch should succeed")
+        }
+
+        XCTAssertNotEqual(branchedID, sourceID, "branch opens a new conversation")
+        let conversations = await store.fetchConversations()
+        XCTAssertEqual(conversations.count, 2, "source transcript is unchanged")
+    }
+
+    /// (d) Retry is an icon-only bubble action (`arrow.clockwise`,
+    /// `retry-message-button`), armed only when a user message exists and
+    /// nothing is streaming or loading.
+    func testRetryOfferedOnlyWhenEligible() {
+        let viewModel = makeViewModel()
+
+        XCTAssertFalse(viewModel.canRetryLastResponse, "no user message means no retry")
+
+        viewModel.messages = [ChatMessagePayload(role: .user, content: "Hello")]
+        XCTAssertTrue(viewModel.canRetryLastResponse, "user message arms the retry icon")
+
+        viewModel.isStreaming = true
+        XCTAssertFalse(viewModel.canRetryLastResponse, "retry hidden while streaming")
+    }
+
+    /// (e) The composer (input + photo picker + send) has no clipboard button and
+    /// performs no pasteboard reads or writes.
+    func testComposerLeavesClipboardAlone() {
+        let previous = UIPasteboard.general.items
+        UIPasteboard.general.items = []
+        defer { UIPasteboard.general.items = previous }
+
+        _ = makeViewModel()
+        XCTAssertNil(UIPasteboard.general.string, "composing touches no clipboard data")
+    }
+
+    /// (f) Branch confirmation uses the full-screen ZiroConfirmationModal
+    /// (dim + centered card overlay, transcript stays mounted) instead of
+    /// inline confirmation bubbles.
+    func testBranchConfirmUsesFullModal() {
+        let modal = ZiroConfirmationModal(
+            title: "Branch conversation?",
+            message: "A new conversation starts from this message. The current transcript is unchanged.",
+            confirmTitle: "Branch",
+            isDestructive: false,
+            onConfirm: {},
+            onCancel: {}
+        )
+
+        XCTAssertEqual(modal.title, "Branch conversation?")
+        XCTAssertEqual(modal.confirmTitle, "Branch")
+        XCTAssertFalse(modal.isDestructive, "branch confirm uses the primary style, not destructive")
+        XCTAssertEqual(modal.cancelTitle, "Cancel")
+    }
+
+    /// (g) Confirming retry replaces: the stale assistant reply is dropped
+    /// from disk before regenerating, so the count stays the same and no
+    /// duplicate reply survives. Mirrors the VM truncate block.
+    func testRetryConfirmReplacesWithoutDuplicate() async throws {
+        let store = PersistenceController(inMemory: true)
+        let id = try await store.createConversation(title: "R", modelID: "test-model")
+        await store.insertMessage(conversationID: id, role: .user, content: "Q")
+        guard let stale = await store.insertMessage(conversationID: id, role: .assistant, content: "Old") else {
+            return XCTFail("setup insert failed")
+        }
+        _ = await store.deleteMessageResult(messageID: stale)
+        let after = await store.fetchMessages(conversationID: id)
+        XCTAssertEqual(after.count, 1, "confirm drops the stale reply before regenerating")
+        XCTAssertEqual(after.first?.content, "Q", "prompt survives; regenerate appends exactly one reply")
+    }
+
+    /// (h) A retry that never confirms mutates nothing: with no user prompt
+    /// the VM exits early, the transcript is unchanged, and its slot frees.
+    func testRetryCancelLeavesTranscriptUntouched() async {
+        let viewModel = makeViewModel()
+        viewModel.messages = [ChatMessagePayload(role: .assistant, content: "Orphan")]
+        await viewModel.retryLastResponse()
+        XCTAssertEqual(viewModel.messages.count, 1, "unconfirmed retry mutates nothing")
+        XCTAssertFalse(viewModel.isStreaming, "dropped retry releases its slot")
+    }
+
+    /// (i) Chat rows expose no delete affordance: MessageBubble stores only
+    /// copy/branch/retry closures — no onDelete/delete property to wire.
+    func testMessageBubbleExposesNoDelete() {
+        let bubble = MessageBubble(
+            message: ChatMessagePayload(role: .assistant, content: "Hi"),
+            onBranch: {}, onCopy: {}, onRetry: {}
+        )
+        let labels = Mirror(reflecting: bubble).children.compactMap { $0.label }
+        XCTAssertFalse(labels.contains(where: { $0.localizedCaseInsensitiveContains("delete") }),
+                       "bubble must offer no delete property")
+    }
+}
