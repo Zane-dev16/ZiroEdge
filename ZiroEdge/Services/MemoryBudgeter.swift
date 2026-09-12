@@ -135,28 +135,54 @@ actor MemoryBudgeter {
         SaturatedArithmetic.add(currentAvailable, reclaimableBytes)
     }
 
-    /// Reclaimable credit for evicting `priorActive`: the required headroom
-    /// its own profile would demand (validated peak first, then experimental
-    /// load evidence). Zero when nothing is resident or no evidence exists.
-    /// Conservative by construction — it derives from the same profile the
-    /// post-teardown hard gate enforces. Unvalidated priors (e.g. curated
-    /// llama32-3B with nil measured peaks) intentionally yield 0 so
-    /// projected==raw and the switch refuses instead of over-crediting.
-    /// See `reclaimableCreditDetails(for:)` for the diagnosable why.
+    /// Device-calibrated actually-freed bytes (iPhone 5A3DC1B6, fresh signed
+    /// DEBUG build 23:35 UTC, `devicectl launch --console`, `--switch-proof
+    /// --memory-diagnostic`): gemma-4-e2b-q4 freed 736381808 (raw 2756243512
+    /// ->3492625320, admit vs qwen-required 3450000000), SmolLM prior
+    /// hf-cf4a0dfb60e5eb160978dd9e freed 4390984 (raw 3396418280->3400809264,
+    /// refuse by ~49M). Qwen target hf-ec6e37fe3e99bf0d922fe1fc requires
+    /// 3450000000, unchanged: no Qwen load peak exists, and required-side
+    /// conservatism stays fail-closed by design.
+    static let deviceMeasuredFreedValidatedVisionBytes: UInt64 = 736_381_808
+    static let deviceMeasuredFreedUnvalidatedTextBytes: UInt64 = 4_390_984
+
+    /// Reclaimable credit for evicting `priorActive`: min(estimated, measured
+    /// actually-freed) — never more than teardown frees. Validated priors
+    /// min(required, 736M device: gemma freed 42% of required, 2.4x fantasy
+    /// removed, verdict unchanged); unvalidated text min(peak, 4M device:
+    /// mmap base + untouched ctx never resident, SmolLM ~247x fantasy, so
+    /// projected == post-teardown raw and the pre-gate refuses honestly with
+    /// the resident preserved instead of teardown-then-restore); unvalidated
+    /// vision keeps peak (pinned projector plausibly resident) until its own
+    /// teardown calibration lands; nil-peak priors (llama32-3B) stay 0 so
+    /// projected==raw. Post-teardown hard gate (raw>=req_target, zero credit)
+    /// stays authoritative. Smaller is fail-closed (refuses, never admits).
     static func reclaimableBytes(for priorActive: AIModel?) -> UInt64 {
         reclaimableCreditDetails(for: priorActive).bytes
     }
 
     /// Diagnosable reclaimable credit: same `bytes` math as
-    /// `reclaimableBytes(for:)`, plus the prior profile identity and evidence
-    /// status that explain a zero (`nil` profile or `unvalidated` without
-    /// measured peaks). Logging-only — never an admission input.
+    /// `reclaimableBytes(for:)`, plus prior profile identity and evidence status.
+    /// Logging-only — never an admission input.
     static func reclaimableCreditDetails(for priorActive: AIModel?) -> (bytes: UInt64, profileID: String?, evidenceStatus: String?) {
         guard let priorActive else { return (0, nil, nil) }
         guard let profile = MemoryProfileRegistry.profile(for: priorActive) else { return (0, nil, nil) }
         let status = profile.evidenceStatus.rawValue
-        if let required = try? profile.requiredProcessHeadroomBytes() { return (required, profile.id, status) }
-        return ((try? profile.experimentalRequiredProcessHeadroomBytes()) ?? 0, profile.id, status)
+        if let required = try? profile.requiredProcessHeadroomBytes() {
+            // ponytail: min(required, measured freed); per-shape table if more validated models land.
+            return (min(required, Self.deviceMeasuredFreedValidatedVisionBytes), profile.id, status)
+        }
+        // ponytail: min(peak, measured freed) for text; vision keeps peak until
+        // calibrated (see above). Policy-validated via experimental succeeding;
+        // peak nil/invalid -> 0.
+        guard (try? profile.experimentalRequiredProcessHeadroomBytes()) != nil,
+              let peak = profile.measuredLoadDeltaBytes else {
+            return (0, profile.id, status)
+        }
+        if profile.mode == .text {
+            return (min(peak, Self.deviceMeasuredFreedUnvalidatedTextBytes), profile.id, status)
+        }
+        return (peak, profile.id, status)
     }
 
     /// Settle window for the pre-teardown transient-dip retry (Fix verify c):
@@ -165,6 +191,69 @@ actor MemoryBudgeter {
     /// routinely dips ~0.65GB (2.8GB vs 3.45GB observed) and recovers.
     /// Larger shortfalls (true OOM, e.g. 14GB model) skip the settle.
     static let transientDipSettleWindowBytes: UInt64 = 1_000_000_000
+
+    /// Stable-settle rule (unified sampler for manual + switch paths):
+    /// headroom is settled when `settleStableSamples` consecutive 100ms
+    /// samples each land within ±`settleStableDeltaBytes` of the previous
+    /// (~200ms of steadiness). Every wait is bounded by the caller's timeout
+    /// and returns the last sample on timeout (callers fail closed on it as
+    /// today). 50MB << 1GB dip window, so genuine recovery is detected
+    /// without masking real shortfalls. decision() stays a pure single-sample
+    /// function; polling lives here and one layer up so Fixed-provider tests
+    /// stay deterministic.
+    static let settleStableDeltaBytes: UInt64 = 50_000_000
+    static let settleStableSamples: Int = 3
+    static let settleSampleInterval: Duration = .milliseconds(100)
+    /// Transient-dip settle budget: matches the previous fixed 2s sleep
+    /// (fixes the stale "wait 1s" comment) as a bounded stable-wait.
+    static let transientDipSettleTimeout: Duration = .seconds(2)
+    /// Pre-mmap / pre-inference dip gate: 5 samples — a dip wait, not a
+    /// full recovery.
+    static let reserveDipSettleTimeout: Duration = .milliseconds(500)
+
+    /// Poll processAvailable every 100ms until 3 consecutive samples agree
+    /// within ±50MB or `timeout` elapses. Zero timeout returns one sample
+    /// with no sleep (preserves `.zero` recoveryDelay tests). Cancellation
+    /// returns the last sample promptly; epoch checks stay at MainActor call
+    /// sites, which re-verify before any destructive step — a stale epoch
+    /// therefore wastes at most this timeout, never loads stale.
+    func settledAvailable(
+        timeout: Duration,
+        stableDeltaBytes: UInt64 = settleStableDeltaBytes,
+        stableSamples: Int = settleStableSamples
+    ) async -> UInt64 {
+        var prev = metrics.processAvailableMemory()
+        if timeout <= .zero || stableSamples <= 1 { return prev }
+        let deadline = ContinuousClock.now.advanced(by: timeout)
+        var steady = 1
+        while ContinuousClock.now < deadline {
+            if Task.isCancelled { return prev }
+            do {
+                try await Task.sleep(for: Self.settleSampleInterval)
+            } catch {
+                return prev
+            }
+            let cur = metrics.processAvailableMemory()
+            steady = (cur >= prev ? cur - prev : prev - cur) <= stableDeltaBytes ? steady + 1 : 1
+            prev = cur
+            if steady >= stableSamples { return prev }
+        }
+        return prev
+    }
+
+    /// Thin dip-retry wrapper: wait for settled headroom, then take the full
+    /// decision fresh (when stable the fresh sample ≈ the settled one).
+    /// Logger only — verdict math unchanged.
+    func settledDecision(
+        for model: AIModel,
+        allowUnvalidatedCalibration allow: Bool = false,
+        reclaimableBytes: UInt64 = 0,
+        timeout: Duration
+    ) async -> MemoryLoadDecision {
+        let settled = await settledAvailable(timeout: timeout)
+        logger.info("Settled resample headroom=\(settled, privacy: .public) model=\(model.id, privacy: .public)")
+        return await decision(for: model, allowUnvalidatedCalibration: allow, reclaimableBytes: reclaimableBytes)
+    }
 
     func decision(for model: AIModel, allowUnvalidatedCalibration: Bool = false, reclaimableBytes: UInt64 = 0) -> MemoryLoadDecision {
         // P1-4 fail-closed validity gate: quantity never admits, but malformed
@@ -270,7 +359,10 @@ actor MemoryBudgeter {
         let profileID = profile?.id ?? "nil"
         logger.info("Memory decision model=\(model.id, privacy: .public) allow=\(allowFlag, privacy: .public) profile=\(profileID, privacy: .public) \(decision.logSummary, privacy: .public)")
         // SWITCH-PROOF console mirror: Logger.info does not forward over devicectl --console.
-        print("[SWITCH-PROOF-BUDGET] model=\(model.id) allow=\(allowFlag) profile=\(profileID) raw=\(processAvailable) projected=\(projected) reclaimable=\(reclaimableBytes) required=\(decision.requiredBytes.map(String.init) ?? "nil") recommendation=\(recommendation) reason=\(reason?.rawValue ?? "none")")
+        print("[SWITCH-PROOF-BUDGET] model=\(model.id) allow=\(allowFlag) profile=\(profileID) " +
+            "raw=\(processAvailable) projected=\(projected) reclaimable=\(reclaimableBytes) " +
+            "required=\(decision.requiredBytes.map(String.init) ?? "nil") " +
+            "recommendation=\(recommendation) reason=\(reason?.rawValue ?? "none")")
         print("[SWITCH-PROOF-BUDGET-SUMMARY] \(decision.logSummary)")
         if reason == .profileUnvalidated {
             // Fault-level: the common cause is missing experimental consent

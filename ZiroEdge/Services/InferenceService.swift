@@ -110,6 +110,9 @@ actor InferenceService: InferenceServiceProtocol {
     private let generationGate = GenerationGate()
 
     private let loadSafetyStore: LoadSafetyStore
+    /// Unified stable-settle sampler (system metrics — same source the old
+    /// back-to-back resamples read). Logger only; verdict math unchanged.
+    private let settleBudgeter = MemoryBudgeter()
 
     init(loadSafetyStore: LoadSafetyStore) {
         self.loadSafetyStore = loadSafetyStore
@@ -219,7 +222,7 @@ actor InferenceService: InferenceServiceProtocol {
         // withdraw the just-set marker so the slot isn't burned and the next
         // begin isn't blocked (admission refusal, not a construction attempt).
         do {
-            try enforcePreLoadReserve(for: model, profile: profile)
+            try await enforcePreLoadReserve(for: model, profile: profile)
         } catch {
             _ = loadSafetyStore.withdrawPendingLoad()
             throw error
@@ -335,7 +338,7 @@ extension InferenceService {
         guard let eng = engine else {
             throw InferenceError.modelNotLoaded
         }
-        try enforcePreInferenceReserve()
+        try await enforcePreInferenceReserve()
         let engineSampling = SamplingConfigSwift(
             temperature: sampling.temperature,
             topP: sampling.topP,
@@ -372,7 +375,7 @@ extension InferenceService {
         guard let config = currentConfig else {
             throw InferenceError.modelNotLoaded
         }
-        try enforcePreInferenceReserve()
+        try await enforcePreInferenceReserve()
 
         // Convert sampling config to SwiftLlama format.
         let engineSampling = SamplingConfigSwift(
@@ -436,7 +439,7 @@ extension InferenceService {
         guard let config = currentConfig else {
             throw InferenceError.modelNotLoaded
         }
-        try enforcePreInferenceReserve()
+        try await enforcePreInferenceReserve()
 
         // Format one marker per supplied image. Markers belong to the first user
         // message only; repeating them for later turns would mismatch the bitmap array.
@@ -634,44 +637,46 @@ extension InferenceService {
 
     /// One fresh snapshot immediately before entering inference. The load-time
     /// check cannot protect a model whose headroom fell while it was idle.
-    /// P1-1 retry-once: a transient dip resamples immediately before failing.
-    private func enforcePreInferenceReserve() throws {
-        var available = UInt64(os_proc_available_memory())
-        if available < MemoryProfile.productionReserveBytes {
-            logger.fault("Pre-inference reserve dip available=\(available, privacy: .public) retrying once")
-            available = UInt64(os_proc_available_memory())
-        }
-        guard available >= MemoryProfile.productionReserveBytes else {
-            logger.fault("Pre-inference reserve breached available=\(available, privacy: .public) reserve=\(MemoryProfile.productionReserveBytes, privacy: .public)")
+    /// Dip retry waits up to 500ms for settled headroom (unified sampler)
+    /// instead of resampling back-to-back (~µs apart), which re-reads the
+    /// same depressed value for any dip outlasting one syscall.
+    private func enforcePreInferenceReserve() async throws {
+        let available = await settleBudgeter.appMemoryHeadroom()
+        if available >= MemoryProfile.productionReserveBytes { return }
+        logger.fault("Pre-inference reserve dip available=\(available, privacy: .public) settling")
+        let settled = await settleBudgeter.settledAvailable(timeout: MemoryBudgeter.reserveDipSettleTimeout)
+        guard settled >= MemoryProfile.productionReserveBytes else {
+            logger.fault("Pre-inference reserve breached available=\(settled, privacy: .public) reserve=\(MemoryProfile.productionReserveBytes, privacy: .public)")
             throw InferenceError.nativeFailure(
                 kind: .memoryPressure,
                 diagnostic: MemoryAdmissionFailure.postLoadReserveBreached.rawValue
             )
         }
+        logger.info("Pre-inference retry recovered available=\(settled, privacy: .public)")
     }
 
     /// P1-1 fresh headroom sample immediately pre-mmap/context init. The
     /// caller's budget decision may be stale after teardown sleep, so this gate
     /// never reuses it: it derives the floor from the profile and samples now,
-    /// retrying once on breach. No validated floor (unvalidated without consent)
-    /// defers to the caller's admission refusal — this gate only enforces a
-    /// known floor. IDs public; no digests here.
-    private func enforcePreLoadReserve(for model: AIModel, profile: MemoryProfile) throws {
+    /// settling up to 500ms on breach (unified sampler). No validated floor
+    /// (unvalidated without consent) defers to the caller's admission refusal —
+    /// this gate only enforces a known floor. IDs public; no digests here.
+    private func enforcePreLoadReserve(for model: AIModel, profile: MemoryProfile) async throws {
         let required = (try? profile.requiredProcessHeadroomBytes())
             ?? (try? profile.experimentalRequiredProcessHeadroomBytes())
         guard let required else { return }
-        var available = UInt64(os_proc_available_memory())
+        let available = await settleBudgeter.appMemoryHeadroom()
         if available >= required { return }
-        logger.fault("Pre-mmap headroom dip \(model.id, privacy: .public) available=\(available, privacy: .public) required=\(required, privacy: .public) retrying once")
-        available = UInt64(os_proc_available_memory())
-        guard available >= required else {
-            logger.fault("Pre-mmap reserve breached \(model.id, privacy: .public) available=\(available, privacy: .public) required=\(required, privacy: .public)")
+        logger.fault("Pre-mmap headroom dip \(model.id, privacy: .public) available=\(available, privacy: .public) required=\(required, privacy: .public) settling")
+        let settled = await settleBudgeter.settledAvailable(timeout: MemoryBudgeter.reserveDipSettleTimeout)
+        guard settled >= required else {
+            logger.fault("Pre-mmap reserve breached \(model.id, privacy: .public) available=\(settled, privacy: .public) required=\(required, privacy: .public)")
             throw InferenceError.nativeFailure(
                 kind: .memoryPressure,
                 diagnostic: MemoryAdmissionFailure.insufficientProcessHeadroom.rawValue
             )
         }
-        logger.info("Pre-mmap retry recovered \(model.id, privacy: .public) available=\(available, privacy: .public)")
+        logger.info("Pre-mmap retry recovered \(model.id, privacy: .public) available=\(settled, privacy: .public)")
     }
 
     private static func classifyNativeFailure(_ error: Error) -> InferenceError {

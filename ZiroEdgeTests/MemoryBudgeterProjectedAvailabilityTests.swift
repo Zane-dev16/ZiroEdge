@@ -119,7 +119,9 @@ final class MemoryBudgeterProjectedAvailabilityTests: XCTestCase {
         )
         let required = try requiredHeadroom(for: target)
         let reclaimable = MemoryBudgeter.reclaimableBytes(for: resident)
-        XCTAssertEqual(reclaimable, required, "identical fixtures must agree on credit")
+        let peak = try XCTUnwrap(MemoryProfileRegistry.profile(for: resident)?.measuredLoadDeltaBytes)
+        XCTAssertEqual(reclaimable, peak, "unvalidated credit caps at peak, not inflated required")
+        XCTAssertLessThan(reclaimable, required, "cap strips 1.25x/750M/rounding")
         // Straddle window: raw headroom alone cannot fit B, but evicting A frees it.
         let available = required - reclaimable / 2
         XCTAssertLessThan(available, required)
@@ -312,11 +314,19 @@ final class MemoryBudgeterProjectedAvailabilityTests: XCTestCase {
         )
         let requiredA = try requiredHeadroom(for: modelA)
         let requiredB = try requiredHeadroom(for: modelB)
-        // Straddle: A fits raw, B fits only after evicting A.
-        let available = max(requiredA, requiredB - requiredA) + 250_000_000
+        // Truth-matched credit: unvalidated text teardown frees ~MB (device
+        // 4390984), not the 724M peak estimate (mmap base + untouched ctx were
+        // never resident). Vision priors keep peak until calibrated.
+        let peakA = try XCTUnwrap(MemoryProfileRegistry.profile(for: modelA)?.measuredLoadDeltaBytes)
+        let creditA = MemoryBudgeter.reclaimableBytes(for: modelA)
+        XCTAssertEqual(creditA, MemoryBudgeter.deviceMeasuredFreedUnvalidatedTextBytes)
+        XCTAssertLessThan(creditA, peakA)
+        XCTAssertLessThan(creditA, requiredA)
+        // Straddle: A fits raw, B fits only after evicting A (freed==credit, device-measured).
+        let available = requiredB - creditA / 2
         XCTAssertGreaterThanOrEqual(available, requiredA)
         XCTAssertLessThan(available, requiredB)
-        XCTAssertGreaterThanOrEqual(available + requiredA, requiredB)
+        XCTAssertGreaterThanOrEqual(available + creditA, requiredB)
 
         for model in [modelA, modelB] {
             ExperimentalModelConsent.setGranted(true, for: model)
@@ -327,7 +337,7 @@ final class MemoryBudgeterProjectedAvailabilityTests: XCTestCase {
             }
         }
 
-        let metrics = ReclaimOnUnloadMetrics(base: available, bonus: requiredA, total: totalRAM)
+        let metrics = ReclaimOnUnloadMetrics(base: available, bonus: creditA, total: totalRAM)
         let inference = ProjectedAvailabilityStub(onUnload: { metrics.releaseBonus() })
         let manager = ModelLifecycleManager(
             inferenceService: inference,
@@ -364,8 +374,10 @@ final class MemoryBudgeterProjectedAvailabilityTests: XCTestCase {
         )
         let requiredA = try requiredHeadroom(for: modelA)
         let requiredC = try requiredHeadroom(for: modelC)
+        let creditA = MemoryBudgeter.reclaimableBytes(for: modelA)
+        XCTAssertEqual(creditA, MemoryBudgeter.deviceMeasuredFreedUnvalidatedTextBytes)
         let available = requiredA + 250_000_000
-        XCTAssertLessThan(available + requiredA, requiredC)
+        XCTAssertLessThan(available + creditA, requiredC)
 
         for model in [modelA, modelC] {
             ExperimentalModelConsent.setGranted(true, for: model)
@@ -376,7 +388,7 @@ final class MemoryBudgeterProjectedAvailabilityTests: XCTestCase {
             }
         }
 
-        let metrics = ReclaimOnUnloadMetrics(base: available, bonus: requiredA, total: totalRAM)
+        let metrics = ReclaimOnUnloadMetrics(base: available, bonus: creditA, total: totalRAM)
         let manager = ModelLifecycleManager(
             inferenceService: ProjectedAvailabilityStub(onUnload: { metrics.releaseBonus() }),
             memoryBudgeter: MemoryBudgeter(metrics: metrics),
@@ -517,9 +529,54 @@ func testTransientDipSettleRetryRecoversFirstLoad() async throws {
     let result = await manager.loadModel(target)
     XCTAssertEqual(result, .loaded)
     XCTAssertEqual(manager.activeModel?.id, target.id)
-    // Preflight(1) + pre-teardown dip(1) + settle retry(1) + pre-mmap(1)
-    // + post-load reserve(1).
-    XCTAssertEqual(metrics.processAvailableCallCount, 5)
+    // Preflight(1) + pre-teardown dip(1) + settle polls(3, stable on
+    // recovered high) + settled retry decision(1) + pre-mmap(1) +
+    // post-load reserve(1). Settle exits in ~200ms, not the old fixed 2s.
+    XCTAssertEqual(metrics.processAvailableCallCount, 8)
+}
+
+func testTeardownRecoveryExitsEarlyWhenHeadroomStable() async throws {
+    // Unified-sampler switch proof: with a 5s recovery cap but instantly
+    // stable headroom, teardown settles in 3 polls (~200ms) instead of
+    // burning the full 5s. Load A (4 samples, no teardown) + switch to B:
+    // preflight(1) + pre-teardown(1) + recovery settle(3) + pre-mmap(1) +
+    // post-load reserve(1) = 11 total. A blind wait would show 8 samples
+    // with a 5s wall; the count proves polling happened and exited early.
+    let modelA = makeImportedModel(
+        id: "hf-settle-a", baseBytes: 600_000_000,
+        mmprojBytes: nil, rawContext: 2_048, vision: false
+    )
+    let modelB = makeImportedModel(
+        id: "hf-settle-b", baseBytes: 2_000_000_000,
+        mmprojBytes: 200_000_000, rawContext: 32_768, vision: true
+    )
+    for model in [modelA, modelB] {
+        ExperimentalModelConsent.setGranted(true, for: model)
+    }
+    defer {
+        for model in [modelA, modelB] {
+            ExperimentalModelConsent.setGranted(false, for: model)
+        }
+    }
+    let requiredB = try requiredHeadroom(for: modelB)
+    let high = requiredB + 200_000_000
+    let metrics = DipRecoveryMetrics(values: [high], total: totalRAM)
+    let manager = ModelLifecycleManager(
+        inferenceService: ProjectedAvailabilityStub(onUnload: {}),
+        memoryBudgeter: MemoryBudgeter(metrics: metrics),
+        loadSafetyStore: try LoadSafetyStore(
+            directory: FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString)
+        ),
+        availabilityProvider: { _ in .ready },
+        recoveryDelay: .seconds(5)
+    )
+    let loadedA = await manager.loadModel(modelA)
+    XCTAssertEqual(loadedA, .loaded)
+    let switched = await manager.switchToModel(modelB)
+    XCTAssertEqual(switched, .loaded)
+    XCTAssertEqual(manager.activeModel?.id, modelB.id)
+    XCTAssertEqual(metrics.processAvailableCallCount, 11)
 }
 
 func testPreMmapDipSettleRetryRecoversAfterTeardown() async throws {
@@ -556,7 +613,10 @@ func testPreMmapDipSettleRetryRecoversAfterTeardown() async throws {
     let result = await manager.loadModel(target)
     XCTAssertEqual(result, .loaded)
     XCTAssertEqual(manager.activeModel?.id, target.id)
-    XCTAssertEqual(metrics.processAvailableCallCount, 5)
+    // Preflight(1) + pre-teardown(1) + pre-mmap dip(1) + settle polls(3,
+    // stable on recovered high) + settled retry decision(1) + post-load
+    // reserve(1). Settle exits in ~200ms, not the old fixed 2s.
+    XCTAssertEqual(metrics.processAvailableCallCount, 8)
 }
 
 func testPreMmapRefusalStaysBareAfterTeardown() async throws {
@@ -581,6 +641,113 @@ func testPreMmapRefusalStaysBareAfterTeardown() async throws {
     XCTAssertTrue(decision.alertMessage(modelName: "Target", priorActive: prior).contains("unloading it first"))
     // Post-teardown (nil prior): bare headroom message.
     XCTAssertFalse(decision.alertMessage(modelName: "Target", priorActive: nil).contains("unloading it first"))
+}
+
+func testSmolmPriorCreditEqualsMeasuredFreed() async throws {
+    // Truth-matched (iPhone 5A3DC1B6, fresh signed DEBUG 23:35 UTC): SmolLM2-135M
+    // 100MB text ctx4096 peaks 1081909333 and requires 2150000000, but teardown
+    // freed 4390984 (mmap base + untouched ctx never resident, ~247x fantasy).
+    // Credit is min(peak, measured) so projected == post-teardown raw.
+    let smol = makeImportedModel(id: "hf-smolm-135m", baseBytes: 100_000_000, mmprojBytes: nil, rawContext: 4096, vision: false)
+    let profile = try XCTUnwrap(MemoryProfileRegistry.profile(for: smol))
+    XCTAssertEqual(profile.measuredLoadDeltaBytes, 1_081_909_333)
+    XCTAssertEqual(try profile.experimentalRequiredProcessHeadroomBytes(), 2_150_000_000)
+    XCTAssertEqual(MemoryBudgeter.reclaimableBytes(for: smol), 4_390_984)
+    XCTAssertEqual(MemoryBudgeter.reclaimableBytes(for: smol), MemoryBudgeter.deviceMeasuredFreedUnvalidatedTextBytes)
+    XCTAssertEqual(MemoryBudgeter.reclaimableCreditDetails(for: smol).evidenceStatus, "unvalidated")
+}
+
+func testSmolmPriorSwitchRefusesPreTeardownPreservingResident() async throws {
+    // Device replication: SmolLM resident raw 3396418280 + freed 4390984 =
+    // 3400809264 < qwen-required 3450000000 (miss ~49M). Pre-gate refuses with
+    // the resident preserved — no teardown-then-restore (unloadCount stays 0).
+    let smol = makeImportedModel(id: "hf-smolm-truth-a", baseBytes: 100_000_000, mmprojBytes: nil, rawContext: 4096, vision: false)
+    let qwen = makeImportedModel(id: "hf-qwen-truth-b", baseBytes: 2_500_000_000, mmprojBytes: 250_000_000, rawContext: 4096, vision: true)
+    let requiredA = try requiredHeadroom(for: smol)
+    let requiredB = try requiredHeadroom(for: qwen)
+    XCTAssertEqual(requiredB, 3_450_000_000)
+    let creditA = MemoryBudgeter.reclaimableBytes(for: smol)
+    XCTAssertEqual(creditA, 4_390_984)
+    let available: UInt64 = 3_396_418_280
+    XCTAssertGreaterThanOrEqual(available, requiredA)
+    XCTAssertLessThan(available, requiredB)
+    XCTAssertEqual(available + creditA, 3_400_809_264)
+    XCTAssertLessThan(available + creditA, requiredB)
+    for model in [smol, qwen] { ExperimentalModelConsent.setGranted(true, for: model) }
+    defer { for model in [smol, qwen] { ExperimentalModelConsent.setGranted(false, for: model) } }
+    let metrics = ReclaimOnUnloadMetrics(base: available, bonus: creditA, total: totalRAM)
+    let store = try LoadSafetyStore(directory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
+    let stub = ProjectedAvailabilityStub(onUnload: { metrics.releaseBonus() })
+    let manager = ModelLifecycleManager(inferenceService: stub, memoryBudgeter: MemoryBudgeter(metrics: metrics), loadSafetyStore: store, availabilityProvider: { _ in .ready }, recoveryDelay: .zero)
+    let loadedSmol = await manager.loadModel(smol)
+    XCTAssertEqual(loadedSmol, .loaded)
+    guard case .failed(let failure) = await manager.switchToModel(qwen) else { return XCTFail("tight switch must refuse pre-teardown") }
+    XCTAssertEqual(failure.kind, .insufficientMemory)
+    XCTAssertEqual(manager.activeModel?.id, smol.id)
+    XCTAssertEqual(manager.currentState, .loaded)
+    XCTAssertTrue(manager.showInsufficientMemoryWarning)
+    let unloadCount = await stub.unloadCount
+    XCTAssertEqual(unloadCount, 0)
+}
+
+func testGemmaPriorCreditEqualsMeasuredFreed() async {
+    // Truth-matched (iPhone 5A3DC1B6, fresh signed DEBUG 23:35 UTC): gemma-4-e2b-q4
+    // teardown freed 736381808 (raw 2756243512->3492625320). Validated credit is
+    // min(required 1750000000, measured) — 2.4x fantasy removed, verdict unchanged.
+    let gemma = ModelRegistry.gemma4_e2b
+    XCTAssertEqual(MemoryBudgeter.reclaimableBytes(for: gemma), 736_381_808)
+    XCTAssertEqual(MemoryBudgeter.reclaimableBytes(for: gemma), MemoryBudgeter.deviceMeasuredFreedValidatedVisionBytes)
+    XCTAssertEqual(MemoryBudgeter.reclaimableCreditDetails(for: gemma).evidenceStatus, "validated")
+}
+
+func testGemmaPriorSwitchAdmitsMatchingDevice() async throws {
+    // Device replication: gemma resident raw 2756243512 + freed 736381808 =
+    // 3492625320 >= qwen-required 3450000000 → pre-gate unloadCurrentFirst,
+    // post-teardown raw admits. Direct==manual.
+    let gemma = ModelRegistry.gemma4_e2b
+    let qwen = makeImportedModel(id: "hf-qwen-truth-gb", baseBytes: 2_500_000_000, mmprojBytes: 250_000_000, rawContext: 4096, vision: true)
+    let requiredB = try requiredHeadroom(for: qwen)
+    XCTAssertEqual(requiredB, 3_450_000_000)
+    let creditGemma = MemoryBudgeter.reclaimableBytes(for: gemma)
+    XCTAssertEqual(creditGemma, 736_381_808)
+    let available: UInt64 = 2_756_243_512
+    XCTAssertLessThan(available, requiredB)
+    XCTAssertEqual(available + creditGemma, 3_492_625_320)
+    XCTAssertGreaterThanOrEqual(available + creditGemma, requiredB)
+    ExperimentalModelConsent.setGranted(true, for: qwen)
+    defer { ExperimentalModelConsent.setGranted(false, for: qwen) }
+    let metrics = ReclaimOnUnloadMetrics(base: available, bonus: creditGemma, total: totalRAM)
+    let store = try LoadSafetyStore(directory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
+    let stub = ProjectedAvailabilityStub(onUnload: { metrics.releaseBonus() })
+    let manager = ModelLifecycleManager(inferenceService: stub, memoryBudgeter: MemoryBudgeter(metrics: metrics), loadSafetyStore: store, availabilityProvider: { _ in .ready }, recoveryDelay: .zero)
+    let loadedGemma = await manager.loadModel(gemma)
+    XCTAssertEqual(loadedGemma, .loaded)
+    let switched = await manager.switchToModel(qwen)
+    XCTAssertEqual(switched, .loaded)
+    XCTAssertEqual(manager.activeModel?.id, qwen.id)
+}
+
+func testSmolmPriorTrueOOMStillRefuses() async throws {
+    // Same Smol prior, 14GB target: raw+credit(4M) still OOM pre and post, resident preserved.
+    let smol = makeImportedModel(id: "hf-smolm-oom-a", baseBytes: 100_000_000, mmprojBytes: nil, rawContext: 4096, vision: false)
+    let huge = makeImportedModel(id: "hf-smolm-oom-c", baseBytes: 14_000_000_000, mmprojBytes: nil, rawContext: 2048, vision: false)
+    let requiredA = try requiredHeadroom(for: smol)
+    let requiredC = try requiredHeadroom(for: huge)
+    let creditA = MemoryBudgeter.reclaimableBytes(for: smol)
+    XCTAssertEqual(creditA, MemoryBudgeter.deviceMeasuredFreedUnvalidatedTextBytes)
+    let available = requiredA + 250_000_000
+    XCTAssertLessThan(available + creditA, requiredC)
+    for model in [smol, huge] { ExperimentalModelConsent.setGranted(true, for: model) }
+    defer { for model in [smol, huge] { ExperimentalModelConsent.setGranted(false, for: model) } }
+    let metrics = ReclaimOnUnloadMetrics(base: available, bonus: creditA, total: totalRAM)
+    let store = try LoadSafetyStore(directory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
+    let stub = ProjectedAvailabilityStub(onUnload: { metrics.releaseBonus() })
+    let manager = ModelLifecycleManager(inferenceService: stub, memoryBudgeter: MemoryBudgeter(metrics: metrics), loadSafetyStore: store, availabilityProvider: { _ in .ready }, recoveryDelay: .zero)
+    let loadedSmol = await manager.loadModel(smol)
+    XCTAssertEqual(loadedSmol, .loaded)
+    guard case .failed(let failure) = await manager.switchToModel(huge) else { return XCTFail("true-OOM must refuse") }
+    XCTAssertEqual(failure.kind, .insufficientMemory)
+    XCTAssertEqual(manager.activeModel?.id, smol.id)
 }
 }
 

@@ -82,6 +82,63 @@ final class MemoryBudgeterTests: XCTestCase {
         XCTAssertFalse(formattedTotal.isEmpty)
     }
 
+    // MARK: - Stable settle (unified sampler for manual + switch paths)
+
+    /// Zero timeout returns one sample with no sleep (preserves `.zero`
+    /// recoveryDelay callers).
+    func testSettledAvailableZeroTimeoutSamplesOnce() async {
+        let metrics = CountingMemoryMetricsProvider(processAvailable: 3_000_000_000, total: 8_054_095_872)
+        let settled = await MemoryBudgeter(metrics: metrics).settledAvailable(timeout: .zero)
+        XCTAssertEqual(settled, 3_000_000_000)
+        XCTAssertEqual(metrics.processAvailableCallCount, 1)
+    }
+
+    /// Constant headroom is stable after exactly 3 polls (~200ms), not the
+    /// 5s cap — the teardown early-exit win.
+    func testSettledAvailableStableExitsEarly() async {
+        let metrics = FlakyMemoryMetricsProvider(values: [3_000_000_000], total: 8_054_095_872)
+        let settled = await MemoryBudgeter(metrics: metrics).settledAvailable(timeout: .seconds(5))
+        XCTAssertEqual(settled, 3_000_000_000)
+        XCTAssertEqual(metrics.processAvailableCallCount, 3)
+    }
+
+    /// A 700MB dip-to-recovery resets the streak mid-poll, then stabilizes
+    /// on the recovered value: low,low→streak, high→reset, high,high→stable.
+    func testSettledAvailableRidesDipToRecovery() async {
+        let low: UInt64 = 2_000_000_000
+        let high: UInt64 = 2_700_000_000
+        let metrics = FlakyMemoryMetricsProvider(values: [low, low, high, high, high], total: 8_054_095_872)
+        let settled = await MemoryBudgeter(metrics: metrics).settledAvailable(timeout: .seconds(2))
+        XCTAssertEqual(settled, high)
+        XCTAssertEqual(metrics.processAvailableCallCount, 5)
+    }
+
+    /// Never-stable oscillation returns the last sample on timeout (callers
+    /// fail closed on it as today). Count lower-bounded — wall-clock sleep
+    /// overshoot can only reduce polls, never stabilize them.
+    func testSettledAvailableTimeoutReturnsLastSample() async {
+        let low: UInt64 = 2_000_000_000
+        let high: UInt64 = 2_700_000_000
+        let values: [UInt64] = [low, high, low, high, low, high, low, high]
+        let metrics = FlakyMemoryMetricsProvider(values: values, total: 8_054_095_872)
+        let settled = await MemoryBudgeter(metrics: metrics).settledAvailable(timeout: .milliseconds(300))
+        let count = metrics.processAvailableCallCount
+        XCTAssertGreaterThanOrEqual(count, 3)
+        XCTAssertEqual(settled, values[min(count, values.count) - 1])
+    }
+
+    /// Wrapper shape: settle polls (3) + one fresh single-sample decision.
+    func testSettledDecisionResamplesAfterSettle() async {
+        let metrics = CountingMemoryMetricsProvider(processAvailable: 4_000_000_000, total: 8_054_095_872)
+        let decision = await MemoryBudgeter(metrics: metrics).settledDecision(
+            for: ModelRegistry.gemma4_e2b,
+            allowUnvalidatedCalibration: true,
+            timeout: .seconds(5)
+        )
+        XCTAssertEqual(decision.recommendation, .proceed)
+        XCTAssertEqual(metrics.processAvailableCallCount, 4)
+    }
+
     // MARK: - P1-1 stale sample retry-once
 
     /// A transient zero sample retries once and recovers when headroom

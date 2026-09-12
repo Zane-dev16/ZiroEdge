@@ -91,7 +91,7 @@ enum MemoryDiagnosticWorkload {
         progress("workload-cycles")
         if lifecycleManager.isModelLoaded {
             await lifecycleManager.unloadCurrentModel()
-            try await Task.sleep(for: .seconds(5))
+            await settlePostUnload()
         }
         let sampling = SamplingConfig(
             temperature: 0, topP: 1, topK: 1, maxTokens: 16, repeatPenalty: 1
@@ -138,7 +138,7 @@ enum MemoryDiagnosticWorkload {
                 await lifecycleManager.unloadCurrentModel()
             }
 
-            try await Task.sleep(for: .seconds(5))
+            await settlePostUnload()
             recorder.setContext(cycle: cycle, phase: "post-unload-recovery")
             let recovery = MemorySnapshotReader.capture(.recovery)
             recorder.persist(recovery)
@@ -184,8 +184,15 @@ enum MemoryDiagnosticWorkload {
             try validate(response: try await collect(vision), label: "warm-up image")
         }
         await lifecycleManager.unloadCurrentModel()
-        try await Task.sleep(for: .seconds(5))
+        await settlePostUnload()
         try requireNoBreach(breach)
+    }
+
+    /// Unified stable-settle for post-unload recovery captures: same data,
+    /// less wall time when headroom plateaus early. Bounded at 5s (identical
+    /// worst case to the fixed sleep it replaces).
+    private static func settlePostUnload() async {
+        _ = await MemoryBudgeter().settledAvailable(timeout: .seconds(5))
     }
 
     private static func runPrompts(

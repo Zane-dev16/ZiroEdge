@@ -262,6 +262,11 @@ final class ModelLifecycleManager: ObservableObject {
     /// Pass `userInitiated: true` only for explicit user actions (Settings →
     /// Unload Model); those record `isUserUnloaded` so the deferred auto-loader
     /// does not reload the model behind the user's back.
+    /// Fire-and-return by design (UI must not block): there is no programmatic
+    /// settle here. Any post-manual-unload sampler (next preflight already
+    /// resamples fresh; future gates, diagnostics) must use the unified
+    /// `MemoryBudgeter.settledAvailable(timeout:)` primitive instead of an
+    /// ad-hoc sleep.
     @discardableResult
     func unloadCurrentModel(userInitiated: Bool = false) async -> Bool {
         let unloadStarted = ContinuousClock.now
@@ -451,7 +456,8 @@ final class ModelLifecycleManager: ObservableObject {
         let overrideFlag = override ? 1 : 0
         logger.info("Load gate \(phase, privacy: .public) model=\(model.id, privacy: .public) consent=\(consentFlag, privacy: .public) override=\(overrideFlag, privacy: .public)")
         logger.info("Load gate reclaim=\(reclaimable, privacy: .public) prior=\(priorID, privacy: .public) evidence=\(creditEvidence, privacy: .public)")
-        print("[SWITCH-PROOF-GATE] phase=\(phase) model=\(model.id) consent=\(consentFlag) override=\(overrideFlag) reclaimable=\(reclaimable) prior=\(priorID) evidence=\(creditEvidence) profile=\(MemoryProfileRegistry.profile(for: model)?.id ?? "nil")")
+        print("[SWITCH-PROOF-GATE] phase=\(phase) model=\(model.id) consent=\(consentFlag) override=\(overrideFlag) " +
+            "reclaimable=\(reclaimable) prior=\(priorID) evidence=\(creditEvidence) profile=\(MemoryProfileRegistry.profile(for: model)?.id ?? "nil")")
     }
 
     /// Refusal cause log (Fix verify a+b): distinguishes consent-missing
@@ -476,11 +482,13 @@ final class ModelLifecycleManager: ObservableObject {
 
     /// Settle-once for transient dips (Fix verify c): when the first sample
     /// misses on headroom but the shortfall fits inside
-    /// `transientDipSettleWindowBytes`, wait 1s (10×100ms, cancellable +
-    /// epoch-checked) and resample once with identical inputs. Returns the
-    /// second decision, or nil when no retry was warranted (pass, non-headroom
-    /// refusal, or large shortfall). Callers re-check cancel/epoch and adopt
-    /// the returned decision.
+    /// `transientDipSettleWindowBytes`, wait up to `transientDipSettleTimeout`
+    /// for settled headroom (100ms polls, 3 consecutive samples within ±50MB)
+    /// and resample once with identical inputs. Returns the second decision,
+    /// or nil when no retry was warranted (pass, non-headroom refusal, or
+    /// large shortfall). Callers re-check cancel/epoch and adopt the returned
+    /// decision. Bounded and epoch-checked at the call site; a stale epoch
+    /// wastes at most the timeout, never loads stale.
     private func settleResampleForTransientDip(
         _ model: AIModel, loadEpoch: UInt64, priorActive: AIModel?,
         allow: Bool, reclaimable: UInt64,
@@ -495,23 +503,17 @@ final class ModelLifecycleManager: ObservableObject {
             return nil
         }
         logger.info("Load \(phase, privacy: .public) transient dip settle model=\(model.id, privacy: .public) shortfall=\(shortfall, privacy: .public) \(first.logSummary, privacy: .public)")
-        print("[SWITCH-PROOF-SETTLE] phase=\(phase) model=\(model.id) shortfall=\(shortfall) raw=\(first.processAvailableBytes) projected=\(first.projectedAvailableBytes.map(String.init) ?? "nil") reclaimable=\(first.reclaimableBytes.map(String.init) ?? "nil") required=\(first.requiredBytes.map(String.init) ?? "nil") profile=\(first.profileID ?? "nil")")
-        let start = ContinuousClock.now
-        let chunk: Duration = .milliseconds(100)
-        while start.duration(to: .now) < .seconds(1) {
-            if Task.isCancelled { return nil }
-            guard loadEpoch == safetyEpoch else { return nil }
-            do {
-                try await Task.sleep(for: chunk)
-            } catch {
-                return nil
-            }
-        }
-        guard loadEpoch == safetyEpoch, !Task.isCancelled else { return nil }
-        let second = await memoryBudgeter.decision(
+        print("[SWITCH-PROOF-SETTLE] phase=\(phase) model=\(model.id) shortfall=\(shortfall) raw=\(first.processAvailableBytes) " +
+            "projected=\(first.projectedAvailableBytes.map(String.init) ?? "nil") " +
+            "reclaimable=\(first.reclaimableBytes.map(String.init) ?? "nil") required=\(first.requiredBytes.map(String.init) ?? "nil") profile=\(first.profileID ?? "nil")")
+        if Task.isCancelled { return nil }
+        guard loadEpoch == safetyEpoch else { return nil }
+        let second = await memoryBudgeter.settledDecision(
             for: model, allowUnvalidatedCalibration: allow,
-            reclaimableBytes: reclaimable
+            reclaimableBytes: reclaimable,
+            timeout: MemoryBudgeter.transientDipSettleTimeout
         )
+        guard loadEpoch == safetyEpoch, !Task.isCancelled else { return nil }
         logger.info("Load \(phase, privacy: .public) post-settle resample model=\(model.id, privacy: .public) \(second.logSummary, privacy: .public)")
         print("[SWITCH-PROOF-RESAMPLE] phase=\(phase) model=\(model.id) \(second.logSummary)")
         return second
@@ -643,24 +645,23 @@ extension ModelLifecycleManager {
         }
         activeModel = nil
         currentState = .loading
-        let sleepStart = ContinuousClock.now
-        let chunk: Duration = .milliseconds(100)
-        while sleepStart.duration(to: .now) < recoveryDelay {
-            if Task.isCancelled {
-                logger.info("Load recovery sleep cancelled \(model.id, privacy: .public)")
-                return await invalidateLoadAttempt()
-            }
-            guard loadEpoch == safetyEpoch else {
-                logger.info("Load recovery sleep invalidated by epoch \(model.id, privacy: .public)")
-                return await invalidateLoadAttempt()
-            }
-            do {
-                try await Task.sleep(for: chunk)
-            } catch {
-                logger.info("Load recovery sleep interrupted \(model.id, privacy: .public)")
-                return await invalidateLoadAttempt()
-            }
+        // Stable-settle recovery (unified sampler): early exit when headroom
+        // plateaus (~300ms when teardown freed synchronously — the ~4s win),
+        // bounded by recoveryDelay (identical worst case). Deferred drains
+        // that trickle under the 50MB threshold exit early at a depressed
+        // level and are caught by the pre-mmap dip settle. Cancel/epoch are
+        // re-checked below; a stale epoch wastes at most recoveryDelay.
+        if Task.isCancelled {
+            logger.info("Load recovery cancelled before settle \(model.id, privacy: .public)")
+            return await invalidateLoadAttempt()
         }
+        guard loadEpoch == safetyEpoch else {
+            logger.info("Load recovery invalidated before settle \(model.id, privacy: .public)")
+            return await invalidateLoadAttempt()
+        }
+        let settledHeadroom = await memoryBudgeter.settledAvailable(timeout: recoveryDelay)
+        logger.info("Load recovery settled \(model.id, privacy: .public) headroom=\(settledHeadroom, privacy: .public)")
+        print("[SWITCH-PROOF-SETTLE] phase=recovery model=\(model.id) settledHeadroom=\(settledHeadroom)")
         guard loadEpoch == safetyEpoch else {
             logger.info("Load recovery completed stale \(model.id, privacy: .public)")
             return await invalidateLoadAttempt()
