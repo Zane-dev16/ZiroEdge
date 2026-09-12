@@ -13,7 +13,6 @@
 		05FACA1BAFCEBCC00068C1C1 /* OfflineAvailabilityGuardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C370395081D6057CD7D3527 /* OfflineAvailabilityGuardTests.swift */; };
 		082083A91DCB47AD8F5BE766 /* VisionUpdateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0B793EBC94CEA8A7AF226C2 /* VisionUpdateTests.swift */; };
 		0A51F360698083B7F01DA0F4 /* DesignSystemGallery.swift in Sources */ = {isa = PBXBuildFile; fileRef = E062782C2D43D2D7302B9723 /* DesignSystemGallery.swift */; };
-		C8F3B02D5E6A71829304B5C6 /* MemoryBudgeterProjectedAvailabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7E2A91C4D5F60718293A4B5 /* MemoryBudgeterProjectedAvailabilityTests.swift */; };
 		0AEEB732E41AE9B81B1DA740 /* MemoryBudgeterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA32FFB006B54EC9A7AA1AE3 /* MemoryBudgeterTests.swift */; };
 		0BE423B5A97E9397BFF5A6A5 /* VisionRejectionRepairTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC832BC073DA224EAC3043C9 /* VisionRejectionRepairTests.swift */; };
 		0BE81C9F26FCB05EE59DB97F /* FeatureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FCCF0D82DDD2F2FBD620E4D /* FeatureTests.swift */; };
@@ -124,6 +123,7 @@
 		A6BFB329093AA285F5DCF43A /* DownloadDiagnosticTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4355AE96D37D59B2FBFDF22A /* DownloadDiagnosticTests.swift */; };
 		A7D75C0B2416EB94A57A5EFE /* SubmissionReadinessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F953201BFB4B0AD8951C7C0 /* SubmissionReadinessTests.swift */; };
 		ABC75ECFE9B718E50E65ABF4 /* ImportedModelRemovalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D66A96AD442283F14D85289 /* ImportedModelRemovalTests.swift */; };
+		AD81FF605E10050D06DF93B6 /* MemoryBudgeterProjectedAvailabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8005CD877DE8B066200094B7 /* MemoryBudgeterProjectedAvailabilityTests.swift */; };
 		ADE41702B11C41C501DA7E9B /* ChatModelLoading.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B3EBD96D1A84F9B355A86CA /* ChatModelLoading.swift */; };
 		B0CEFD48BF993CC90231A6F4 /* ArtifactIntegrityPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2CCBC4F78D6A52EE53FEDB34 /* ArtifactIntegrityPresentation.swift */; };
 		B107C06996350199C4943D6B /* ModelStorageReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C8A96ED44CAFCEFDA26814C /* ModelStorageReader.swift */; };
@@ -151,6 +151,7 @@
 		CB30803F11D3A9255232B707 /* DownloadManager+ChunkedTransfer.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF9634AB8C0600B65BC95F5B /* DownloadManager+ChunkedTransfer.swift */; };
 		CC64D91E0BB3257514396627 /* ImportedModelLoadFailureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C78E5C9EFE0C3FDFCE037A38 /* ImportedModelLoadFailureTests.swift */; };
 		CD2E2C1554EF8A5745230EF4 /* DurableTransferState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 577A7CCF064BE0B80C174A04 /* DurableTransferState.swift */; };
+		CD3EC3A5A820E29D9B1939DE /* ZiroConfirmationModal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FD606BCD8620284E888FB0D /* ZiroConfirmationModal.swift */; };
 		CF51A00CD41EC6EC22973967 /* DownloadManager+ResumePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FD0AAEBE3AAAE2A0F4DC248 /* DownloadManager+ResumePolicy.swift */; };
 		D09DC02B214501F24A7EBD80 /* ModelMigrationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC14064A3EB475793BC2A21E /* ModelMigrationService.swift */; };
 		D26F8126CA19402867419108 /* SwiftLlama in Frameworks */ = {isa = PBXBuildFile; productRef = 274CD038517DAD0AD555717B /* SwiftLlama */; };
@@ -286,6 +287,8 @@
 		7CF2F4E5A5D4F8C6550321F9 /* ModelAvailabilitySurfaceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelAvailabilitySurfaceTests.swift; sourceTree = "<group>"; };
 		7DDE172A4D2ECAC5AA71B1A5 /* SmokeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmokeTests.swift; sourceTree = "<group>"; };
 		7F52B00138CB2DC2FC76F4FB /* TitleGeneratorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TitleGeneratorTests.swift; sourceTree = "<group>"; };
+		7FD606BCD8620284E888FB0D /* ZiroConfirmationModal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZiroConfirmationModal.swift; sourceTree = "<group>"; };
+		8005CD877DE8B066200094B7 /* MemoryBudgeterProjectedAvailabilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryBudgeterProjectedAvailabilityTests.swift; sourceTree = "<group>"; };
 		816C6B541E5012339E31CAB1 /* ConversationHistoryEligibilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationHistoryEligibilityTests.swift; sourceTree = "<group>"; };
 		837D4E9D79793ABF9EBE0FAE /* UITestBase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UITestBase.swift; sourceTree = "<group>"; };
 		88792D168F3E659743414DEC /* VariantPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VariantPickerView.swift; sourceTree = "<group>"; };
@@ -363,7 +366,6 @@
 		F67BD152E0DC074B8709CED4 /* ImportedModelRelaunchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportedModelRelaunchTests.swift; sourceTree = "<group>"; };
 		F7D23A8928B6ADDC443C1B88 /* MemoryDiagnosticWorkload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryDiagnosticWorkload.swift; sourceTree = "<group>"; };
 		FA11FB2B95E2879D6042772E /* StoreMigrationRoundTripTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreMigrationRoundTripTests.swift; sourceTree = "<group>"; };
-		B7E2A91C4D5F60718293A4B5 /* MemoryBudgeterProjectedAvailabilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryBudgeterProjectedAvailabilityTests.swift; sourceTree = "<group>"; };
 		FA32FFB006B54EC9A7AA1AE3 /* MemoryBudgeterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryBudgeterTests.swift; sourceTree = "<group>"; };
 		FB6503688D985EAD5140D5FA /* ModelMigrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelMigrationTests.swift; sourceTree = "<group>"; };
 		FC62F9915166C3A428F2A879 /* BackgroundDownloadLifecycle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundDownloadLifecycle.swift; sourceTree = "<group>"; };
@@ -448,6 +450,7 @@
 				9B97EFCBFFC3BE0B802BFD9D /* StoreRecoveryView.swift */,
 				88792D168F3E659743414DEC /* VariantPickerView.swift */,
 				59234447F37B21E05FBA7DCE /* ZiroBrand.swift */,
+				7FD606BCD8620284E888FB0D /* ZiroConfirmationModal.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -589,7 +592,7 @@
 				9F994B2F8449881F6ED4EF1C /* LaunchSplashAssetTests.swift */,
 				5D861E7A20FC93579F190D59 /* LoadSafetyStoreTests.swift */,
 				A2802F283B93429E948CFE33 /* MarkdownRendererTests.swift */,
-				B7E2A91C4D5F60718293A4B5 /* MemoryBudgeterProjectedAvailabilityTests.swift */,
+				8005CD877DE8B066200094B7 /* MemoryBudgeterProjectedAvailabilityTests.swift */,
 				FA32FFB006B54EC9A7AA1AE3 /* MemoryBudgeterTests.swift */,
 				5C5937410B77B1BB0FDAB55D /* MemoryProfileTests.swift */,
 				6A046763BADD4035DD881049 /* ModelArtifactVerificationTests.swift */,
@@ -835,7 +838,7 @@
 				33E675D6B07DEC2F78ED4C3A /* LaunchSplashAssetTests.swift in Sources */,
 				1240A6F4A0B7F0AADB9B9E85 /* LoadSafetyStoreTests.swift in Sources */,
 				83281F88D1F376A58A6C4B8E /* MarkdownRendererTests.swift in Sources */,
-				C8F3B02D5E6A71829304B5C6 /* MemoryBudgeterProjectedAvailabilityTests.swift in Sources */,
+				AD81FF605E10050D06DF93B6 /* MemoryBudgeterProjectedAvailabilityTests.swift in Sources */,
 				0AEEB732E41AE9B81B1DA740 /* MemoryBudgeterTests.swift in Sources */,
 				72B6CD7D80D7D692F3946FF3 /* MemoryProfileTests.swift in Sources */,
 				2AF4641A42A954EE91752FE5 /* ModelArtifactVerificationTests.swift in Sources */,
@@ -976,6 +979,7 @@
 				39E3DCECC70EB675F9230399 /* VisionPairCandidate.swift in Sources */,
 				037DA5D4FB0AA7FDAF764E2D /* VisionPairResolver.swift in Sources */,
 				23A53A450008E51071A272C6 /* ZiroBrand.swift in Sources */,
+				CD3EC3A5A820E29D9B1939DE /* ZiroConfirmationModal.swift in Sources */,
 				B298DF37B1DEC3EAC1F7A6F4 /* ZiroEdgeApp.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

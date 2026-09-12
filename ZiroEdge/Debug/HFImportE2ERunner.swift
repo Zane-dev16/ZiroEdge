@@ -409,6 +409,7 @@ enum SwitchProofRunner {
 
     private struct Parsed {
         var qwenID = "hf-ec6e37fe3e99bf0d922fe1fc"
+        var priorID: String? = nil
     }
 
     private static func parse(_ arguments: [String]) -> Parsed {
@@ -416,6 +417,10 @@ enum SwitchProofRunner {
         if let idx = arguments.firstIndex(of: "--switch-proof-qwen-id"),
            arguments.indices.contains(idx + 1) {
             p.qwenID = arguments[idx + 1]
+        }
+        if let idx = arguments.firstIndex(of: "--switch-proof-prior-id"),
+           arguments.indices.contains(idx + 1) {
+            p.priorID = arguments[idx + 1]
         }
         return p
     }
@@ -441,7 +446,7 @@ enum SwitchProofRunner {
 
     private static func execute(services: RuntimeServices, arguments: [String]) async {
         let parsed = parse(arguments)
-        emit("BEGIN qwenID=\(parsed.qwenID) args=\(sanitize(arguments.joined(separator: " ")))")
+        emit("BEGIN qwenID=\(parsed.qwenID) priorID=\(parsed.priorID ?? "nil") args=\(sanitize(arguments.joined(separator: " ")))")
         for _ in 0..<240 where services.lifecycleManager.isLoadAttemptInFlight {
             try? await Task.sleep(for: .milliseconds(250))
         }
@@ -454,6 +459,24 @@ enum SwitchProofRunner {
             return
         }
         let gemma = ModelRegistry.gemma4_e2b
+        // Retry narrow: optional SmolLM prior via --switch-proof-prior-id.
+        // Nil/unknown falls back to gemma (regression path).
+        let priorWant: AIModel = {
+            if let pid = parsed.priorID, let m = ModelRegistry.model(for: pid) { return m }
+            return gemma
+        }()
+        if let pid = parsed.priorID {
+            guard ModelRegistry.model(for: pid) != nil else {
+                let avail = ModelRegistry.importedModels.map { $0.id }.joined(separator: ",")
+                emit("FAILURE step=prior-lookup reason=prior id not found pid=\(pid) available=[\(avail)]")
+                emit("SWITCH_PROOF_JSON: {\"switchAdmitted\":false,\"alertText\":\"prior lookup failed\",\"done\":false}")
+                return
+            }
+            ExperimentalModelConsent.setGranted(true, for: priorWant)
+            let pg = ExperimentalModelConsent.isGranted(for: priorWant)
+            let pp = MemoryProfileRegistry.profile(for: priorWant)
+            emit("PRIOR_CONSENT granted=\(pg) profile=\(pp?.id ?? "nil") eligibility=\(priorWant.runtimeEligibility) model=\(priorWant.id)")
+        }
 
         ExperimentalModelConsent.setGranted(true, for: qwen)
         let granted = ExperimentalModelConsent.isGranted(for: qwen)
@@ -465,14 +488,14 @@ enum SwitchProofRunner {
             return
         }
 
-        emit("RESIDENT want=\(gemma.id) current=\(services.lifecycleManager.activeModel?.id ?? "nil") state=\(services.lifecycleManager.currentState)")
-        if services.lifecycleManager.activeModel?.id != gemma.id || !services.lifecycleManager.isModelLoaded {
+        emit("RESIDENT want=\(priorWant.id) current=\(services.lifecycleManager.activeModel?.id ?? "nil") state=\(services.lifecycleManager.currentState)")
+        if services.lifecycleManager.activeModel?.id != priorWant.id || !services.lifecycleManager.isModelLoaded {
             for _ in 0..<480 where services.lifecycleManager.isLoadAttemptInFlight {
                 try? await Task.sleep(for: .milliseconds(250))
             }
-            if services.lifecycleManager.activeModel?.id != gemma.id || !services.lifecycleManager.isModelLoaded {
-                emit("RESIDENT loading gemma…")
-                let r = await services.lifecycleManager.loadModel(gemma)
+            if services.lifecycleManager.activeModel?.id != priorWant.id || !services.lifecycleManager.isModelLoaded {
+                emit("RESIDENT loading prior=\(priorWant.id)…")
+                let r = await services.lifecycleManager.switchToModel(priorWant)
                 emit("RESIDENT_RESULT result=\(describeResult(r)) active=\(services.lifecycleManager.activeModel?.id ?? "nil") loaded=\(services.lifecycleManager.isModelLoaded)")
             } else {
                 emit("RESIDENT already-loaded after wait active=\(services.lifecycleManager.activeModel?.id ?? "nil")")
@@ -480,8 +503,8 @@ enum SwitchProofRunner {
         } else {
             emit("RESIDENT already-loaded")
         }
-        guard services.lifecycleManager.activeModel?.id == gemma.id, services.lifecycleManager.isModelLoaded else {
-            let msg = services.lifecycleManager.loadFailureMessage ?? services.lifecycleManager.insufficientMemoryMessage ?? "gemma residency failed"
+        guard services.lifecycleManager.activeModel?.id == priorWant.id, services.lifecycleManager.isModelLoaded else {
+            let msg = services.lifecycleManager.loadFailureMessage ?? services.lifecycleManager.insufficientMemoryMessage ?? "prior residency failed"
             emit("FAILURE step=resident reason=\(sanitize(msg))")
             emit("SWITCH_PROOF_JSON: {\"switchAdmitted\":false,\"alertText\":\"\(sanitize(msg))\",\"done\":false}")
             return
@@ -499,11 +522,11 @@ enum SwitchProofRunner {
         let totalPre = await services.memoryBudgeter.totalDeviceRAM()
         emit("PRECHECK target=\(qwen.id) profile=\(qprof?.id ?? "nil") allow=1 reclaimable=\(reclaimPre) creditProfile=\(creditPre.profileID ?? "nil") creditEvidence=\(creditPre.evidenceStatus ?? "nil") required=\(reqPre) raw=\(headroomPre) total=\(totalPre) prior=\(priorForCheck?.id ?? "nil")")
 
-        for i in 1...2 {
-            emit("SETTLE \(i)/2 begin sleep=10s")
+        for i in 1...3 {
+            emit("SETTLE \(i)/3 begin sleep=10s")
             try? await Task.sleep(for: .seconds(10))
             let h = await services.memoryBudgeter.appMemoryHeadroom()
-            emit("SETTLE \(i)/2 end headroom=\(h)")
+            emit("SETTLE \(i)/3 end headroom=\(h)")
         }
 
         emit("SWITCH_DIRECT_BEGIN target=\(qwen.id) prior=\(services.lifecycleManager.activeModel?.id ?? "nil")")
@@ -518,18 +541,18 @@ enum SwitchProofRunner {
         let switchAdmitted = (directActive == qwen.id && directLoaded)
         emit("SWITCH_DIRECT_ADMITTED admitted=\(switchAdmitted)")
 
-        emit("CONTROL_BEGIN")
+        emit("CONTROL_BEGIN prior=\(priorWant.id)")
         if switchAdmitted {
-            emit("CONTROL_RESTORE_GEMMA begin")
-            let rr = await services.lifecycleManager.loadModel(gemma)
-            emit("CONTROL_RESTORE_GEMMA result=\(describeResult(rr)) active=\(services.lifecycleManager.activeModel?.id ?? "nil")")
+            emit("CONTROL_RESTORE_PRIOR begin target=\(priorWant.id)")
+            let rr = await services.lifecycleManager.loadModel(priorWant)
+            emit("CONTROL_RESTORE_PRIOR result=\(describeResult(rr)) active=\(services.lifecycleManager.activeModel?.id ?? "nil")")
             emit("CONTROL_RESTORE_SETTLE sleep=5s")
             try? await Task.sleep(for: .seconds(5))
         }
-        if services.lifecycleManager.activeModel?.id != gemma.id || !services.lifecycleManager.isModelLoaded {
-            emit("CONTROL_ENSURE_GEMMA loading gemma for control…")
-            let er = await services.lifecycleManager.loadModel(gemma)
-            emit("CONTROL_ENSURE_GEMMA result=\(describeResult(er)) active=\(services.lifecycleManager.activeModel?.id ?? "nil")")
+        if services.lifecycleManager.activeModel?.id != priorWant.id || !services.lifecycleManager.isModelLoaded {
+            emit("CONTROL_ENSURE_PRIOR loading prior=\(priorWant.id) for control…")
+            let er = await services.lifecycleManager.loadModel(priorWant)
+            emit("CONTROL_ENSURE_PRIOR result=\(describeResult(er)) active=\(services.lifecycleManager.activeModel?.id ?? "nil")")
         }
         emit("CONTROL_UNLOAD begin prior=\(services.lifecycleManager.activeModel?.id ?? "nil")")
         _ = await services.lifecycleManager.unloadCurrentModel()
