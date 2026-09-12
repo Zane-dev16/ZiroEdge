@@ -234,9 +234,14 @@ enum HFImportE2ERunner {
                 effectivePrompt = "Describe this image."
             }
         }
-        guard let imageData = services.chatViewModel.pendingImages.first,
-              UIImage(data: imageData) != nil || record.modelType != .vision else {
-            throw E2EFailure(step: baseStep + 4, reason: "pending image failed to decode")
+        // Text models send with no attachment: only vision requires a
+        // decodable pending image (the old unconditional guard made every
+        // text-model E2E fail here with "pending image failed to decode").
+        if record.modelType == .vision {
+            guard let imageData = services.chatViewModel.pendingImages.first,
+                  UIImage(data: imageData) != nil else {
+                throw E2EFailure(step: baseStep + 4, reason: "pending image failed to decode")
+            }
         }
         services.chatViewModel.inputText = effectivePrompt
         emit("SEND prompt=\"\(effectivePrompt)\" images=\(services.chatViewModel.pendingImages.count)", step: baseStep + 4)
