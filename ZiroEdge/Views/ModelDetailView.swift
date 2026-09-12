@@ -38,17 +38,6 @@ struct ModelDetailView: View {
         } message: {
             Text(viewModel.safetyResetMessage)
         }
-        .confirmationDialog(
-            "Cancel Download",
-            isPresented: $viewModel.showingCancelConfirmation
-        ) {
-            Button("Cancel Download", role: .destructive) {
-                viewModel.confirmCancelDownload()
-            }
-            Button("Keep Downloading", role: .cancel) {}
-        } message: {
-            Text("Cancelling stops the current transfer and removes its partial download data for \(viewModel.pendingCancelModel?.displayName ?? "this model").")
-        }
         // Dead-button fix (MEDIUM): `confirmDelete` failures set
         // `updateMessage` — without this binding they never surface.
         // Mirrors the SettingsPage deletion-failure alert verbatim.
@@ -571,6 +560,44 @@ private struct StorageProvenancePage: View {
         .listRowBackground(ZiroTheme.raisedBackground)
         .navigationTitle("Storage & Provenance")
         .navigationBarTitleDisplayMode(.inline)
+        // Delete/forget confirm must host here: the destructive button
+        // arms `showingDeleteConfirmation` on the shared view model, but
+        // this page is pushed two deep (Models → Detail → Storage), so the
+        // ModelsView overlay sits buried underneath and never surfaces.
+        .overlay(alignment: .center) {
+            if viewModel.showingDeleteConfirmation {
+                ZiroConfirmationModal(
+                    title: viewModel.pendingDeleteModel.map(viewModel.canForgetImport) == true ? "Forget Import" : "Delete Model",
+                    message: forgetOrDeleteMessage,
+                    confirmTitle: viewModel.pendingDeleteModel.map(viewModel.canForgetImport) == true ? "Forget Import" : "Delete",
+                    onConfirm: { Task { await viewModel.confirmDelete() } },
+                    onCancel: { viewModel.showingDeleteConfirmation = false }
+                )
+            }
+        }
+        // Cancel confirm must host here for the same reason: the Pause/Cancel
+        // rows below arm `showingCancelConfirmation` on the shared view model,
+        // but the Detail root sits buried underneath this pushed page.
+        // Mirrors the ModelsView cancel modal verbatim.
+        .overlay(alignment: .center) {
+            if viewModel.showingCancelConfirmation {
+                ZiroConfirmationModal(
+                    title: "Cancel Download",
+                    message: "Cancelling stops the current transfer and removes its partial download data for \(viewModel.pendingCancelModel?.displayName ?? "this model").",
+                    confirmTitle: "Cancel Download",
+                    cancelTitle: "Keep Downloading",
+                    onConfirm: { viewModel.confirmCancelDownload() },
+                    onCancel: { viewModel.showingCancelConfirmation = false }
+                )
+            }
+        }
+    }
+
+    private var forgetOrDeleteMessage: String {
+        if let model = viewModel.pendingDeleteModel, viewModel.canForgetImport(model) {
+            return "Forget \(model.displayName)? Its import record and unreferenced partial transfer data will be removed."
+        }
+        return "Delete \(viewModel.pendingDeleteModel?.displayName ?? "this model")? You can download it again later."
     }
 
     // MARK: Live Transfer
