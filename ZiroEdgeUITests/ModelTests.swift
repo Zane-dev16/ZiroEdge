@@ -5,6 +5,64 @@ import XCTest
 /// Uses whatever model is already on the device unless a specific one is named.
 final class ModelTests: UITestBase {
 
+    /// Regression: the Delete Model button arms `showingDeleteConfirmation`
+    /// on the shared view model, but the modal used to host only in
+    /// ModelsView — two pushes underneath — so the tap visibly did nothing.
+    /// Hermetic ready seeds llama32_3B as downloaded, which renders the
+    /// destructive section on the Storage page.
+    func testDeleteModelPresentsConfirmation() throws {
+        let hermeticApp = XCUIApplication()
+        hermeticApp.launchArguments = [
+            "--uitesting",
+            "--uitesting-hermetic-model",
+        ]
+        hermeticApp.launch()
+        app = hermeticApp
+
+        guard openModels(timeout: 15) else {
+            XCTFail("Failed to open Models page under hermetic flags")
+            return
+        }
+        let modelCell = app.cells.containing(
+            NSPredicate(format: "label CONTAINS 'Llama 3.2 3B'")
+        ).firstMatch
+        guard modelCell.waitForExistence(timeout: 5) else {
+            XCTFail("Llama 3.2 3B row missing on the Models page")
+            return
+        }
+        modelCell.tap()
+
+        let storageRow = app.cells.containing(
+            NSPredicate(format: "label CONTAINS 'Storage'")
+        ).firstMatch
+        guard storageRow.waitForExistence(timeout: 5) else {
+            XCTFail("Storage & Provenance row missing on the model detail page")
+            return
+        }
+        storageRow.tap()
+
+        let deleteButton = app.buttons.containing(
+            NSPredicate(format: "label CONTAINS 'Delete Model'")
+        ).firstMatch
+        guard deleteButton.waitForExistence(timeout: 5) else {
+            XCTFail("Delete Model button missing on the Storage page")
+            return
+        }
+        deleteButton.tap()
+
+        let modal = app.descendants(matching: .any)["confirmation-modal"].firstMatch
+        XCTAssertTrue(modal.waitForExistence(timeout: 5),
+                      "Delete Model must present the confirmation modal")
+        capture("delete_model_confirmation")
+        let cancel = app.descendants(matching: .any)["confirmation-cancel"].firstMatch
+        if cancel.waitForExistence(timeout: 5) {
+            cancel.tap()
+        }
+        sleep(1) // Wait for dismissal animation
+        XCTAssertFalse(modal.exists,
+                       "Cancelling the delete confirmation must dismiss the modal")
+    }
+
     /// Test that the first available model can be loaded and responds.
     func testInstalledModelResponds() throws {
         navigateTo(tab: "Models")
