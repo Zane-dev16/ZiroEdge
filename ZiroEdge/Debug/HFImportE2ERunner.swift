@@ -418,16 +418,16 @@ enum SwitchProofRunner {
     }
 
     private static func parse(_ arguments: [String]) -> Parsed {
-        var p = Parsed()
+        var parsedArgs = Parsed()
         if let idx = arguments.firstIndex(of: "--switch-proof-qwen-id"),
            arguments.indices.contains(idx + 1) {
-            p.qwenID = arguments[idx + 1]
+            parsedArgs.qwenID = arguments[idx + 1]
         }
         if let idx = arguments.firstIndex(of: "--switch-proof-prior-id"),
            arguments.indices.contains(idx + 1) {
-            p.priorID = arguments[idx + 1]
+            parsedArgs.priorID = arguments[idx + 1]
         }
-        return p
+        return parsedArgs
     }
 
     private static func emit(_ line: String) {
@@ -441,12 +441,49 @@ enum SwitchProofRunner {
             .replacingOccurrences(of: "\"", with: "\\\"")
     }
 
-    private static func describeResult(_ r: ModelLoadResult) -> String {
-        switch r {
+    private static func describeResult(_ result: ModelLoadResult) -> String {
+        switch result {
         case .loaded: return "loaded"
         case .alreadyLoaded: return "alreadyLoaded"
-        case .failed(let f): return "failed(kind=\(f.kind.rawValue) msg=\(sanitize(String(f.message.prefix(160)))))"
+        case .failed(let failure): return "failed(kind=\(failure.kind.rawValue) msg=\(sanitize(String(failure.message.prefix(160)))))"
         }
+    }
+
+    /// Control leg of the switch proof: unload everything, then load the
+    /// target cold. Extracted from execute so that function stays within
+    /// the body-length budget; behavior verbatim.
+    private static func runControlProof(services: RuntimeServices, qwen: AIModel, priorWant: AIModel, switchAdmitted: Bool) async -> Bool {
+        emit("CONTROL_BEGIN prior=\(priorWant.id)")
+        if switchAdmitted {
+            emit("CONTROL_RESTORE_PRIOR begin target=\(priorWant.id)")
+            let restoreResult = await services.lifecycleManager.loadModel(priorWant)
+            emit("CONTROL_RESTORE_PRIOR result=\(describeResult(restoreResult)) active=\(services.lifecycleManager.activeModel?.id ?? "nil")")
+            emit("CONTROL_RESTORE_SETTLE sleep=5s")
+            try? await Task.sleep(for: .seconds(5))
+        }
+        if services.lifecycleManager.activeModel?.id != priorWant.id || !services.lifecycleManager.isModelLoaded {
+            emit("CONTROL_ENSURE_PRIOR loading prior=\(priorWant.id) for control…")
+            let ensureResult = await services.lifecycleManager.loadModel(priorWant)
+            emit("CONTROL_ENSURE_PRIOR result=\(describeResult(ensureResult)) active=\(services.lifecycleManager.activeModel?.id ?? "nil")")
+        }
+        emit("CONTROL_UNLOAD begin prior=\(services.lifecycleManager.activeModel?.id ?? "nil")")
+        _ = await services.lifecycleManager.unloadCurrentModel()
+        emit("CONTROL_UNLOAD done active=\(services.lifecycleManager.activeModel?.id ?? "nil") state=\(services.lifecycleManager.currentState)")
+        try? await Task.sleep(for: .seconds(2))
+        let ctrlHeadroom = await services.memoryBudgeter.appMemoryHeadroom()
+        emit("CONTROL_PRELOAD headroom=\(ctrlHeadroom) prior=nil reclaimable=0")
+        emit("CONTROL_LOAD begin target=\(qwen.id)")
+        let ctrlResult = await services.lifecycleManager.loadModel(qwen)
+        try? await Task.sleep(for: .milliseconds(500))
+        let ctrlActive = services.lifecycleManager.activeModel?.id ?? "nil"
+        let ctrlLoaded = services.lifecycleManager.isModelLoaded
+        let ctrlWarn = services.lifecycleManager.showInsufficientMemoryWarning
+        let ctrlAlert = services.lifecycleManager.insufficientMemoryMessage ?? services.lifecycleManager.loadFailureMessage ?? ""
+        let ctrlShowFail = services.lifecycleManager.showLoadFailure
+        emit("CONTROL_RESULT result=\(describeResult(ctrlResult)) active=\(ctrlActive) loaded=\(ctrlLoaded) warn=\(ctrlWarn) showFail=\(ctrlShowFail) alert=\(sanitize(ctrlAlert))")
+        let ctrlAdmitted = (ctrlActive == qwen.id && ctrlLoaded)
+        emit("CONTROL_ADMITTED admitted=\(ctrlAdmitted)")
+        return ctrlAdmitted
     }
 
     private static func execute(services: RuntimeServices, arguments: [String]) async {
@@ -467,7 +504,7 @@ enum SwitchProofRunner {
         // Retry narrow: optional SmolLM prior via --switch-proof-prior-id.
         // Nil/unknown falls back to gemma (regression path).
         let priorWant: AIModel = {
-            if let pid = parsed.priorID, let m = ModelRegistry.model(for: pid) { return m }
+            if let pid = parsed.priorID, let priorModel = ModelRegistry.model(for: pid) { return priorModel }
             return gemma
         }()
         if let pid = parsed.priorID {
@@ -500,8 +537,8 @@ enum SwitchProofRunner {
             }
             if services.lifecycleManager.activeModel?.id != priorWant.id || !services.lifecycleManager.isModelLoaded {
                 emit("RESIDENT loading prior=\(priorWant.id)…")
-                let r = await services.lifecycleManager.switchToModel(priorWant)
-                emit("RESIDENT_RESULT result=\(describeResult(r)) active=\(services.lifecycleManager.activeModel?.id ?? "nil") loaded=\(services.lifecycleManager.isModelLoaded)")
+                let residentResult = await services.lifecycleManager.switchToModel(priorWant)
+                emit("RESIDENT_RESULT result=\(describeResult(residentResult)) active=\(services.lifecycleManager.activeModel?.id ?? "nil") loaded=\(services.lifecycleManager.isModelLoaded)")
             } else {
                 emit("RESIDENT already-loaded after wait active=\(services.lifecycleManager.activeModel?.id ?? "nil")")
             }
@@ -519,19 +556,22 @@ enum SwitchProofRunner {
         let creditPre = MemoryBudgeter.reclaimableCreditDetails(for: priorForCheck)
         let reqPre: String = {
             guard let pr = qprof else { return "nil" }
-            if let v = try? pr.experimentalRequiredProcessHeadroomBytes() { return String(v) }
-            if let v = try? pr.requiredProcessHeadroomBytes() { return String(v) }
+            if let requiredBytes = try? pr.experimentalRequiredProcessHeadroomBytes() { return String(requiredBytes) }
+            if let requiredBytes = try? pr.requiredProcessHeadroomBytes() { return String(requiredBytes) }
             return "nil-unvalidated"
         }()
         let headroomPre = await services.memoryBudgeter.appMemoryHeadroom()
         let totalPre = await services.memoryBudgeter.totalDeviceRAM()
-        emit("PRECHECK target=\(qwen.id) profile=\(qprof?.id ?? "nil") allow=1 reclaimable=\(reclaimPre) creditProfile=\(creditPre.profileID ?? "nil") creditEvidence=\(creditPre.evidenceStatus ?? "nil") required=\(reqPre) raw=\(headroomPre) total=\(totalPre) prior=\(priorForCheck?.id ?? "nil")")
+        let precheckLine = "PRECHECK target=\(qwen.id) profile=\(qprof?.id ?? "nil") allow=1 reclaimable=\(reclaimPre) " +
+            "creditProfile=\(creditPre.profileID ?? "nil") creditEvidence=\(creditPre.evidenceStatus ?? "nil") required=\(reqPre) " +
+            "raw=\(headroomPre) total=\(totalPre) prior=\(priorForCheck?.id ?? "nil")"
+        emit(precheckLine)
 
-        for i in 1...3 {
-            emit("SETTLE \(i)/3 begin sleep=10s")
+        for settleRound in 1...3 {
+            emit("SETTLE \(settleRound)/3 begin sleep=10s")
             try? await Task.sleep(for: .seconds(10))
-            let h = await services.memoryBudgeter.appMemoryHeadroom()
-            emit("SETTLE \(i)/3 end headroom=\(h)")
+            let headroom = await services.memoryBudgeter.appMemoryHeadroom()
+            emit("SETTLE \(settleRound)/3 end headroom=\(headroom)")
         }
 
         emit("SWITCH_DIRECT_BEGIN target=\(qwen.id) prior=\(services.lifecycleManager.activeModel?.id ?? "nil")")
@@ -546,36 +586,7 @@ enum SwitchProofRunner {
         let switchAdmitted = (directActive == qwen.id && directLoaded)
         emit("SWITCH_DIRECT_ADMITTED admitted=\(switchAdmitted)")
 
-        emit("CONTROL_BEGIN prior=\(priorWant.id)")
-        if switchAdmitted {
-            emit("CONTROL_RESTORE_PRIOR begin target=\(priorWant.id)")
-            let rr = await services.lifecycleManager.loadModel(priorWant)
-            emit("CONTROL_RESTORE_PRIOR result=\(describeResult(rr)) active=\(services.lifecycleManager.activeModel?.id ?? "nil")")
-            emit("CONTROL_RESTORE_SETTLE sleep=5s")
-            try? await Task.sleep(for: .seconds(5))
-        }
-        if services.lifecycleManager.activeModel?.id != priorWant.id || !services.lifecycleManager.isModelLoaded {
-            emit("CONTROL_ENSURE_PRIOR loading prior=\(priorWant.id) for control…")
-            let er = await services.lifecycleManager.loadModel(priorWant)
-            emit("CONTROL_ENSURE_PRIOR result=\(describeResult(er)) active=\(services.lifecycleManager.activeModel?.id ?? "nil")")
-        }
-        emit("CONTROL_UNLOAD begin prior=\(services.lifecycleManager.activeModel?.id ?? "nil")")
-        _ = await services.lifecycleManager.unloadCurrentModel()
-        emit("CONTROL_UNLOAD done active=\(services.lifecycleManager.activeModel?.id ?? "nil") state=\(services.lifecycleManager.currentState)")
-        try? await Task.sleep(for: .seconds(2))
-        let ctrlHeadroom = await services.memoryBudgeter.appMemoryHeadroom()
-        emit("CONTROL_PRELOAD headroom=\(ctrlHeadroom) prior=nil reclaimable=0")
-        emit("CONTROL_LOAD begin target=\(qwen.id)")
-        let ctrlResult = await services.lifecycleManager.loadModel(qwen)
-        try? await Task.sleep(for: .milliseconds(500))
-        let ctrlActive = services.lifecycleManager.activeModel?.id ?? "nil"
-        let ctrlLoaded = services.lifecycleManager.isModelLoaded
-        let ctrlWarn = services.lifecycleManager.showInsufficientMemoryWarning
-        let ctrlAlert = services.lifecycleManager.insufficientMemoryMessage ?? services.lifecycleManager.loadFailureMessage ?? ""
-        let ctrlShowFail = services.lifecycleManager.showLoadFailure
-        emit("CONTROL_RESULT result=\(describeResult(ctrlResult)) active=\(ctrlActive) loaded=\(ctrlLoaded) warn=\(ctrlWarn) showFail=\(ctrlShowFail) alert=\(sanitize(ctrlAlert))")
-        let ctrlAdmitted = (ctrlActive == qwen.id && ctrlLoaded)
-        emit("CONTROL_ADMITTED admitted=\(ctrlAdmitted)")
+        let ctrlAdmitted = await runControlProof(services: services, qwen: qwen, priorWant: priorWant, switchAdmitted: switchAdmitted)
 
         let finalAlert = switchAdmitted ? "" : directAlert
         emit("DONE switchAdmitted=\(switchAdmitted) ctrlAdmitted=\(ctrlAdmitted)")
