@@ -207,8 +207,8 @@ enum MemoryProfileRegistry {
 
     /// Imported models have no retained device calibration yet. The estimate is
     /// conservative and only enables the explicit experimental-consent path.
-    /// P1-4: separate base/mmproj weights (mmap'd Q4 base ~1/3 resident vs
-    /// projector pinned fully during vision init), an absolute 4GB + dynamic
+    /// P1-4: base+mmproj both ~1/3 resident (mmap'd Q4; full-pin unmeasured —
+    /// Aug 25 2026 Qwen cold-loaded in 1s under the 1/3 estimate), an absolute 4GB + dynamic
     /// physical floor, and fail-closed nil evidence + .max floor on
     /// zero/negative catalog sizes. Artifact bytes shape the conservative
     /// estimate only — admission quantity stays nil (see sentinel).
@@ -246,7 +246,7 @@ enum MemoryProfileRegistry {
         let baseResident = UInt64(clamping: model.baseFileSizeBytes / 3)
         let mmprojResident: UInt64 = {
             guard let mmprojBytes = model.mmprojFileSizeBytes, mmprojBytes > 0 else { return 0 }
-            return UInt64(clamping: mmprojBytes)
+            return UInt64(clamping: mmprojBytes / 3)
         }()
         let contextScale = SaturatedArithmetic.multiply(
             UInt64(clamping: max(model.config.contextLength, 512)),
