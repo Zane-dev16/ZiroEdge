@@ -215,6 +215,14 @@ extension ChatView {
     /// True once the selected model is loaded and accepting work.
     var chatReady: Bool { viewModel.modelLoadPhase == .ready }
 
+    /// Message-field gate: disabled only while a conversation loads or
+    /// while no model exists at all (`.needsDownload` — nothing could ever
+    /// receive the send). Every other phase (`.loading` included) keeps
+    /// typing enabled; only send waits for residency.
+    var composerInputDisabled: Bool {
+        viewModel.isLoadingConversation || viewModel.modelLoadPhase == .needsDownload
+    }
+
     /// Composer stack: the single compact model-picker pill, image
     /// previews, then the one rounded input well — the always-visible
     /// attachment cluster, the message field, and send riding one
@@ -223,11 +231,12 @@ extension ChatView {
     /// The well uses `Radius.control` (not `Radius.card`): it is a
     /// text field, and the radius scale assigns text fields/controls to
     /// `control` (design system §6.2, matching `ziroComposerField`). The
-    /// text field and send stay disabled until the model is resident; the
-    /// attachment cluster disables itself (with a spoken reason) until a
-    /// vision-capable model is resident, but never leaves the row — see
-    /// `attachmentButtons`. No top hairline, no stacked pills: the picker
-    /// row above is the sole pill.
+    /// message field stays enabled while the model loads (disabled only
+    /// while a conversation loads or while no model exists at all) so drafts are never blocked; only
+    /// send waits for residency. The attachment cluster disables itself
+    /// (with a spoken reason) until a vision-capable model is selected,
+    /// but never leaves the row — see `attachmentButtons`. No top hairline,
+    /// no stacked pills: the picker row above is the sole pill.
     var inputBar: some View {
         VStack(spacing: ZiroTheme.Spacing.xSmall) {
             statusOrTokenHintRow
@@ -244,16 +253,11 @@ extension ChatView {
                     .frame(minHeight: 44, alignment: .center)
                     .padding(.vertical, ZiroTheme.Spacing.xSmall)
                     .focused($isInputFocused)
-                    .disabled(!chatReady || viewModel.isLoadingConversation)
+                    .disabled(composerInputDisabled)
                     // P2-7: release focus as the enabled condition fails, so a
                     // focused field never slides into disabled with the
-                    // keyboard up or the accent ring stuck on. Both inputs feed
-                    // the same `composerShouldReleaseFocus` condition the
-                    // `disabled` modifier evaluates.
-                    .onChange(of: chatReady) { _, _ in
-                        if viewModel.composerShouldReleaseFocus { isInputFocused = false }
-                    }
-                    .onChange(of: viewModel.isLoadingConversation) { _, _ in
+                    // keyboard up or the accent ring stuck on.
+                    .onChange(of: composerInputDisabled) { _, _ in
                         if viewModel.composerShouldReleaseFocus { isInputFocused = false }
                     }
                     .onSubmit {

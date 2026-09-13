@@ -179,24 +179,27 @@ extension ChatViewModel {
         logger.info("Composer resign reason=\(reason, privacy: .public) generation=\(generation, privacy: .public)")
     }
 
-    /// Suggestion-tap focus gate (P2-6): the field takes focus only while the
-    /// composer is enabled. Requesting focus on the disabled field is ignored
-    /// by the system but leaves the accent ring stuck on, so the refusal is
-    /// the correct outcome — logged, never silent.
+    /// Suggestion-tap focus gate (P2-6): the field takes focus unless the
+    /// message field is disabled (conversation-load, or no model at all).
+    /// Typing stays enabled while the model loads, so model residency no
+    /// longer refuses focus — requesting focus on the disabled field is
+    /// ignored by the system but leaves the accent ring stuck on, so the
+    /// refusal is the correct outcome — logged, never silent.
     func shouldTakeSuggestionFocus() -> Bool {
-        let ready = modelLoadPhase == .ready
+        let ready = !isLoadingConversation && modelLoadPhase != .needsDownload
         if !ready {
-            logger.info("Suggestion focus refused: composer not ready")
+            logger.info("Suggestion focus refused: conversation loading")
         }
         return ready
     }
 
     /// Release-focus condition (P2-7): true exactly when the composer's
-    /// enabled condition fails. ChatView releases `@FocusState` on this so a
-    /// focused field never slides into disabled with the keyboard up or the
-    /// accent ring stuck on. Pure over published state for hermetic tests.
+    /// enabled condition fails (conversation-load, or no model at all).
+    /// ChatView releases `@FocusState` on this so a focused field never
+    /// slides into disabled with the keyboard up or the accent ring stuck
+    /// on. Pure over published state for hermetic tests.
     var composerShouldReleaseFocus: Bool {
-        modelLoadPhase != .ready || isLoadingConversation
+        isLoadingConversation || modelLoadPhase == .needsDownload
     }
 
     /// Mirror the live composer text into the per-conversation memory store

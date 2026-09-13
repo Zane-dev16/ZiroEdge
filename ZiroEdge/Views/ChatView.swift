@@ -202,9 +202,10 @@ struct ChatView: View {
     /// row so the affordance never jumps layout as models load or vision
     /// capability changes. Gating stays logic-only — the controls disable
     /// (dimmed to the `tertiaryText` disabled voice, with a spoken reason)
-    /// when there is no resident vision-capable model, instead of leaving
-    /// the hierarchy. The text field and send keep their own `chatReady`
-    /// gating; this cluster adds the vision-capable requirement on top.
+    /// when the selected model is not vision-capable, instead of leaving
+    /// the hierarchy. Typing stays enabled while the model loads; only send
+    /// waits for residency (`chatReady`); this cluster adds the
+    /// vision-capable requirement on top.
     var attachmentButtons: some View {
         HStack(spacing: ZiroTheme.Spacing.medium) {
             PhotosPicker(selection: $selectedPhotos, maxSelectionCount: 10, matching: .images) {
@@ -232,10 +233,11 @@ struct ChatView: View {
         .foregroundStyle(attachmentsEnabled ? Color.accentColor : ZiroTheme.tertiaryText)
     }
 
-    /// Attachment gating: resident AND vision-capable. The cluster renders
+    /// Attachment gating: vision-capable selection (enabled while the model
+    /// loads so drafts/attachments are never blocked). The cluster renders
     /// always-visible-but-disabled otherwise (see `inputBar`) so the row
     /// never reflows and VoiceOver keeps a stable landmark.
-    private var attachmentsEnabled: Bool { chatReady && viewModel.isVisionModel }
+    private var attachmentsEnabled: Bool { viewModel.isVisionModel }
 
     private func showToast(_ message: String) {
         toastMessage = message
@@ -257,6 +259,11 @@ struct ChatView: View {
                 if viewModel.isStreaming {
                     Image(systemName: "stop.circle.fill")
                         .transition(.asymmetric(insertion: .scale(scale: 0.25).combined(with: .opacity), removal: .scale(scale: 0.25).combined(with: .opacity)))
+                } else if isModelLoading {
+                    ProgressView()
+                        .controlSize(.small)
+                        .transition(.asymmetric(insertion: .scale(scale: 0.25).combined(with: .opacity), removal: .scale(scale: 0.25).combined(with: .opacity)))
+                        .accessibilityLabel("Loading model")
                 } else {
                     Image(systemName: "arrow.up.circle.fill")
                         .transition(.asymmetric(insertion: .scale(scale: 0.25).combined(with: .opacity), removal: .scale(scale: 0.25).combined(with: .opacity)))
@@ -269,8 +276,26 @@ struct ChatView: View {
             .ziroAnimation(ZiroMotion.press, value: viewModel.isStreaming)
         }
         .disabled(sendDisabled)
-        .accessibilityLabel(viewModel.isStreaming ? "Stop generating" : "Send message")
-        .accessibilityHint(viewModel.isStreaming ? "Stops the current response" : "Sends your message to the local model")
+        .accessibilityLabel(sendAccessibilityLabel)
+        .accessibilityHint(sendAccessibilityHint)
+    }
+
+    /// Inline loading marker: the composer picker already carries the phase
+    /// text, this only swaps the send glyph for a spinner while loading so
+    /// the blocked send reads as busy, not broken. Draft text is preserved
+    /// (the button stays disabled, never clears `inputText`).
+    private var isModelLoading: Bool { viewModel.modelLoadPhase == .loading }
+
+    private var sendAccessibilityLabel: String {
+        if viewModel.isStreaming { return "Stop generating" }
+        if isModelLoading { return "Loading model" }
+        return "Send message"
+    }
+
+    private var sendAccessibilityHint: String {
+        if viewModel.isStreaming { return "Stops the current response" }
+        if isModelLoading { return "Waiting for the model to load" }
+        return "Sends your message to the local model"
     }
 
     /// Streaming stays interruptible; sending requires residency (`chatReady`).
