@@ -29,10 +29,15 @@ enum HermeticUITestRuntime {
     /// - `.failedLoad` (`--uitesting-hermetic-failed-load`): llama32_3B reads
     ///   as downloaded but every load attempt throws — the load-failure state
     ///   (warning pill + inline retry banner).
+    /// - `.loading` (`--uitesting-hermetic-loading`): llama32_3B reads as
+    ///   downloaded and the fake load holds `.loading` for a bounded window
+    ///   before resolving as ready — the in-flight state (typing enabled,
+    ///   send disabled with spinner).
     enum Scenario: Equatable {
         case ready
         case needsDownload
         case failedLoad
+        case loading
     }
 
     static var scenario: Scenario {
@@ -42,6 +47,7 @@ enum HermeticUITestRuntime {
     static func scenario(_ arguments: [String]) -> Scenario {
         if arguments.contains("--uitesting-hermetic-needs-download") { return .needsDownload }
         if arguments.contains("--uitesting-hermetic-failed-load") { return .failedLoad }
+        if arguments.contains("--uitesting-hermetic-loading") { return .loading }
         return .ready
     }
 

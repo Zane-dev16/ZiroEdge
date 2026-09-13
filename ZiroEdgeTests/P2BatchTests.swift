@@ -423,32 +423,40 @@ final class P2FocusDraftTests: XCTestCase {
 
     func testSuggestionFocusTakenOnlyWhenReady() {
         let (viewModel, _) = makeViewModel()
-        viewModel.modelLoadPhase = .ready
-        XCTAssertTrue(viewModel.shouldTakeSuggestionFocus())
+        // Typing stays enabled while the model loads: only a
+        // conversation-load or the no-model state refuses suggestion focus.
+        viewModel.isLoadingConversation = false
         for phase in [
-            ModelLoadPhase.idle, .needsDownload, .loading, .evicted, .failed("boom")
+            ModelLoadPhase.ready, .idle, .loading, .evicted, .failed("boom")
         ] {
             viewModel.modelLoadPhase = phase
-            XCTAssertFalse(
+            XCTAssertTrue(
                 viewModel.shouldTakeSuggestionFocus(),
-                "suggestion must not take focus while \(phase)"
+                "suggestion must take focus while \(phase) when no conversation is loading"
             )
         }
+        viewModel.modelLoadPhase = .needsDownload
+        XCTAssertFalse(viewModel.shouldTakeSuggestionFocus())
+        viewModel.modelLoadPhase = .ready
+        viewModel.isLoadingConversation = true
+        XCTAssertFalse(viewModel.shouldTakeSuggestionFocus())
     }
 
     // MARK: P2-7 release-focus condition
 
     func testComposerReleaseFocusMatchesDisabledCondition() {
         let (viewModel, _) = makeViewModel()
+        // The field gates on conversation-load plus the no-model state
+        // (`.needsDownload` — typing stays enabled across every other
+        // phase, `.loading` included), so release must mirror exactly that.
         let phases: [ModelLoadPhase] = [.idle, .needsDownload, .loading, .ready, .evicted, .failed("boom")]
         for phase in phases {
             for loading in [false, true] {
                 viewModel.modelLoadPhase = phase
                 viewModel.isLoadingConversation = loading
-                let chatReady = phase == .ready
                 XCTAssertEqual(
                     viewModel.composerShouldReleaseFocus,
-                    !chatReady || loading,
+                    loading || phase == .needsDownload,
                     "release must mirror the disabled condition (phase=\(phase), loading=\(loading))"
                 )
             }
@@ -607,9 +615,9 @@ final class P3RacesTests: XCTestCase {
         }
         func calls() -> [Call] { recorded }
         private func canned() -> AsyncThrowingStream<String, Error> {
-            let c = chunks
+            let cannedChunks = chunks
             return AsyncThrowingStream { cont in
-                for x in c { cont.yield(x) }
+                for chunk in cannedChunks { cont.yield(chunk) }
                 cont.finish()
             }
         }
@@ -678,150 +686,150 @@ final class P3RacesTests: XCTestCase {
 
     // R1: concurrent double-send collapses to one generation.
     func testR1_ConcurrentDoubleSendSingleFlight() async throws {
-        let h = try await makeHarness(delay: .milliseconds(200))
-        defer { try? FileManager.default.removeItem(at: h.root) }
-        let id = try await h.store.createConversation(title: "R1", modelID: h.vision.id)
-        await h.vm.loadConversation(id)
-        h.vm.inputText = "hello r1"
-        async let a: Void = h.vm.sendMessage()
-        async let b: Void = h.vm.sendMessage()
-        await a; await b
-        try await waitDone(h.vm)
-        let __c1 = await h.inference.calls().count
-        XCTAssertEqual(__c1, 1, "R1: second send must drop on isStreaming slot")
-        XCTAssertEqual(h.vm.messages.filter { $0.role == .user }.count, 1)
-        XCTAssertFalse(h.vm.isStreaming)
+        let harness = try await makeHarness(delay: .milliseconds(200))
+        defer { try? FileManager.default.removeItem(at: harness.root) }
+        let id = try await harness.store.createConversation(title: "R1", modelID: harness.vision.id)
+        await harness.vm.loadConversation(id)
+        harness.vm.inputText = "hello r1"
+        async let firstSend: Void = harness.vm.sendMessage()
+        async let secondSend: Void = harness.vm.sendMessage()
+        await firstSend; await secondSend
+        try await waitDone(harness.vm)
+        let streamCalls = await harness.inference.calls().count
+        XCTAssertEqual(streamCalls, 1, "R1: second send must drop on isStreaming slot")
+        XCTAssertEqual(harness.vm.messages.filter { $0.role == .user }.count, 1)
+        XCTAssertFalse(harness.vm.isStreaming)
     }
 
     // R2: residency gate blocks a send with no resident model and no reload path.
     func testR2_ResidencyGateBlocksSendWhenNotResident() async throws {
-        let h = try await makeHarness()
-        defer { try? FileManager.default.removeItem(at: h.root) }
-        let id = try await h.store.createConversation(title: "R2", modelID: h.vision.id)
-        await h.vm.loadConversation(id)
-        await h.lifecycle.unloadCurrentModel()
-        h.status.readyIDs = [] // reload impossible: preflight must refuse
-        h.vm.inputText = "hello r2"
-        await h.vm.sendMessage()
-        let __c2 = await h.inference.calls().count
-        XCTAssertEqual(__c2, 0, "R2: no stream without residency")
-        XCTAssertFalse(h.vm.isStreaming, "R2: slot must release on gate refusal")
+        let harness = try await makeHarness()
+        defer { try? FileManager.default.removeItem(at: harness.root) }
+        let id = try await harness.store.createConversation(title: "R2", modelID: harness.vision.id)
+        await harness.vm.loadConversation(id)
+        await harness.lifecycle.unloadCurrentModel()
+        harness.status.readyIDs = [] // reload impossible: preflight must refuse
+        harness.vm.inputText = "hello r2"
+        await harness.vm.sendMessage()
+        let streamCalls = await harness.inference.calls().count
+        XCTAssertEqual(streamCalls, 0, "R2: no stream without residency")
+        XCTAssertFalse(harness.vm.isStreaming, "R2: slot must release on gate refusal")
     }
 
     // R3: switch during the pre-stream hook aborts the stale send.
     func testR3_SwitchDuringSendAbortsStaleStream() async throws {
-        let h = try await makeHarness()
-        defer { try? FileManager.default.removeItem(at: h.root) }
-        let a = try await h.store.createConversation(title: "R3A", modelID: h.vision.id)
-        let b = try await h.store.createConversation(title: "R3B", modelID: h.vision.id)
-        await h.vm.loadConversation(a)
-        h.vm.inputText = "hello r3"
-        h.vm.testHookBetweenAwaits = { [weak vm = h.vm] in await vm?.loadConversation(b) }
-        await h.vm.sendMessage()
-        h.vm.testHookBetweenAwaits = nil
+        let harness = try await makeHarness()
+        defer { try? FileManager.default.removeItem(at: harness.root) }
+        let convA = try await harness.store.createConversation(title: "R3A", modelID: harness.vision.id)
+        let convB = try await harness.store.createConversation(title: "R3B", modelID: harness.vision.id)
+        await harness.vm.loadConversation(convA)
+        harness.vm.inputText = "hello r3"
+        harness.vm.testHookBetweenAwaits = { [weak vm = harness.vm] in await vm?.loadConversation(convB) }
+        await harness.vm.sendMessage()
+        harness.vm.testHookBetweenAwaits = nil
         try await Task.sleep(for: .milliseconds(200))
-        let __c3 = await h.inference.calls().count
-        XCTAssertEqual(__c3, 0, "R3: stale send must abort before spawn")
-        XCTAssertEqual(h.vm.activeConversationID, b)
-        XCTAssertFalse(h.vm.isStreaming)
+        let streamCalls = await harness.inference.calls().count
+        XCTAssertEqual(streamCalls, 0, "R3: stale send must abort before spawn")
+        XCTAssertEqual(harness.vm.activeConversationID, convB)
+        XCTAssertFalse(harness.vm.isStreaming)
     }
 
     // R4: switch while streaming stays on the target (suppress + single funnel).
     func testR4_SwitchWhileStreamingStaysOnTarget() async throws {
-        let h = try await makeHarness(delay: .milliseconds(300))
-        defer { try? FileManager.default.removeItem(at: h.root) }
-        let a = try await h.store.createConversation(title: "R4A", modelID: h.vision.id)
-        let b = try await h.store.createConversation(title: "R4B", modelID: h.vision.id)
-        await h.vm.loadConversation(a)
-        h.vm.inputText = "hello r4"
-        let sendTask = Task { await h.vm.sendMessage() }
+        let harness = try await makeHarness(delay: .milliseconds(300))
+        defer { try? FileManager.default.removeItem(at: harness.root) }
+        let convA = try await harness.store.createConversation(title: "R4A", modelID: harness.vision.id)
+        let convB = try await harness.store.createConversation(title: "R4B", modelID: harness.vision.id)
+        await harness.vm.loadConversation(convA)
+        harness.vm.inputText = "hello r4"
+        let sendTask = Task { await harness.vm.sendMessage() }
         // Wait until the send claims the slot, then switch via the single funnel.
         let clock = ContinuousClock(); let end = clock.now.advanced(by: .seconds(3))
-        while !h.vm.isStreaming {
+        while !harness.vm.isStreaming {
             guard clock.now < end else { break }
             try await Task.sleep(for: .milliseconds(10))
         }
-        XCTAssertTrue(h.vm.isStreaming)
-        await h.vm.loadConversation(b) // R4: internally suppressReloads the cancel
+        XCTAssertTrue(harness.vm.isStreaming)
+        await harness.vm.loadConversation(convB) // R4: internally suppressReloads the cancel
         await sendTask.value
         try await Task.sleep(for: .milliseconds(300))
-        XCTAssertEqual(h.vm.activeConversationID, b, "R4: completion must not yank back to doomed ID")
+        XCTAssertEqual(harness.vm.activeConversationID, convB, "R4: completion must not yank back to doomed ID")
     }
 
     // R5: delete clears staged recovery; actor with no handle reports notFound.
     func testR5_DeletedConversationClearsStagedRecovery() async throws {
-        let h = try await makeHarness()
-        defer { try? FileManager.default.removeItem(at: h.root) }
-        let id = try await h.store.createConversation(title: "R5", modelID: h.vision.id)
-        await h.vm.loadConversation(id)
-        h.vm.stagePersistenceRecoveryForTesting(conversationID: id)
-        XCTAssertTrue(h.vm.hasPersistenceRecovery)
-        await h.vm.noteConversationDeleted(id)
-        XCTAssertFalse(h.vm.hasPersistenceRecovery, "R5: doomed-ID recovery must not surface elsewhere")
-        XCTAssertNil(h.vm.recoveryConversationID)
-        let retry = await h.session.retryRecoverySave()
-        if case .failure(let f) = retry {
-            XCTAssertEqual(f.category, .notFound, "R5: empty handle must read notFound, never wedge")
+        let harness = try await makeHarness()
+        defer { try? FileManager.default.removeItem(at: harness.root) }
+        let id = try await harness.store.createConversation(title: "R5", modelID: harness.vision.id)
+        await harness.vm.loadConversation(id)
+        harness.vm.stagePersistenceRecoveryForTesting(conversationID: id)
+        XCTAssertTrue(harness.vm.hasPersistenceRecovery)
+        await harness.vm.noteConversationDeleted(id)
+        XCTAssertFalse(harness.vm.hasPersistenceRecovery, "R5: doomed-ID recovery must not surface elsewhere")
+        XCTAssertNil(harness.vm.recoveryConversationID)
+        let retry = await harness.session.retryRecoverySave()
+        if case .failure(let failure) = retry {
+            XCTAssertEqual(failure.category, .notFound, "R5: empty handle must read notFound, never wedge")
         } else { XCTFail("R5: expected notFound with no handle") }
     }
 
     // R6: evicted/unloaded state skips the post-stream reload.
     func testR6_EvictedStateSkipsPostStreamReload() async throws {
-        let h = try await makeHarness()
-        defer { try? FileManager.default.removeItem(at: h.root) }
-        let id = try await h.store.createConversation(title: "R6", modelID: h.vision.id)
-        await h.vm.loadConversation(id)
-        XCTAssertTrue(h.vm.shouldReloadAfterGeneration(conversationID: id), "resident same-ID must reload")
-        await h.lifecycle.unloadCurrentModel()
-        XCTAssertFalse(h.vm.shouldReloadAfterGeneration(conversationID: id), "R6: no reload without residency (evict path)")
+        let harness = try await makeHarness()
+        defer { try? FileManager.default.removeItem(at: harness.root) }
+        let id = try await harness.store.createConversation(title: "R6", modelID: harness.vision.id)
+        await harness.vm.loadConversation(id)
+        XCTAssertTrue(harness.vm.shouldReloadAfterGeneration(conversationID: id), "resident same-ID must reload")
+        await harness.lifecycle.unloadCurrentModel()
+        XCTAssertFalse(harness.vm.shouldReloadAfterGeneration(conversationID: id), "R6: no reload without residency (evict path)")
     }
 
     // R7: retry drops while streaming and blocks on pending recovery.
     func testR7_RetrySingleFlightAndRecoveryBlock() async throws {
-        let h = try await makeHarness()
-        defer { try? FileManager.default.removeItem(at: h.root) }
-        let id = try await h.store.createConversation(title: "R7", modelID: h.vision.id)
-        await h.vm.loadConversation(id)
-        h.vm.messages = [ChatMessagePayload(role: .user, content: "hi r7")]
-        h.vm.isStreaming = true
-        await h.vm.retryLastResponse()
-        XCTAssertTrue(h.vm.isStreaming, "R7: dropped retry must not release another owner's slot")
-        let __c0 = await h.inference.calls().count
-        XCTAssertEqual(__c0, 0)
-        h.vm.isStreaming = false
-        h.vm.stagePersistenceRecoveryForTesting(conversationID: id)
-        await h.vm.retryLastResponse()
-        XCTAssertFalse(h.vm.isStreaming, "R7: recovery block must release its own slot")
-        XCTAssertTrue(h.vm.showError)
-        let __c7 = await h.inference.calls().count
-        XCTAssertEqual(__c7, 0, "R7: recovery must block spawn (actor bufferFull)")
+        let harness = try await makeHarness()
+        defer { try? FileManager.default.removeItem(at: harness.root) }
+        let id = try await harness.store.createConversation(title: "R7", modelID: harness.vision.id)
+        await harness.vm.loadConversation(id)
+        harness.vm.messages = [ChatMessagePayload(role: .user, content: "hi r7")]
+        harness.vm.isStreaming = true
+        await harness.vm.retryLastResponse()
+        XCTAssertTrue(harness.vm.isStreaming, "R7: dropped retry must not release another owner's slot")
+        let preRecoveryCalls = await harness.inference.calls().count
+        XCTAssertEqual(preRecoveryCalls, 0)
+        harness.vm.isStreaming = false
+        harness.vm.stagePersistenceRecoveryForTesting(conversationID: id)
+        await harness.vm.retryLastResponse()
+        XCTAssertFalse(harness.vm.isStreaming, "R7: recovery block must release its own slot")
+        XCTAssertTrue(harness.vm.showError)
+        let postRecoveryCalls = await harness.inference.calls().count
+        XCTAssertEqual(postRecoveryCalls, 0, "R7: recovery must block spawn (actor bufferFull)")
     }
 
     // R8: text-only model + images is refused (pre + post-suspension re-gate).
     func testR8_VisionGateBlocksTextOnlyImageSend() async throws {
-        let h = try await makeHarness()
-        defer { try? FileManager.default.removeItem(at: h.root) }
-        let id = try await h.store.createConversation(title: "R8", modelID: h.text.id)
-        await h.vm.loadConversation(id)
-        h.vm.pendingImages = [Data([0x01, 0x02])]
-        h.vm.inputText = "hello r8"
-        await h.vm.sendMessage()
-        let __c8 = await h.inference.calls().count
-        XCTAssertEqual(__c8, 0, "R8: vision must not reach a text-only model")
-        XCTAssertNotNil(h.vm.visionWarning)
-        XCTAssertFalse(h.vm.isStreaming)
+        let harness = try await makeHarness()
+        defer { try? FileManager.default.removeItem(at: harness.root) }
+        let id = try await harness.store.createConversation(title: "R8", modelID: harness.text.id)
+        await harness.vm.loadConversation(id)
+        harness.vm.pendingImages = [Data([0x01, 0x02])]
+        harness.vm.inputText = "hello r8"
+        await harness.vm.sendMessage()
+        let streamCalls = await harness.inference.calls().count
+        XCTAssertEqual(streamCalls, 0, "R8: vision must not reach a text-only model")
+        XCTAssertNotNil(harness.vm.visionWarning)
+        XCTAssertFalse(harness.vm.isStreaming)
     }
 
     // Item 9 synthesis: post-stream reload needs ownership + residency + intent.
     func testP3_Item9_PostStreamReloadGateSynthesis() async throws {
-        let h = try await makeHarness()
-        defer { try? FileManager.default.removeItem(at: h.root) }
-        let id = try await h.store.createConversation(title: "P3-9", modelID: h.vision.id)
-        let other = try await h.store.createConversation(title: "P3-9-other", modelID: h.vision.id)
-        await h.vm.loadConversation(id)
-        XCTAssertTrue(h.vm.shouldReloadAfterGeneration(conversationID: id))
-        XCTAssertFalse(h.vm.shouldReloadAfterGeneration(conversationID: other), "switched surface must not reload stale ID")
-        _ = await h.lifecycle.unloadCurrentModel(userInitiated: true)
-        XCTAssertFalse(h.vm.shouldReloadAfterGeneration(conversationID: id), "user-unload intent must not reload")
+        let harness = try await makeHarness()
+        defer { try? FileManager.default.removeItem(at: harness.root) }
+        let id = try await harness.store.createConversation(title: "P3-9", modelID: harness.vision.id)
+        let other = try await harness.store.createConversation(title: "P3-9-other", modelID: harness.vision.id)
+        await harness.vm.loadConversation(id)
+        XCTAssertTrue(harness.vm.shouldReloadAfterGeneration(conversationID: id))
+        XCTAssertFalse(harness.vm.shouldReloadAfterGeneration(conversationID: other), "switched surface must not reload stale ID")
+        _ = await harness.lifecycle.unloadCurrentModel(userInitiated: true)
+        XCTAssertFalse(harness.vm.shouldReloadAfterGeneration(conversationID: id), "user-unload intent must not reload")
     }
 }

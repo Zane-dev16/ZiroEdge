@@ -164,7 +164,7 @@ actor InferenceService: InferenceServiceProtocol {
         logger.info("Loading model: \(model.id, privacy: .public) from \(baseURL.path, privacy: .public)")
 
 #if DEBUG
-        if try loadHermeticIfEligible(model) { return }
+        if try await loadHermeticIfEligible(model) { return }
 #endif
 
         // Validate file exists.
@@ -294,12 +294,19 @@ actor InferenceService: InferenceServiceProtocol {
 #if DEBUG
     /// Hermetic fast-path for UI tests (extracted to hold the loadModel
     /// body-length gate). Returns true when the load was fully handled.
-    private func loadHermeticIfEligible(_ model: AIModel) throws -> Bool {
+    private func loadHermeticIfEligible(_ model: AIModel) async throws -> Bool {
         guard HermeticUITestRuntime.isEnabled, model.id == ModelRegistry.llama32_3B.id else {
             return false
         }
         if HermeticUITestRuntime.scenario == .failedLoad {
             throw InferenceError.nativeFailure(kind: .contextCreation, diagnostic: "hermetic-load-failure")
+        }
+        if HermeticUITestRuntime.scenario == .loading {
+            // Deterministic in-flight window for loading-UX tests: hold the
+            // lifecycle in `.loading` so the composer state is observable,
+            // then fall through and resolve as ready. Actor-isolated (never
+            // the main thread), bounded so a stalled test can't wedge the app.
+            try await Task.sleep(for: .seconds(30))
         }
         guard let profile = MemoryProfileRegistry.profile(for: model) else {
             throw InferenceError.nativeFailure(kind: .contextCreation, diagnostic: "fixture-profile-missing")
