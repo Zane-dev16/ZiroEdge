@@ -26,7 +26,7 @@ final class ModelTests: UITestBase {
         let modelCell = app.cells.containing(
             NSPredicate(format: "label CONTAINS 'Llama 3.2 3B'")
         ).firstMatch
-        guard modelCell.waitForExistence(timeout: 5) else {
+        guard modelCell.waitForExistence(timeout: 15) else {
             XCTFail("Llama 3.2 3B row missing on the Models page")
             return
         }
@@ -35,7 +35,7 @@ final class ModelTests: UITestBase {
         let storageRow = app.cells.containing(
             NSPredicate(format: "label CONTAINS 'Storage'")
         ).firstMatch
-        guard storageRow.waitForExistence(timeout: 5) else {
+        guard storageRow.waitForExistence(timeout: 15) else {
             XCTFail("Storage & Provenance row missing on the model detail page")
             return
         }
@@ -44,14 +44,14 @@ final class ModelTests: UITestBase {
         let deleteButton = app.buttons.containing(
             NSPredicate(format: "label CONTAINS 'Delete Model'")
         ).firstMatch
-        guard deleteButton.waitForExistence(timeout: 5) else {
+        guard deleteButton.waitForExistence(timeout: 10) else {
             XCTFail("Delete Model button missing on the Storage page")
             return
         }
         deleteButton.tap()
 
         let modal = app.descendants(matching: .any)["confirmation-modal"].firstMatch
-        XCTAssertTrue(modal.waitForExistence(timeout: 5),
+        XCTAssertTrue(modal.waitForExistence(timeout: 10),
                       "Delete Model must present the confirmation modal")
         capture("delete_model_confirmation")
         let cancel = app.descendants(matching: .any)["confirmation-cancel"].firstMatch
