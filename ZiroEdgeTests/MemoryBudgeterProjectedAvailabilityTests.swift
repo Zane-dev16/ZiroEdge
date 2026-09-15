@@ -190,18 +190,6 @@ final class MemoryBudgeterProjectedAvailabilityTests: XCTestCase {
         XCTAssertEqual(decision.reason, .physicalRAMBelowMinimum)
     }
 
-    func testMetricsZeroRefusesEvenWithCredit() async {
-        let target = makeImportedModel(
-            id: "hf-metrics-target", baseBytes: 600_000_000,
-            mmprojBytes: nil, rawContext: 2_048, vision: false
-        )
-        let decision = await MemoryBudgeter(metrics: FixedMemoryMetricsProvider(
-            processAvailable: 0, total: totalRAM
-        )).decision(for: target, allowUnvalidatedCalibration: true, reclaimableBytes: .max)
-        XCTAssertEqual(decision.recommendation, .insufficientRAM)
-        XCTAssertEqual(decision.reason, .metricsUnavailable)
-    }
-
     func testMalformedSizesRefuseEvenWithCredit() async {
         let bad = makeImportedModel(
             id: "hf-malformed-target", baseBytes: 600_000_000,
@@ -419,6 +407,39 @@ final class MemoryBudgeterProjectedAvailabilityTests: XCTestCase {
 // retains private access).
 @MainActor
 extension MemoryBudgeterProjectedAvailabilityTests {
+
+/// Regression: `.metricsUnavailable` is produced by the zero-sample guard when
+/// the OS memory read fails. It used to fall through the alert switch's
+/// `default:` and render that unmeasured zero literally — "needs more working
+/// memory than the 0 bytes of App Memory Headroom currently available" — which
+/// asserts a memory shortfall the app never measured and cannot know. The
+/// switch is now exhaustive, so adding a failure reason is a compile error
+/// rather than a silent copy bug.
+func testMetricsZeroRefusesEvenWithCreditAndExplainsWithoutAFakeNumber() async {
+    let target = makeImportedModel(
+        id: "hf-metrics-target", baseBytes: 600_000_000,
+        mmprojBytes: nil, rawContext: 2_048, vision: false
+    )
+    let decision = await MemoryBudgeter(metrics: FixedMemoryMetricsProvider(
+        processAvailable: 0, total: totalRAM
+    )).decision(for: target, allowUnvalidatedCalibration: true, reclaimableBytes: .max)
+    XCTAssertEqual(decision.recommendation, .insufficientRAM)
+    XCTAssertEqual(decision.reason, .metricsUnavailable)
+
+    let message = decision.alertMessage(modelName: "Fixture")
+    XCTAssertFalse(
+        message.contains("0 bytes"),
+        "an unmeasured zero must never be printed as the cause"
+    )
+    XCTAssertFalse(
+        message.contains("App Memory Headroom"),
+        "internal vocabulary does not belong in a cold alert"
+    )
+    XCTAssertTrue(
+        message.contains("memory budget"),
+        "metricsUnavailable must name the real cause: the budget could not be read"
+    )
+}
 
 func testUnvalidatedPriorYieldsZeroCreditWithExplanation() async {
     // Curated llama32-3B is unvalidated with nil measured peaks, so its

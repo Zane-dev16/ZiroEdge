@@ -58,6 +58,14 @@ struct MemoryLoadDecision: Equatable, Sendable {
     }
 
     func alertMessage(modelName: String, priorActive: AIModel? = nil) -> String {
+        // Exhaustive on purpose — no `default:`. This switch previously ended in
+        // one, so every new failure reason silently inherited the
+        // process-headroom sentence. `.metricsUnavailable` (produced by the
+        // zero-sample guard in `decision(...)` when the OS memory read fails)
+        // therefore rendered an unmeasured sample as "...needs more working
+        // memory than the 0 bytes of App Memory Headroom currently available" —
+        // asserting a cause the app had never actually measured. Adding a reason
+        // is now a compile error here instead of a silent copy bug.
         switch reason {
         case .profileUnvalidated:
             return "\(modelName) is not validated for normal use. Experimental use requires explicit consent and measured load evidence."
@@ -65,8 +73,23 @@ struct MemoryLoadDecision: Equatable, Sendable {
             return "\(modelName) has no registered runtime-memory profile and cannot be loaded."
         case .profileDisabled:
             return "\(modelName) was disabled after repeated unclean loads. Reset its safety history before calibrating again."
-        default:
-            let base = "\(modelName) needs more working memory than the \(formattedAppMemoryHeadroom) of App Memory Headroom currently available."
+        case .metricsUnavailable:
+            // The budget could not be read. Say so; do not invent a number.
+            return "\(modelName) couldn't be loaded because ZiroEdge wasn't able to read this device's memory budget. This is usually temporary — try again."
+        case .physicalRAMBelowMinimum:
+            // Not a transient shortfall: the device cannot host this model.
+            return "\(modelName) needs more memory than this device can provide, even with nothing else loaded."
+        case .postLoadReserveBreached:
+            return "\(modelName) would leave too little memory for iOS to keep ZiroEdge responsive, so it wasn't loaded."
+        case .insufficientProcessHeadroom, .none:
+            // Never interpolate a zero sample here: "more than the 0 bytes
+            // available" reads as a broken app. A zero means the read failed or
+            // the device is mid-pressure, not that there is no RAM at all.
+            // "App Memory Headroom" is internal vocabulary (glossed in Settings);
+            // it does not belong in an alert the user hits cold.
+            let base = processAvailableBytes == 0
+                ? "\(modelName) needs more working memory than the device can currently spare."
+                : "\(modelName) needs more working memory than the \(formattedAppMemoryHeadroom) currently available."
             // Zero-credit guidance (Fix verify b): when the resident prior
             // contributed no reclaimable credit because its profile has no
             // measured evidence, projected==raw by construction. Tell the
