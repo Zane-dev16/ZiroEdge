@@ -7,7 +7,6 @@ import SwiftUI
 struct ZiroEdgeApp: App {
     @UIApplicationDelegateAdaptor(ZiroEdgeAppDelegate.self) private var appDelegate
     @Environment(\.scenePhase) private var scenePhase
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @StateObject private var runtime = AppRuntime()
     /// Hoisted to the App so App body re-evaluations reuse one instance. Built
     /// inline in `rootView`, every runtime publish re-pointed AppShellView's
@@ -132,16 +131,16 @@ struct ZiroEdgeApp: App {
                         ZiroStatusBanner(
                             icon: "checkmark.circle.fill",
                             message: message,
-                            tint: ZiroTheme.positiveText
+                            tone: .positive
                         )
                         .announcingOnAppear(message)
                         .clipShape(RoundedRectangle(cornerRadius: ZiroTheme.Radius.control))
-                        .shadow(color: .black.opacity(0.12), radius: 8, y: 4)
+                        .ziroShadow(.raised)
                         .padding()
                         .transition(.move(edge: .top).combined(with: .opacity))
                     }
                 }
-                .animation(reduceMotion ? nil : .snappy, value: runtime.postResetMessage)
+                .ziroAnimation(ZiroMotion.appear, value: runtime.postResetMessage)
         case .failed(let failure):
             StoreRecoveryView(
                 failure: failure,
