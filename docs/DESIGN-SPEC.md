@@ -151,15 +151,17 @@ All roles are system text styles → Dynamic Type is inherited. Never fixed poin
 
 | Role | Font value | Use |
 | --- | --- | --- |
-| `ZiroType.display` | `.largeTitle.weight(.bold)` | Onboarding page titles |
-| `ZiroType.title` | `.title2.weight(.semibold)` | Empty-state hero title, outcome heroes |
-| `ZiroType.heading` | `.title3.weight(.semibold)` | Card headers, model-detail identity, sheet titles |
-| `ZiroType.rowTitle` | `.headline` | List row titles, banner titles, header-pill label |
-| `ZiroType.body` | `.body` | Message text, primary copy |
-| `ZiroType.supporting` | `.subheadline` | Descriptions, banner messages, subtitles |
-| `ZiroType.footnote` | `.footnote` | Inline support text, dense button labels |
+| `ZiroType.display` | `.title.weight(.bold)` | Onboarding page titles |
+| `ZiroType.title` | `.title3.weight(.semibold)` | Empty-state hero title, outcome heroes |
+| `ZiroType.heading` | `.headline.weight(.semibold)` | Card headers, model-detail identity, sheet titles |
+| `ZiroType.rowTitle` | `.subheadline.weight(.semibold)` | List row titles, banner titles, header-pill label |
+| `ZiroType.body` | `.callout` | Message text, primary copy |
+| `ZiroType.supporting` | `.footnote` | Descriptions, banner messages, subtitles |
+| `ZiroType.footnote` | `.caption` | Inline support text, dense button labels |
 | `ZiroType.caption` | `.caption` | Metadata, banner actions |
 | `ZiroType.micro` | `.caption2` | Badges, micro-meta, percentages |
+
+This table matches `DesignSystem.swift` as shipped, which sits one step smaller than earlier revisions of this document claimed. The smaller scale is intended; do not "correct" the tokens back up.
 | `ZiroType.technical(style, weight)` | `.system(style, design: .monospaced, weight:)` | **Technical voice** — model IDs, quant tiers, token counts, byte sizes, SHA fragments, pinned revisions |
 
 Technical voice defaults: `.footnote/.regular`; `.caption2` for SHA fragments; `.caption2/.semibold` inside badges; `.body` for model IDs in detail headers. Digits in streaming/technical contexts may use `.monospacedDigit()` as today.
