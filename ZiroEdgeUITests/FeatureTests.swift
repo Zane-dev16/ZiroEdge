@@ -179,7 +179,7 @@ final class FeatureTests: UITestBase {
         XCTAssertTrue(waitForModelLoaded(timeout: 30),
                       "Model did not reach the ready phase — composer stays disabled")
 
-        let namedInput = app.textFields["Message ZiroEdge..."].firstMatch
+        let namedInput = app.textFields["Message..."].firstMatch
         let input = namedInput.exists ? namedInput : app.textFields.firstMatch
         guard input.waitForExistence(timeout: 5) else {
             throw XCTSkip("No chat input found — model may not be loaded")

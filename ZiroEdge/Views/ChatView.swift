@@ -109,9 +109,10 @@ struct ChatView: View {
             }
         }
         .background(ZiroTheme.pageBackground)
-        // The bar names the conversation (or the draft), never a placeholder.
-        .navigationTitle(viewModel.activeConversationTitle ?? "New chat")
-        .navigationBarTitleDisplayMode(.inline)
+        // No navigation title: the bar carries only the two shell controls,
+        // and the model identity lives in the composer's picker pill. An
+        // inline conversation title duplicated the sidebar row and ate the
+        // transcript's first 44pt for chrome.
         .toolbar { chatToolbar }
         .onAppear {
             // Deferred autoload lives here rather than at startup: reaching
@@ -209,10 +210,15 @@ struct ChatView: View {
     var attachmentButtons: some View {
         HStack(spacing: ZiroTheme.Spacing.medium) {
             PhotosPicker(selection: $selectedPhotos, maxSelectionCount: 10, matching: .images) {
-                Image(systemName: "photo.on.rectangle")
+                Image(systemName: "plus")
                     .font(.title3)
                     .frame(width: composerControlSide, height: composerControlSide)
-                    .contentShape(Rectangle())
+                    .contentShape(Circle())
+                    // The composer's controls sit on their own discs (fill,
+                    // not stroke — the glyph is the ink): the `+` on the
+                    // neutral `controlDisc`, one step above the well, so the
+                    // row reads as controls rather than floating icons.
+                    .background(Circle().fill(ZiroTheme.controlDisc))
             }
             .disabled(!attachmentsEnabled)
             .accessibilityLabel("Add photos")
@@ -230,7 +236,10 @@ struct ChatView: View {
                 }
             }
         }
-        .foregroundStyle(attachmentsEnabled ? Color.accentColor : ZiroTheme.tertiaryText)
+        // White glyph on the disc when live; the disabled voice (tertiary
+        // ink) keeps the blocked control legible without spending the accent
+        // on a secondary affordance.
+        .foregroundStyle(attachmentsEnabled ? ZiroTheme.accentForeground : ZiroTheme.tertiaryText)
     }
 
     /// Attachment gating: vision-capable selection (enabled while the model
@@ -265,14 +274,19 @@ struct ChatView: View {
                         .transition(.asymmetric(insertion: .scale(scale: 0.25).combined(with: .opacity), removal: .scale(scale: 0.25).combined(with: .opacity)))
                         .accessibilityLabel("Loading model")
                 } else {
-                    Image(systemName: "arrow.up.circle.fill")
+                    Image(systemName: "arrow.up")
+                        .font(.title3.weight(.semibold))
                         .transition(.asymmetric(insertion: .scale(scale: 0.25).combined(with: .opacity), removal: .scale(scale: 0.25).combined(with: .opacity)))
                 }
             }
             .font(.title3)
             .foregroundStyle(sendTint)
             .frame(width: sendControlSide, height: sendControlSide)
-            .contentShape(Rectangle())
+            // The disc is the send affordance: white arrow on
+            // `controlDiscActive` once a send can fire, a bare muted glyph
+            // when it cannot. Fill-not-stroke keeps it a button, not a badge.
+            .background(Circle().fill(sendDisc ?? .clear))
+            .contentShape(Circle())
             .ziroAnimation(ZiroMotion.press, value: viewModel.isStreaming)
         }
         .disabled(sendDisabled)
@@ -303,8 +317,21 @@ struct ChatView: View {
         (!chatReady || !canSend || viewModel.isLoadingConversation) && !viewModel.isStreaming
     }
 
+    /// Send-glyph ink: white on the live disc, accent while streaming (the
+    /// stop control is the live action and keeps the signal), the disabled
+    /// voice otherwise.
     private var sendTint: Color {
-        (canSend && chatReady) || viewModel.isStreaming ? Color.accentColor : ZiroTheme.tertiaryText
+        if viewModel.isStreaming { return Color.accentColor }
+        return sendDisc != nil ? ZiroTheme.accentForeground : ZiroTheme.tertiaryText
+    }
+
+    /// The send disc, present only while the send button is actually
+    /// enabled (`sendDisabled` is the single gate the button uses): the
+    /// accent stays the app's single live signal, so a blocked send is a bare
+    /// glyph rather than a second filled control.
+    private var sendDisc: Color? {
+        guard !viewModel.isStreaming, !sendDisabled else { return nil }
+        return ZiroTheme.controlDiscActive
     }
 
     var imagePreviewRow: some View {
@@ -381,6 +408,10 @@ extension ChatView {
             && message.id == viewModel.messages.last(where: { $0.role == .assistant })?.id
         return MessageBubble(
             message: message,
+            // Action chrome is gated to the live turn: copy/branch/retry under
+            // every past reply turned the transcript into a wall of repeated
+            // icons. Older replies stay fully selectable and readable.
+            showsActions: isLastAssistant,
             onBranch: { pendingBranchMessageID = messageID },
             onCopy: { [content = message.content] in viewModel.copyMessageText(content) },
             onRetry: isLastAssistant && viewModel.canRetryLastResponse
@@ -537,68 +568,45 @@ extension ChatView {
         .accessibilityElement(children: .combine)
     }
 
-    /// Centered hello moment: greeting title, working sample-prompt cards,
-    /// and — only when nothing is installed — the catalog CTA (no Browse
-    /// Models wall when a model is ready). No subtitle message: the title is
-    /// the moment; `ZiroEmptyState` renders its message line only when non-empty.
+    /// The brand moment: the ZE mark centered over "Ask me anything.", the
+    /// whole block centered in the space above the composer
+    /// (`containerRelativeFrame` gives it the transcript viewport's height, so
+    /// it stays centered instead of sitting under the navigation bar). No
+    /// suggestion cards — the vision's empty state is the mark and the line —
+    /// but the no-models CTA stays: with nothing installed the composer can do
+    /// nothing, and the catalog is the only way forward. That CTA is a quiet
+    /// well-and-hairline control, not a second full-bleed accent slab: the
+    /// screen's single accent budget is never spent on the resting state.
     var emptyState: some View {
-        ZiroEmptyState(
-            title: "Hello, Ask Me Anything",
-            message: "",
-            suggestionItems: viewModel.availableModels.isEmpty ? [] : Self.samplePrompts,
-            onSuggestion: { suggestion in
-                // Reuses the existing send flow: the prompt lands in the
-                // composer (trailing space so typing continues naturally).
-                // Focus follows only while the composer is enabled (P2-6):
-                // requesting focus on the disabled field is ignored by the
-                // system but leaves the accent ring stuck on.
-                let existing = viewModel.inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-                viewModel.inputText = existing.isEmpty
-                    ? suggestion + " "
-                    : existing + " " + suggestion + " "
-                if viewModel.shouldTakeSuggestionFocus() {
-                    isInputFocused = true
-                }
-            }
-        ) {
-            // A.2: with no models installed, the empty state gains a direct
-            // CTA into the catalog (same shell route the composer picker's
-            // Browse action uses). Chips are withheld in that state — the
-            // composer is disabled with nothing to load, so the guided
-            // prompts could not actually work.
+        VStack(spacing: ZiroTheme.Spacing.medium) {
+            ZiroBrandMark(size: 80)
+
+            Text("Ask me anything.")
+                .font(ZiroType.title)
+                .foregroundStyle(ZiroTheme.primaryText)
+                .multilineTextAlignment(.center)
+
             if viewModel.availableModels.isEmpty {
                 Button {
                     navigateToRoute(.models)
                 } label: {
                     Label("Browse Models", systemImage: "arrow.down.circle")
+                        .font(ZiroType.bodyStrong)
+                        .foregroundStyle(ZiroTheme.primaryText)
+                        .padding(.horizontal, ZiroTheme.Spacing.large)
+                        .frame(minHeight: 44)
+                        .background(ZiroTheme.wellBackground, in: Capsule())
+                        .overlay(Capsule().stroke(ZiroTheme.hairline, lineWidth: 1))
                 }
-                .buttonStyle(ZiroPrimaryButtonStyle())
+                .buttonStyle(.plain)
                 .accessibilityIdentifier("browse-models-button")
             }
         }
+        .frame(maxWidth: ZiroMeasure.standard)
         .frame(maxWidth: .infinity)
         .padding(.horizontal, ZiroTheme.Spacing.xLarge)
-        .padding(.top, ZiroTheme.Spacing.heroTop)
+        .containerRelativeFrame(.vertical, alignment: .center)
     }
-
-    /// Guided starting points rendered by `ZiroEmptyState`'s capability
-    /// cards (reference-style rows with per-card tinted dot + chevron).
-    /// Same prompt strings as before — only the presentation changed — so
-    /// the send flow (append + focus) is untouched.
-    private static let samplePrompts = [
-        ZiroSuggestion(
-            text: "Explain quantum computing in simple terms",
-            dot: ZiroTheme.accentPurpleText
-        ),
-        ZiroSuggestion(
-            text: "How do I make an HTTP request in JavaScript?",
-            dot: ZiroTheme.infoText
-        ),
-        ZiroSuggestion(
-            text: "Summarize my notes",
-            dot: ZiroTheme.accentIndigoText
-        )
-    ]
 
     // MARK: Scrolling
 
@@ -622,21 +630,43 @@ extension ChatView {
 
     /// Day-separator labels keyed by message id, computed in one O(n) pass
     /// per body evaluation (PERF: replaces per-row index math driven by a
-    /// per-token Array(enumerated()) copy). Semantics match the previous
-    /// per-index lookup: a message opens a divider unless its immediate
-    /// predecessor carries a same-day timestamp; undated messages never open
-    /// one — they join the running day.
+    /// per-token Array(enumerated()) copy).
     private var dayDividerLabels: [UUID: String] {
+        Self.dayDividerLabels(for: viewModel.messages)
+    }
+
+    /// Pure label mapping (internal so the transcript rules are unit-testable).
+    /// A message opens a divider unless its immediate predecessor carries a
+    /// same-day timestamp; undated messages never open one — they join the
+    /// running day.
+    ///
+    /// A transcript that never changes day gets no divider at all: the dashed
+    /// day rule above the first bubble is an artifact when every message
+    /// shares one date, and suppressing it also removes the height jump the
+    /// divider caused when the streaming bubble became the first dated row.
+    static func dayDividerLabels(
+        for messages: [ChatMessagePayload],
+        calendar: Calendar = .current
+    ) -> [UUID: String] {
         var labels: [UUID: String] = [:]
-        let messages = viewModel.messages
+        var day: Date?
         for (index, message) in messages.enumerated() {
             guard let date = message.createdAt else { continue }
             if index > 0,
                let previous = messages[index - 1].createdAt,
-               Calendar.current.isDate(previous, inSameDayAs: date) {
+               calendar.isDate(previous, inSameDayAs: date) {
                 continue
             }
-            labels[message.id] = Self.dayDividerFormatter.string(from: date)
+            // First dated message of each day — remember the day, but only
+            // emit the label once a second day proves the divider is needed.
+            guard let seenDay = day else {
+                day = date
+                continue
+            }
+            if !calendar.isDate(seenDay, inSameDayAs: date) {
+                labels[message.id] = Self.dayDividerFormatter.string(from: date)
+                day = date
+            }
         }
         return labels
     }
@@ -706,18 +736,18 @@ extension ChatView {
     @ToolbarContentBuilder
     var chatToolbar: some ToolbarContent {
         if showsSidebarToggle, let onOpenSidebar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button {
-                    // P2-6: the drawer covers the composer — resign first so
-                    // the keyboard never lingers over it (the shell also bumps
-                    // the resign generation for the mounted-chat path).
-                    resignComposerFocus()
-                    onOpenSidebar()
-                } label: {
-                    Image(systemName: "line.3.horizontal")
+            // iOS 26 gives every toolbar item a shared glass circle by
+            // default; the conversations toggle must read as a bare mark, so
+            // the shared background is hidden where the API exists.
+            if #available(iOS 26.0, *) {
+                ToolbarItem(placement: .topBarLeading) {
+                    sidebarToggleButton(action: onOpenSidebar)
                 }
-                .accessibilityLabel("Conversations")
-                .accessibilityIdentifier("sidebar-button")
+                .sharedBackgroundVisibility(.hidden)
+            } else {
+                ToolbarItem(placement: .topBarLeading) {
+                    sidebarToggleButton(action: onOpenSidebar)
+                }
             }
         }
         // The toolbar carries no model control: the Claude-style composer
@@ -759,6 +789,24 @@ extension ChatView {
             .accessibilityLabel("More actions")
             .accessibilityIdentifier("more-actions-menu")
         }
+    }
+
+    /// The conversations toggle: a drawn two-bar mark (two 19×1.6pt bars)
+    /// rather than the system's three-bar symbol. The shell owns the drawer;
+    /// this only resigns the composer first (P2-6: the drawer covers it).
+    private func sidebarToggleButton(action: @escaping () -> Void) -> some View {
+        Button {
+            resignComposerFocus()
+            action()
+        } label: {
+            ZiroMenuGlyph()
+                // The mark is 19×7pt; the 44pt frame keeps the repo's
+                // minimum hit target without drawing anything behind it.
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel("Conversations")
+        .accessibilityIdentifier("sidebar-button")
     }
 
     // MARK: Queued Alert
@@ -805,6 +853,31 @@ extension ChatView {
     }
 }
 
+// MARK: - Menu Glyph
+
+/// The nav bar's conversations mark: two 19×1.6pt bars, drawn rather than
+/// taken from the symbol set so the toggle is a specific mark at a specific
+/// weight instead of a system glyph that changes shape with the SF Symbols
+/// release. Decorative; the button carries the label.
+private struct ZiroMenuGlyph: View {
+    private static let barWidth: CGFloat = 19
+    private static let barHeight: CGFloat = 1.6
+
+    var body: some View {
+        VStack(spacing: ZiroTheme.Spacing.xSmall) {
+            bar
+            bar
+        }
+        .foregroundStyle(ZiroTheme.primaryText)
+        .accessibilityHidden(true)
+    }
+
+    private var bar: some View {
+        Capsule()
+            .frame(width: Self.barWidth, height: Self.barHeight)
+    }
+}
+
 // MARK: - Day Divider
 
 /// Lightweight centered day separator for the transcript: a single
@@ -817,7 +890,8 @@ private struct DayDivider: View {
         HStack(spacing: ZiroTheme.Spacing.small) {
             DashedRule()
             Text(label)
-                .font(ZiroType.micro)
+                // Timestamps read as machine time, not prose: Space Mono.
+                .font(ZiroType.meta)
                 .foregroundStyle(ZiroTheme.tertiaryText)
                 .fixedSize()
             DashedRule()

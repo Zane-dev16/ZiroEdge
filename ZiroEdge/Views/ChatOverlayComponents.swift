@@ -194,12 +194,12 @@ struct ChatModelPickerMenu<PickerLabel: View>: View {
     }
 }
 
-/// Quiet text model picker sitting above the composer message field (see
-/// `statusOrTokenHintRow`). Same phases, menu actions, and VoiceOver labels
-/// the former toolbar pill carried, via the shared `ChatModelPicker` source
-/// of truth — but deliberately not a pill: name + a single
-/// chevron in `footnote` type with no fill, so it reads as a status line
-/// rather than an isolated capsule.
+/// Model picker living inside the composer's control row (see
+/// `ChatView.inputBar`). Same phases, menu actions, and VoiceOver labels the
+/// former toolbar pill carried, via the shared `ChatModelPicker` source of
+/// truth — and, like the vision's pill, drawn as a capsule: hairline border on
+/// the composer's own fill, so it reads as an outlined chip embedded in the
+/// well rather than a second surface beside it.
 struct ComposerModelPicker: View {
     let phase: ModelLoadPhase
     let modelName: String?
@@ -215,7 +215,7 @@ struct ComposerModelPicker: View {
 
     /// Width cap scales with Dynamic Type (relative to the picker's
     /// footnote font) so long model names truncate with an ellipsis
-    /// instead of pushing past the row.
+    /// instead of pushing past the pill.
     @ScaledMetric(relativeTo: .footnote) private var pickerMaxWidth: CGFloat = 220
 
     var body: some View {
@@ -241,6 +241,9 @@ struct ComposerModelPicker: View {
                 .truncationMode(.tail)
                 .allowsTightening(true)
                 .foregroundStyle(ChatModelPicker.titleTint(phase: phase))
+                // The cap lives on the text, not the row, so the capsule hugs
+                // the (possibly truncated) label instead of filling the cap.
+                .frame(maxWidth: pickerMaxWidth, alignment: .leading)
             Image(systemName: "chevron.down")
                 // Match the picker text voice (ZiroType.footnote, regular) —
                 // one weight/size set per surface. chevron.down is vertical,
@@ -249,11 +252,15 @@ struct ComposerModelPicker: View {
                 .foregroundStyle(ZiroTheme.tertiaryText)
                 .accessibilityHidden(true)
         }
-        // 44pt minimum hit target (repo standard): the tappable area never
-        // shrinks below the touch floor even though visually this is just
-        // a text line with no pill fill.
-        .frame(maxWidth: pickerMaxWidth, minHeight: 44, alignment: .leading)
-        .contentShape(Rectangle())
+        .padding(.horizontal, ZiroTheme.Spacing.medium)
+        // 44pt minimum hit target (repo standard): the capsule never shrinks
+        // below the touch floor even though its label is footnote text.
+        .frame(minHeight: 44)
+        // Capsule on the composer's own fill — the outline is what makes it
+        // read as a pill, exactly as the vision draws it.
+        .background(Capsule().fill(ZiroTheme.wellBackground))
+        .overlay(Capsule().stroke(ZiroTheme.hairline, lineWidth: 1))
+        .contentShape(Capsule())
     }
 
     /// Fixed-width leading slot: reserves the indicator's space in every

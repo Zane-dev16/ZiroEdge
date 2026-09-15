@@ -5,7 +5,7 @@
 // The store opens and services verify off the critical path (AppRuntime),
 // so this frame carries no copy about history or verification — the logo
 // and spinner are the entire moment. Quiet surfaces only
-// (`ZiroTheme.pageBackground`: warm paper `#F7F3EC` / navy `#0A0F1E`,
+// (`ZiroTheme.pageBackground`: warm paper `#F7F3EC` / near-black `#121314`,
 // matching the `LaunchBackground` splash asset so the handoff is seamless).
 // Static logo + standard ProgressView: Reduce Motion safe, no custom
 // animation curves, no text sizes to scale (Dynamic Type neutral).

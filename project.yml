@@ -20,6 +20,9 @@ targets:
         excludes:
           - "**/*.xcassets"
       - path: ZiroEdge/Resources/Assets.xcassets
+      # Bundled typefaces (ZiroType.Face). No explicit entry needed: XcodeGen
+      # assigns .ttf files under `path: ZiroEdge` to the Resources phase, the
+      # same way it does PrivacyInfo.xcprivacy and THIRD_PARTY_NOTICES.md.
     # Branded launch screen (spec §Launch): xcodegen writes Config/Info.plist
     # with the UILaunchScreen dictionary referencing the LaunchBackground
     # colorset (universal #F7F3EC, dark #0A0F1E matching ZiroTheme.pageBackground)
@@ -36,6 +39,19 @@ targets:
       path: Config/Info.plist
       properties:
         ModelCatalogVersion: "1"
+        # Register the bundled faces with the text system (ZiroType). Names
+        # are bundle FILE names — the fonts are copied flat next to the
+        # executable — not the PostScript names ZiroType.Face uses. Without
+        # this key every role silently falls back to the system font, so
+        # TypographyContractTests asserts the pairing.
+        UIAppFonts:
+          - Orbitron-Bold.ttf
+          - Orbitron-SemiBold.ttf
+          - Satoshi-Bold.ttf
+          - Satoshi-Medium.ttf
+          - Satoshi-Regular.ttf
+          - SpaceMono-Bold.ttf
+          - SpaceMono-Regular.ttf
         UILaunchScreen:
           UIColorName: LaunchBackground
           UIImageName: AppLogoLaunch

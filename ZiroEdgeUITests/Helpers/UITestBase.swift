@@ -271,7 +271,7 @@ class UITestBase: XCTestCase {
         // `firstMatch` is never nil, so choose the first element that exists.
         let candidates = [
             app.textFields["chatInput"].firstMatch,
-            app.textFields["Message ZiroEdge"].firstMatch,
+            app.textFields["Message..."].firstMatch,
             app.textFields.firstMatch,
         ]
         guard let field = candidates.first(where: { $0.waitForExistence(timeout: 2) }) else {

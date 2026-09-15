@@ -20,6 +20,16 @@
 	<string>1</string>
 	<key>ModelCatalogVersion</key>
 	<string>1</string>
+	<key>UIAppFonts</key>
+	<array>
+		<string>Orbitron-Bold.ttf</string>
+		<string>Orbitron-SemiBold.ttf</string>
+		<string>Satoshi-Bold.ttf</string>
+		<string>Satoshi-Medium.ttf</string>
+		<string>Satoshi-Regular.ttf</string>
+		<string>SpaceMono-Bold.ttf</string>
+		<string>SpaceMono-Regular.ttf</string>
+	</array>
 	<key>UILaunchScreen</key>
 	<dict>
 		<key>UIColorName</key>

@@ -52,7 +52,8 @@ struct OnboardingView: View {
             HStack(spacing: ZiroTheme.Spacing.small) {
                 ZiroBrandMark(size: topBarMarkSize)
                 Text("ZIROEDGE")
-                    .font(.caption.weight(.bold))
+                    // The one-word brand moment: Orbitron, tracked out.
+                    .font(ZiroType.wordmark)
                     .tracking(1.4)
                     .foregroundStyle(ZiroTheme.secondaryText)
                 Spacer()

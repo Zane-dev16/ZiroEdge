@@ -10,7 +10,7 @@
 //
 //   ZiroTheme      — color, spacing, radius, measure, motion, type tokens
 //   ZiroTone       — the one badge/banner tint system (tinted fill + text)
-//   ZiroType       — the type scale (SF Pro + monospaced technical voice)
+//   ZiroType       — the type scale (Orbitron/Satoshi/Space Mono — Typography.swift)
 //   ZiroMeasure    — content width caps (replaces ad-hoc 360/520/680/760)
 //   ZiroMotion     — the three standard curves, reduce-motion aware
 //   Button styles  — primary / secondary / destructive
@@ -49,64 +49,88 @@ private func ziroColor(light: UInt32, dark: UInt32) -> Color {
 /// colors, ad-hoc opacities, or untyped spacing numbers; everything visual
 /// resolves to a named token here.
 ///
-/// Surfaces — "midnight navy" (dark) and "warm paper" (light), four
+/// Surfaces — "near-black graphite" (dark) and "warm paper" (light), four
 /// elevations that replace raw `.systemBackground`:
 ///   page    the base canvas (chat transcript, page bodies)
-///   raised  cards and message bubbles resting on the page
-///   well    recessed input fields and wells (sits on chrome/page)
+///   raised  cards, assistant bubbles, banner fills
+///   well    input wells and the composer (same gray as `raised` — the
+///           vision's composer and assistant bubble are one fill)
 ///   overlay custom floating layers (menus, popovers) — brightest
 enum ZiroTheme {
 
     // MARK: Surfaces
 
-    /// Base canvas. Light: warm paper `#F7F3EC`. Dark: near-black navy `#0A0F1E`.
-    static let pageBackground = ziroColor(light: 0xF7F3EC, dark: 0x0A0F1E)
+    /// Base canvas. Light: warm paper `#F7F3EC`. Dark: near-black `#121314`.
+    static let pageBackground = ziroColor(light: 0xF7F3EC, dark: 0x121314)
 
     /// Raised content on the page: cards, assistant bubbles, banner fills.
-    /// Light: white `#FFFFFF`. Dark: navy card `#131A30`.
-    static let raisedBackground = ziroColor(light: 0xFFFFFF, dark: 0x131A30)
+    /// Light: white `#FFFFFF`. Dark: dark charcoal `#1C1C1E`.
+    static let raisedBackground = ziroColor(light: 0xFFFFFF, dark: 0x1C1C1E)
 
-    /// Recessed input wells (composer field, search fields). Light: `#EFE9DF`.
-    /// Dark: `#1A2340` — one step lighter than the navy page so text fields
-    /// read as places you type into without floating like a card.
-    static let inputBackground = ziroColor(light: 0xEFE9DF, dark: 0x1A2340)
+    /// Input wells (composer well, search fields). Light: `#EFE9DF`.
+    /// Dark: `#1C1C1E` — deliberately identical to `raisedBackground`:
+    /// a message bubble and the composer are the same gray in the vision,
+    /// and both sit one clear step above the near-black page.
+    static let inputBackground = ziroColor(light: 0xEFE9DF, dark: 0x1C1C1E)
 
     /// Alias for the input-well elevation; prefer this name in new code.
     static let wellBackground = inputBackground
 
-    /// Floating custom layers above everything. Light: white. Dark: `#1E2A4F`.
-    static let overlayBackground = ziroColor(light: 0xFFFFFF, dark: 0x1E2A4F)
+    /// Floating custom layers above everything. Light: white. Dark: `#25252A`.
+    static let overlayBackground = ziroColor(light: 0xFFFFFF, dark: 0x25252A)
+
+    /// The user's own message bubble. Light keeps the brand accent blue
+    /// `#2E6BFF` (unchanged, with `accentForeground` on it = 4.50:1). Dark
+    /// drops the vivid accent for a deep navy `#1D2445`: in the vision the
+    /// only saturated thing left on the transcript is the user's own voice,
+    /// and vivid `#2E6BFF` appears nowhere. White `accentForeground` on it is
+    /// 15.10:1.
+    static let userBubble = ziroColor(light: 0x2E6BFF, dark: 0x1D2445)
 
     /// Legacy alias retained for the pre-overhaul call sites; identical to
     /// `raisedBackground`. New code should use the elevation names above.
     static let elevatedBackground = raisedBackground
 
+    // MARK: Composer Controls
+
+    /// Disc behind the composer's attachment (`+`) control: neutral graphite
+    /// one clear step above the well, so the glyph reads as a tactile control
+    /// rather than a bare icon. Deliberately the same value in both
+    /// appearances (composer chrome does not flip with the page). White
+    /// `accentForeground` on it is 11.44:1.
+    static let controlDisc = ziroColor(light: 0x353A42, dark: 0x353A42)
+
+    /// The composer's send disc once a send is available: one step brighter
+    /// than `controlDisc` so the live action leads the row. White
+    /// `accentForeground` on it is 8.00:1.
+    static let controlDiscActive = ziroColor(light: 0x4B515B, dark: 0x4B515B)
+
     // MARK: Hairlines & Dividers
 
     /// The 1pt stroke that does the work shadows do elsewhere. Light: warm
-    /// sand `#DCD2C2`. Dark: navy hairline `#263154`. Decorative (no contrast floor).
-    static let hairline = ziroColor(light: 0xDCD2C2, dark: 0x263154)
+    /// sand `#DCD2C2`. Dark: charcoal hairline `#2E2E32`. Decorative (no contrast floor).
+    static let hairline = ziroColor(light: 0xDCD2C2, dark: 0x2E2E32)
 
     /// Legacy alias; identical to `hairline`. Prefer `hairline` in new code.
     static let subtleBorder = hairline
 
     /// Emphasized stroke for focused/selected outlines and the brand mark's
-    /// tile edge. Light: `#C9BCA6`. Dark: `#35426B`.
-    static let hairlineStrong = ziroColor(light: 0xC9BCA6, dark: 0x35426B)
+    /// tile edge. Light: `#C9BCA6`. Dark: `#3F4249`.
+    static let hairlineStrong = ziroColor(light: 0xC9BCA6, dark: 0x3F4249)
 
     // MARK: Text Hierarchy
 
     /// Primary text. Light `#1C1814` (15.95:1 on page). Dark `#EDF1F7`
-    /// (16.84:1 on page). Cool-tinted near-black/near-white — pure
+    /// (16.41:1 on page). Cool-tinted near-black/near-white — pure
     /// black/white reads clinical against the tinted surfaces.
     static let primaryText = ziroColor(light: 0x1C1814, dark: 0xEDF1F7)
 
     /// Supporting text (descriptions, footers, captions). Light `#5C544A`
-    /// (6.73:1 on page). Dark `#9AA3B8` (7.55:1 on page).
+    /// (6.73:1 on page). Dark `#9AA3B8` (7.36:1 on page).
     static let secondaryText = ziroColor(light: 0x5C544A, dark: 0x9AA3B8)
 
     /// Tertiary metadata (timestamps, SHA fragments, locked parameters).
-    /// Light `#6E6659` (5.12:1 on page). Dark `#8B93A7` (6.21:1 on page,
+    /// Light `#6E6659` (5.12:1 on page). Dark `#8B93A7` (6.05:1 on page,
     /// 5.03:1 on wells). Still clears 4.5:1 on every surface including wells.
     static let tertiaryText = ziroColor(light: 0x6E6659, dark: 0x8B93A7)
 
@@ -241,8 +265,8 @@ enum ZiroTheme {
         static let xxLarge: CGFloat = 40
         /// Capsule badge/chip horizontal inset (a half-step of the rhythm).
         static let badge: CGFloat = 6
-        /// Empty-state hero top inset — reserves the brand moment's air.
-        static let heroTop: CGFloat = 96
+        /// Chat composer outer margin (off-rhythm by design; vision spec 22).
+        static let composer: CGFloat = 22
     }
 
     // MARK: Radius — one shape scale
@@ -255,9 +279,12 @@ enum ZiroTheme {
         /// Controls, buttons, text fields, banners.
         static let control: CGFloat = 14
         /// Message bubbles and the thinking indicator.
-        static let bubble: CGFloat = 18
+        static let bubble: CGFloat = 13
         /// Cards and large grouped surfaces.
         static let card: CGFloat = 20
+        /// The chat composer's floating well — a larger, softer round than
+        /// `control` so it reads as a surface you speak into, not a list row.
+        static let composer: CGFloat = 23
     }
 
     // MARK: Measure — content width caps
@@ -293,42 +320,6 @@ enum ZiroTheme {
         /// Streaming-cursor blink period in seconds (matches MessageBubble's
         /// TimelineView cadence; documented here so it changes in one place).
         static let cursorPeriod: TimeInterval = 0.6
-    }
-}
-
-// MARK: - Type Scale
-
-/// ZiroEdge's type scale. Every role is a system text style, so Dynamic Type
-/// scaling is inherited for free — never use fixed point sizes for text.
-/// The `technical` voice renders engineering data (model IDs, quantization
-/// tiers, token counts, byte sizes, SHA fragments) in a monospaced design:
-/// this is an engineering tool, technical data should look technical.
-enum ZiroType {
-    /// Onboarding page titles, the largest brand moments.
-    static let display = Font.title.weight(.bold)
-    /// Empty-state hero titles, page-level statements.
-    static let title = Font.title3.weight(.semibold)
-    /// Card headers, model detail identity, sheet titles.
-    static let heading = Font.headline.weight(.semibold)
-    /// List row titles, banner titles, header-pill labels.
-    static let rowTitle = Font.subheadline.weight(.semibold)
-    /// Message text and primary copy.
-    static let body = Font.callout
-    /// Secondary copy: descriptions, banner messages, subtitles.
-    static let supporting = Font.footnote
-    /// Inline support text and button labels in dense contexts.
-    static let footnote = Font.caption
-    /// Metadata, banner actions.
-    static let caption = Font.caption
-    /// Badges, micro-meta, download percentages.
-    static let micro = Font.caption2
-
-    /// The technical voice: monospaced design over a standard text style so
-    /// it still scales with Dynamic Type. Default suits quant badges, token
-    /// counts, file sizes; pass `.caption2` for SHA fragments, `.body` for
-    /// model IDs in detail headers.
-    static func technical(_ style: Font.TextStyle = .footnote, _ weight: Font.Weight = .regular) -> Font {
-        .system(style, design: .monospaced, weight: weight)
     }
 }
 
@@ -475,7 +466,7 @@ struct ZiroPrimaryButtonStyle: ButtonStyle {
         configuration.label
             // System type ramp via token (Callout, Dynamic Type scaled) +
             // true 44pt floor: no vertical padding stacked on minHeight.
-            .font(ZiroType.body.weight(.semibold))
+            .font(ZiroType.bodyStrong)
             .frame(maxWidth: .infinity)
             .frame(minHeight: 44)
             .padding(.horizontal, ZiroTheme.Spacing.xLarge)
@@ -500,7 +491,9 @@ struct ZiroSecondaryButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(ZiroType.body.weight(.semibold))
+            // Bold, not semibold: accent on accentContainer is 3.84:1 (light)
+            // and only clears AA as bold ≥14pt (docs/DESIGN-SPEC.md §4).
+            .font(ZiroType.bodyStrong)
             .frame(maxWidth: .infinity)
             .frame(minHeight: 44)
             .padding(.horizontal, ZiroTheme.Spacing.large)
@@ -523,7 +516,7 @@ struct ZiroDestructiveButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(ZiroType.body.weight(.semibold))
+            .font(ZiroType.bodyStrong)
             .frame(maxWidth: .infinity)
             .frame(minHeight: 44)
             .padding(.horizontal, ZiroTheme.Spacing.large)
@@ -894,13 +887,18 @@ struct ZiroProgressRing: View {
 
 // MARK: - Message Bubble Treatment
 
-/// The two bubble treatments. User: full accent fill (label uses
-/// `accentForeground`) — the single blue bubble. Assistant: plain canvas
-/// text on the page, no fill and no stroke (reference minimalism: only the
-/// user's voice is a bubble).
+/// The two bubble treatments, both hairline-bordered above the page:
+///   user      `userBubble` fill — deep navy in dark, accent blue in light
+///   assistant `raisedBackground` fill — dark charcoal on the near-black page
+/// Label colors are the caller's job (`accentForeground` / `primaryText`).
 enum ZiroBubbleRole {
     case user
     case assistant
+}
+
+/// The shared bubble shape — one radius, one continuous-curve style.
+private var ziroBubbleShape: RoundedRectangle {
+    RoundedRectangle(cornerRadius: ZiroTheme.Radius.bubble, style: .continuous)
 }
 
 extension View {
@@ -910,17 +908,16 @@ extension View {
     func ziroMessageBubble(_ role: ZiroBubbleRole) -> some View {
         switch role {
         case .user:
-            self.background(
-                Color.accentColor,
-                in: RoundedRectangle(cornerRadius: ZiroTheme.Radius.bubble, style: .continuous)
-            )
-        case .assistant:
-            // Plain canvas text: no fill, no hairline. The assistant's
-            // voice sits directly on the page; the user's accent bubble is
-            // the only bubble on the transcript. (Formerly a raised +
-            // hairline "calm card" — removed in the defluff pass so the
-            // transcript matches the plain-text reference.)
             self
+                .background(ZiroTheme.userBubble, in: ziroBubbleShape)
+                .overlay(ziroBubbleShape.stroke(ZiroTheme.hairline, lineWidth: 1))
+        case .assistant:
+            // The assistant is a bubble too — dark charcoal (`raisedBackground`)
+            // with the same hairline. Elevation on this transcript is
+            // gray-on-black: page `#121314`, bubble/composer `#1C1C1E`.
+            self
+                .background(ZiroTheme.raisedBackground, in: ziroBubbleShape)
+                .overlay(ziroBubbleShape.stroke(ZiroTheme.hairline, lineWidth: 1))
         }
     }
 }

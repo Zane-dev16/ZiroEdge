@@ -1,9 +1,9 @@
 // MessageBubble.swift
 // ZiroEdge — Privacy-first local AI assistant
 //
-// Individual message row. User messages right-aligned in the single blue
-// accent bubble; assistant messages left-aligned as plain canvas text on
-// the page (no card, no hairline).
+// Individual message row. Both roles are bubbles: the user's right-aligned
+// in deep navy, the assistant's left-aligned in dark charcoal, each with a
+// hairline edge and a small monospaced timestamp just outside the bubble.
 
 import SwiftUI
 import UIKit
@@ -11,6 +11,10 @@ import UIKit
 struct MessageBubble: View {
     let message: ChatMessagePayload
     let isStreaming: Bool
+    /// Action-row gate. The transcript shows copy/branch/retry on the live
+    /// (latest assistant) turn only — repeating the row under every past
+    /// reply buried the conversation in chrome.
+    let showsActions: Bool
     let onBranch: (() -> Void)?
     let onCopy: (() -> Void)?
     let onRetry: (() -> Void)?
@@ -25,12 +29,14 @@ struct MessageBubble: View {
     init(
         message: ChatMessagePayload,
         isStreaming: Bool = false,
+        showsActions: Bool = true,
         onBranch: (() -> Void)? = nil,
         onCopy: (() -> Void)? = nil,
         onRetry: (() -> Void)? = nil
     ) {
         self.message = message
         self.isStreaming = isStreaming
+        self.showsActions = showsActions
         self.onBranch = onBranch
         self.onCopy = onCopy
         self.onRetry = onRetry
@@ -78,16 +84,18 @@ struct MessageBubble: View {
                 // Message content.
                 if message.role == .user {
                     Text(message.content)
-                        .font(ZiroType.body)
+                        // Satoshi Medium: the user's own words, one step of
+                        // optical weight above the model's reply.
+                        .font(ZiroType.bodyMedium)
                         .foregroundStyle(ZiroTheme.accentForeground)
                         .padding(.horizontal, ZiroTheme.Spacing.large)
                         .padding(.vertical, ZiroTheme.Spacing.medium)
                         .ziroMessageBubble(.user)
                         .accessibilityLabel("You said: \(message.content)")
                 } else {
-                    // Plain canvas text on the page — no card, no hairline.
-                    // `ziroMessageBubble(.assistant)` is the plain identity
-                    // treatment; only `.user` draws a bubble.
+                    // The assistant is a bubble too — dark charcoal with the
+                    // same hairline as the user's, so the transcript reads as
+                    // a two-voice exchange rather than text on a page.
                     VStack(alignment: .leading, spacing: 0) {
                         if isStreaming {
                             // The growing transcript must never re-bind this
@@ -110,13 +118,34 @@ struct MessageBubble: View {
                                 .accessibilityLabel("Assistant said: \(displayContent)")
                         }
                     }
-                    .padding(.vertical, ZiroTheme.Spacing.small)
+                    .padding(.horizontal, ZiroTheme.Spacing.large)
+                    .padding(.vertical, ZiroTheme.Spacing.medium)
+                    .ziroMessageBubble(.assistant)
+                }
+
+                // Timestamp: outside the bubble, under it, aligned to the
+                // bubble's own edge (trailing for the user, leading for the
+                // assistant) and set in the technical voice — small, quiet,
+                // monospaced. Absent for rows with no stored date. Inset 12pt
+                // off the bubble edge so it reads as a caption *under* the
+                // bubble rather than a band aligned with its corner.
+                if let sentAt = message.createdAt {
+                    Text(Self.timestampFormatter.string(from: sentAt))
+                        .font(ZiroType.technical(.caption2))
+                        .foregroundStyle(ZiroTheme.tertiaryText)
+                        .padding(message.role == .user ? .trailing : .leading, ZiroTheme.Spacing.medium)
+                        .accessibilityLabel(
+                            message.role == .user
+                                ? "Sent at \(Self.timestampFormatter.string(from: sentAt))"
+                                : "Replied at \(Self.timestampFormatter.string(from: sentAt))"
+                        )
                 }
 
                 // Action buttons. Only assistant rows offer actions
-                // (copy/branch/retry); user rows offer none. Each
-                // button keeps the scaled 44pt-square hit target.
-                if message.role == .assistant && !isStreaming {
+                // (copy/branch/retry), and only the gated live row renders
+                // them; user rows offer none. Each button keeps the scaled
+                // 44pt-square hit target.
+                if message.role == .assistant && !isStreaming && showsActions {
                     HStack(spacing: 0) {
                         Button(action: {
                             onCopy?()
@@ -191,6 +220,16 @@ struct MessageBubble: View {
         }
         return message.content
     }
+
+    /// Per-message clock time (`18:28`). One shared formatter — the row is
+    /// rendered for every message in the transcript, so a per-body
+    /// `DateFormatter` would be a needless allocation on the streaming path.
+    private static let timestampFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .none
+        formatter.timeStyle = .short
+        return formatter
+    }()
 }
 
 // MARK: - Streaming Cursor

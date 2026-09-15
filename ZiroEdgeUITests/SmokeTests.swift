@@ -59,7 +59,7 @@ final class SmokeTests: UITestBase {
         capture("chat_empty_state")
         // If we managed to navigate into a conversation, verify the text input
         if navigated {
-            let input = app.textFields["Message ZiroEdge..."].firstMatch
+            let input = app.textFields["Message..."].firstMatch
                 ?? app.textFields.firstMatch
             if input.waitForExistence(timeout: 5) {
                 // ChatView loaded with text input — great

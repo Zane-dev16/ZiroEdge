@@ -228,8 +228,8 @@ struct MarkdownRenderer {
 
     private static func renderCodeBlock(_ code: String, language: String) -> AttributedString {
         var result = AttributedString("\n")
-        // Single recessed-well card (navy `#1A2340` in dark mode) instead of
-        // systemGray6, which renders light-gray on the navy canvas. The fence
+        // Single recessed-well card (charcoal `#1C1C1E` in dark mode) instead of
+        // systemGray6, which renders light-gray on the near-black canvas. The fence
         // language is parsed but stays out of the text — the transcript
         // renders no block header or copy button, so a language label would
         // be orphan chrome. Syntax tint is tasteful and dark-mode safe:

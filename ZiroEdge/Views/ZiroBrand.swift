@@ -19,7 +19,17 @@ import SwiftUI
 /// and is untouched. Static by construction (no animation) so it is Reduce
 /// Motion safe everywhere.
 struct ZiroBrandMark: View {
+    /// The side of the square `AppLogo` canvas the mark is drawn from.
     var size: CGFloat = 64
+
+    /// Where the monogram sits inside that canvas — measured from the
+    /// shipped artwork: 722×525px inside the 1254px square PNG, the rest
+    /// transparent padding. `markAspect` is the art's width ÷ height, and
+    /// the layout box is the art box (`size × artWidthFraction` wide,
+    /// ÷ `markAspect` tall), so the mark never reserves phantom
+    /// letterboxing above and below it.
+    static let markAspect: CGFloat = 722.0 / 525.0
+    private static let artWidthFraction: CGFloat = 722.0 / 1254.0
 
     var body: some View {
         Image("AppLogo")
@@ -27,12 +37,17 @@ struct ZiroBrandMark: View {
             // with the adaptive foreground: the transparent PNG has no baked
             // background, so the glyph blends into whatever surface sits
             // behind it instead of drawing the app-icon-style black box.
-            // `.fit` (not `.fill`) so the full monogram stays visible — the
-            // artwork occupies a centered subset of the square asset.
             .renderingMode(.template)
             .resizable()
-            .aspectRatio(contentMode: .fit)
+            // Draw at the requested canvas size, then hand the layout the
+            // art's own box — the padding outside it is clipped away instead
+            // of pushing neighbours apart.
             .frame(width: size, height: size)
+            .frame(
+                width: size * Self.artWidthFraction,
+                height: size * Self.artWidthFraction / Self.markAspect
+            )
+            .clipped()
             .foregroundStyle(ZiroTheme.primaryText)
             .accessibilityHidden(true)
     }

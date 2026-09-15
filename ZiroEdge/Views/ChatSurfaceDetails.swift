@@ -223,35 +223,36 @@ extension ChatView {
         viewModel.isLoadingConversation || viewModel.modelLoadPhase == .needsDownload
     }
 
-    /// Composer stack: the single compact model-picker pill, image
-    /// previews, then the one rounded input well — the always-visible
-    /// attachment cluster, the message field, and send riding one
-    /// well-elevation fill with a fill-only rest state and an accent focus
-    /// ring (canonical single composer treatment, matching `ziroComposerField`).
-    /// The well uses `Radius.control` (not `Radius.card`): it is a
-    /// text field, and the radius scale assigns text fields/controls to
-    /// `control` (design system §6.2, matching `ziroComposerField`). The
-    /// message field stays enabled while the model loads (disabled only
-    /// while a conversation loads or while no model exists at all) so drafts are never blocked; only
-    /// send waits for residency. The attachment cluster disables itself
-    /// (with a spoken reason) until a vision-capable model is selected,
-    /// but never leaves the row — see `attachmentButtons`. No top hairline,
-    /// no stacked pills: the picker row above is the sole pill.
+    /// Composer: image previews, then one floating well — the message field
+    /// on top, and a control row under it (`+` left, model pill and send
+    /// right). The model picker lives *inside* the well (vision: one surface,
+    /// not a status line floating above a field), so the pill reads as part of
+    /// the composer rather than a second control.
+    ///
+    /// The well uses `ZiroTheme.Radius.composer` (23) — a softer, larger round
+    /// than the `control` radius the other text fields use — and carries a 1pt
+    /// `hairline` at rest so it is visible against the near-black page without
+    /// a shadow; focus swaps that hairline for the accent ring, which doubles
+    /// as the keyboard focus indicator and must never be removed. The message
+    /// field stays enabled while the model loads (disabled only while a
+    /// conversation loads or while no model exists at all) so drafts are never
+    /// blocked; only send waits for residency. The attachment control disables
+    /// itself (with a spoken reason) until a vision-capable model is selected,
+    /// but never leaves the row — see `attachmentButtons`.
     var inputBar: some View {
         VStack(spacing: ZiroTheme.Spacing.xSmall) {
-            statusOrTokenHintRow
-
             if !viewModel.pendingImages.isEmpty { imagePreviewRow }
 
-            HStack(alignment: .center, spacing: ZiroTheme.Spacing.small) {
-                attachmentButtons
-                TextField("Message ZiroEdge", text: $viewModel.inputText, axis: .vertical)
+            VStack(alignment: .leading, spacing: ZiroTheme.Spacing.small) {
+                TextField("Message...", text: $viewModel.inputText, axis: .vertical)
                     .textFieldStyle(.plain)
                     .accessibilityIdentifier("chatInput")
                     .accessibilityHint("Enter a message for the local model")
                     .lineLimit(1...6)
-                    .frame(minHeight: 44, alignment: .center)
-                    .padding(.vertical, ZiroTheme.Spacing.xSmall)
+                    .frame(minHeight: 28, alignment: .center)
+                    // 44pt hit target lives at the well level; contentShape
+                    // keeps the full field width tappable at the shorter height.
+                    .contentShape(Rectangle())
                     .focused($isInputFocused)
                     .disabled(composerInputDisabled)
                     // P2-7: release focus as the enabled condition fails, so a
@@ -263,44 +264,47 @@ extension ChatView {
                     .onSubmit {
                         if !viewModel.isStreaming { Task { await viewModel.sendMessage() } }
                     }
-                sendButton
+
+                HStack(alignment: .center, spacing: ZiroTheme.Spacing.small) {
+                    attachmentButtons
+                    Spacer(minLength: ZiroTheme.Spacing.small)
+                    modelPicker
+                    sendButton
+                }
             }
-            .padding(.horizontal, ZiroTheme.Spacing.medium)
+            .padding(.horizontal, ZiroTheme.Spacing.large)
             .padding(.vertical, ZiroTheme.Spacing.small)
             .background(
-                RoundedRectangle(cornerRadius: ZiroTheme.Radius.control, style: .continuous)
+                RoundedRectangle(cornerRadius: ZiroTheme.Radius.composer, style: .continuous)
                     .fill(ZiroTheme.wellBackground)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: ZiroTheme.Radius.control, style: .continuous)
-                    .stroke(isInputFocused ? Color.accentColor : .clear, lineWidth: 1.5)
+                RoundedRectangle(cornerRadius: ZiroTheme.Radius.composer, style: .continuous)
+                    .stroke(
+                        isInputFocused ? Color.accentColor : ZiroTheme.hairline,
+                        lineWidth: isInputFocused ? 1.5 : 1
+                    )
             )
             .ziroAnimation(ZiroMotion.press, value: isInputFocused)
-            .padding(.horizontal, ZiroTheme.Spacing.large)
+            .padding(.horizontal, ZiroTheme.Spacing.composer)
             .padding(.bottom, ZiroTheme.Spacing.medium)
         }
         .padding(.top, ZiroTheme.Spacing.small)
         .background(ZiroTheme.pageBackground)
     }
 
-    /// Composer top row: the quiet model status line — the sole identity
-    /// surface (same phases, menu, and VoiceOver labels the toolbar pill
-    /// used to carry). Text-only by design: no capsule, no fill, no token
-    /// counter, no download/unload captions. Left-aligned to the input
-    /// well's edge so the two rows read as one column.
-    var statusOrTokenHintRow: some View {
-        HStack {
-            ComposerModelPicker(
-                phase: viewModel.modelLoadPhase,
-                modelName: viewModel.selectedModel?.displayName,
-                isUserUnloaded: viewModel.lifecycleManager.isUserUnloaded,
-                availableModels: viewModel.availableModels,
-                onSelectModel: { model in Task { await viewModel.selectModel(model) } },
-                onBrowseModels: { navigateToRoute(.models) },
-                onRetryLoad: { viewModel.retryModelLoad() }
-            )
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, ZiroTheme.Spacing.large)
+    /// Model pill, inside the composer's control row. Still the sole identity
+    /// surface: same phases, menu, and VoiceOver labels as before, only the
+    /// chrome moved from an unfilled status line to the pill the vision shows.
+    var modelPicker: some View {
+        ComposerModelPicker(
+            phase: viewModel.modelLoadPhase,
+            modelName: viewModel.selectedModel?.displayName,
+            isUserUnloaded: viewModel.lifecycleManager.isUserUnloaded,
+            availableModels: viewModel.availableModels,
+            onSelectModel: { model in Task { await viewModel.selectModel(model) } },
+            onBrowseModels: { navigateToRoute(.models) },
+            onRetryLoad: { viewModel.retryModelLoad() }
+        )
     }
 }

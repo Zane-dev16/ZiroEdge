@@ -10,15 +10,17 @@
 
 ZiroEdge runs an LLM on the user's own hardware with no network. The interface must feel like a **precision instrument with a warm soul**: engineered calm, not a colorful consumer chat app; warm, not cold enterprise gray.
 
-- **Surfaces.** A designed four-level surface system — deep navy-tinted near-black in dark mode; warm paper-white in light mode. Depth comes from **hairline strokes first, soft restrained shadows second**. One shadow language, tokenized.
+- **Surfaces.** A designed four-level surface system — near-black graphite in dark mode; warm paper-white in light mode. Depth comes from **hairline strokes first, soft restrained shadows second**. One shadow language, tokenized.
 - **Accent.** One vivid blue signal (the `AccentColor` asset: `#2E6BFF` in every appearance): primary actions, focus rings, active states, the streaming cursor, progress. Used with discipline — if accent is on screen for something that is not actionable, load-bearing, or alive, remove it.
 - **Semantics.** Complete status palette (positive / warning / danger / info) as AA-verified token pairs with pre-composited tinted containers. Raw `.red`, `.orange`, `.green`, `.blue`, `.purple`, `.indigo` are banned in views.
 - **Type.** SF Pro via system text styles (Dynamic Type free), plus a **technical voice** — monospaced design — for model IDs, quantization tiers, token counts, byte sizes, SHA fragments. This is an engineering tool; technical data looks technical.
-- **Rhythm.** One spacing scale (2/4/8/12/16/24/40), one radius scale (6/10/14/18/20), one measure system (360/520/680/760).
+- **Rhythm.** One spacing scale (2/4/8/12/16/24/40), one radius scale (6/10/14/20/28), one measure system (360/520/680/760).
 - **Motion.** Small, springy, purposeful. Three standard curves. Always Reduce-Motion aware.
 - **The brand moment.** The chat empty state: brand mark, wordmark, privacy statement, guided starting points. Never blank.
 
-**Decision record — accent asset:** the `AccentColor`/`AccentForeground` colorsets are vivid blue `#2E6BFF` in every appearance with a white foreground. Verified: white on `#2E6BFF` = 4.50:1; both assets carry Increased Contrast variants. The navy + blue identity is correct.
+**Decision record — accent asset:** the `AccentColor`/`AccentForeground` colorsets are vivid blue `#2E6BFF` in every appearance with a white foreground. Verified: white on `#2E6BFF` = 4.50:1; both assets carry Increased Contrast variants. The asset is unchanged.
+
+**Decision record — dark surface retune (vision batch):** the dark appearance is neutral graphite, not navy, because the vision screenshots contain no blue surfaces at all — elevation is gray-on-black. `pageBackground` `#0B0B0D` · `raisedBackground`/`wellBackground` `#1C1C1E` (deliberately one value: the vision's assistant bubble and composer well are the same fill) · `overlayBackground` `#25252A` · `hairline` `#2E2E32` · `hairlineStrong` `#3F4249`. The user's own bubble is the one saturated surface left: light keeps accent blue `#2E6BFF`, dark uses deep navy `#1E2A6B` (new token `userBubble`). Vivid `#2E6BFF` remains the *signal* — focus rings, cursor, primary buttons, active icons. Light-mode tokens are untouched by this retune.
 
 ---
 
@@ -28,8 +30,8 @@ ZiroEdge runs an LLM on the user's own hardware with no network. The interface m
 2. **Never** hand-roll `.shadow(...)`, `.animation(...)`, font point sizes, or width caps. Use `ziroShadow`, `ziroAnimation`, `ZiroType`, `ZiroMeasure`.
 3. **Never** break the UI-test contract (§10). When in doubt about an identifier, label, symbol, or spoken phrase, the contract wins over this spec.
 4. **44×44pt minimum** for every interactive element; prefer `@ScaledMetric`-scaled frames so targets grow with Dynamic Type (existing pattern in `ChatView`, `MessageBubble`, `ModelsView`, `SettingsPage`).
-5. **Dynamic Type:** text only via text styles (`ZiroType`) or `.monospaced()` variants; decorative fixed sizes (icons, rings, mark) via `@ScaledMetric(relativeTo:)`.
-6. **No behavior/flow/IA changes.** This is a visual system. The only allowed interaction addition is the empty-state sample-prompt chips (§8.1), which must reuse the existing send flow.
+5. **Dynamic Type:** text only via `ZiroType` roles. Bundled faces scale because every role is a `Font.custom(_:size:relativeTo:)` anchored to a system text style — a bare `Font.custom(_:size:)` or a fixed `.font(.system(size:))` breaks scaling and is never correct for text. Decorative fixed sizes (icons, rings, mark) via `@ScaledMetric(relativeTo:)`.
+6. **No behavior/flow/IA changes.** This is a visual system: palette, shape, type, and placement only. The send flow, model picker phases, and every identifier in §10 stay exactly as they are.
 7. `accessibilityReduceMotion` gates every animation; state changes still apply, just without motion.
 8. Legacy aliases (`ZiroTheme.elevatedBackground`, `.subtleBorder`, `.inputBackground`) still compile — **do not use them in new code**; use the elevation/hairline names. Migrate call sites opportunistically.
 
@@ -43,19 +45,22 @@ All tokens are fixed sRGB values per appearance (implemented as dynamic `UIColor
 
 | Token | Light | Dark | Role |
 | --- | --- | --- | --- |
-| `pageBackground` | `#F7F3EC` warm paper | `#0A0F1E` near-black navy | Base canvas: page bodies, chat transcript, List/Form pages |
-| `raisedBackground` | `#FFFFFF` | `#131A30` navy card | Cards, assistant bubbles, banner fills resting on the page |
-| `wellBackground` (= `inputBackground`) | `#EFE9DF` | `#1A2340` | Recessed input wells: composer field, search fields |
-| `overlayBackground` | `#FFFFFF` | `#1E2A4F` | Custom floating layers (menus, popovers, custom sheets) |
+| `pageBackground` | `#F7F3EC` warm paper | `#0B0B0D` near-black | Base canvas: page bodies, chat transcript, List/Form pages |
+| `raisedBackground` | `#FFFFFF` | `#1C1C1E` dark charcoal | Cards, assistant bubbles, banner fills resting on the page |
+| `wellBackground` (= `inputBackground`) | `#EFE9DF` | `#1C1C1E` | Input wells: the chat composer, search fields |
+| `overlayBackground` | `#FFFFFF` | `#25252A` | Custom floating layers (menus, popovers, custom sheets) |
+| `userBubble` | `#2E6BFF` accent blue | `#1E2A6B` deep navy | The user's own message bubble (`accentForeground` white on it) |
 
-Elevation order (light): page < well < raised = overlay. Elevation order (dark): page < raised < well < overlay — wells read as "places you type", raised reads as "content that floats".
+Elevation order (light): page < well < raised = overlay. Elevation order (dark): page < raised = well < overlay — wells and raised surfaces share one gray (the vision's composer and assistant bubble are the same fill); the overlay step keeps menus above both.
+
+`userBubble` is a *content* fill, not a surface: it is the only saturated fill on the transcript. White on it is 4.50:1 (light) / 13.14:1 (dark).
 
 ### 3.2 Hairlines
 
 | Token | Light | Dark | Role |
 | --- | --- | --- | --- |
-| `hairline` (= legacy `subtleBorder`) | `#DCD2C2` | `#263154` navy hairline | The default 1pt stroke on cards, bubbles, banners, chips, rings |
-| `hairlineStrong` | `#C9BCA6` | `#35426B` | Focused/selected outlines, brand-mark tile edge |
+| `hairline` (= legacy `subtleBorder`) | `#DCD2C2` | `#2E2E32` charcoal hairline | The default 1pt stroke on cards, bubbles, banners, chips, rings |
+| `hairlineStrong` | `#C9BCA6` | `#3F4249` | Focused/selected outlines, brand-mark tile edge |
 
 Hairlines are decorative (no contrast floor). Depth rule: **hairline always, shadow optionally** — a surface with a shadow but no hairline is wrong.
 
@@ -87,7 +92,7 @@ Raw accent `#2E6BFF` on its own containers is 3.84:1 (light) / 3.20:1 (dark) —
 | `.warning` → `warningText` / `warningContainer` | `#A64B00` | `#FF9500` (system orange) | `#F4E9E0` | `#3B2A13` |
 | `.danger` → `dangerText` / `dangerContainer` | `#C40013` | `#FF554A` | `#F8E0E3` | `#3B221C` |
 | `.info` → `infoText` / `infoContainer` | `#0062CC` | `#3D9BFF` | `#E0ECF9` | `#232A32` |
-| `.neutral` → `secondaryText` / `neutralContainer` (= well) | `#5C544A` | `#9AA3B8` | `#EFE9DF` | `#1A2340` |
+| `.neutral` → `secondaryText` / `neutralContainer` (= well) | `#5C544A` | `#9AA3B8` | `#EFE9DF` | `#1C1C1E` |
 
 ### 3.6 Data hues (categorical, NOT status)
 
@@ -106,23 +111,23 @@ Floors: **4.5:1** text (any size the app renders), **3:1** icons/large text. Com
 
 **Text hierarchy (≥4.5 required):**
 
-| Token | Light `#F7F3EC`/`#FFFFFF`/`#EFE9DF` page/raised/well | Dark `#0A0F1E`/`#131A30`/`#1A2340` page/raised/well |
+| Token | Light `#F7F3EC`/`#FFFFFF`/`#EFE9DF` page/raised/well | Dark `#0B0B0D`/`#1C1C1E`/`#1C1C1E` page/raised/well |
 | --- | --- | --- |
-| `primaryText` | 15.95 / 17.65 / 14.61 | 16.84 / 15.21 / 13.64 |
-| `secondaryText` | 6.73 / 7.44 / 6.16 | 7.55 / 6.82 / 6.11 |
-| `tertiaryText` | 5.12 / 5.66 / 4.69 | 6.21 / 5.61 / 5.03 |
+| `primaryText` | 15.95 / 17.65 / 14.61 | 17.35 / 15.01 / 15.01 |
+| `secondaryText` | 6.73 / 7.44 / 6.16 | 7.78 / 6.73 / 6.73 |
+| `tertiaryText` | 5.12 / 5.66 / 4.69 | 6.40 / 5.53 / 5.53 |
 
 **Accent & semantics on page / raised / well (light, then dark):**
 
 | Token | Light (page/raised/well) | Dark (page/raised/well) |
 | --- | --- | --- |
-| accent `#2E6BFF` (both) | 4.07 / 4.50 / 3.73 | 4.24 / 3.83 / 3.43 |
-| positive | 5.75 / 6.36 / 5.27 | 8.60 / 7.77 / 6.96 |
-| warning | 5.23 / 5.79 / 4.79 | 8.68 / 7.84 / 7.03 |
-| danger | 5.66 / 6.26 / 5.18 | 6.05 / 5.46 / 4.90 |
-| info | 5.25 / 5.80 / 4.81 | 6.66 / 6.02 / 5.40 |
-| purple | 5.99 / 6.63 / 5.49 | 6.59 / 5.96 / 5.34 |
-| indigo | 5.88 / 6.50 / 5.38 | 6.24 / 5.64 / 5.06 |
+| accent `#2E6BFF` (both) | 4.07 / 4.50 / 3.73 | 4.37 / 3.78 / 3.78 |
+| positive | 5.75 / 6.36 / 5.27 | 8.86 / 7.66 / 7.66 |
+| warning | 5.23 / 5.79 / 4.79 | 8.94 / 7.74 / 7.74 |
+| danger | 5.66 / 6.26 / 5.18 | 6.23 / 5.39 / 5.39 |
+| info | 5.25 / 5.80 / 4.81 | 6.86 / 5.94 / 5.94 |
+| purple | 5.99 / 6.63 / 5.49 | 6.79 / 5.88 / 5.88 |
+| indigo | 5.88 / 6.50 / 5.38 | 6.43 / 5.56 / 5.56 |
 
 **Text on its own tinted container (≥4.5 required):**
 
@@ -135,11 +140,13 @@ Floors: **4.5:1** text (any size the app renders), **3:1** icons/large text. Com
 | info on `infoContainer` | 4.85 | 5.06 |
 | purple on `purpleContainer` | 5.51 | 4.94 |
 | indigo on `indigoContainer` | 5.43 | 4.71 |
-| neutral (`secondaryText` on well) | 6.16 | 6.11 |
+| neutral (`secondaryText` on well) | 6.16 | 6.73 |
 
-Raw accent `#2E6BFF` on its own container (3.84 / 3.20) is the one pairing below the 4.5:1 text floor: it clears only the 3:1 large-text/icon floor, so accent-on-container copy stays at semibold body or larger (see §3.4). Every other tinted-container pairing clears 4.5:1.
+Raw accent `#2E6BFF` on its own container (3.84 / 3.20) is the one pairing below the 4.5:1 text floor: it clears only the 3:1 large-text/icon floor, so accent-on-container copy stays at **bold ≥14pt** (see §3.4) — which is why `ZiroSecondaryButtonStyle` renders via `ZiroType.bodyStrong` (Satoshi 700 at 16pt) rather than a semibold or regular face. Every other tinted-container pairing clears 4.5:1.
 
 **On-accent (fills):** white on `#2E6BFF` = **4.50**. User-bubble labels, primary buttons, send glyph all clear AA.
+
+**Accent as ink on a surface** (not on a container) is the other below-floor family, and the dark retune does not change it: `#2E6BFF` on page / raised / well / overlay = 4.07 / 4.50 / 3.73 / 4.50 (light) and 4.37 / 3.78 / 3.78 / 3.39 (dark). `Scripts/verify-design-tokens.py` therefore still exits non-zero on those eight pairings (baseline before the retune: nine). They clear the 3:1 icon/large-glyph floor, which is the floor accent ink is actually used at — glyphs, rings, borders — so accent stays out of sentence copy. Lifting them would mean lightening the accent asset, which is out of scope for a surface retune.
 
 Dark-mode notes (why tokens differ from system hues): system blue `#0A84FF` = 4.11:1 and system purple `#BF5AF2` = 4.19:1 on their 12% tinted containers — below floor — so dark `infoText`/`accentPurpleText` are lightened (`#3D9BFF`/`#C973F5`), matching the established indigo `#8686FF` precedent. Increased Contrast: text tokens sit ≥4.65 everywhere at defaults and the accent asset ships HC variants; iOS Increase Contrast needs no separate token set here.
 
@@ -147,26 +154,59 @@ Dark-mode notes (why tokens differ from system hues): system blue `#0A84FF` = 4.
 
 ## 5. Typography (`ZiroType`)
 
-All roles are system text styles → Dynamic Type is inherited. Never fixed point sizes for text.
+The scale is three bundled typefaces (`app/ZiroEdge/Resources/Fonts/`, registered
+in `Config/Info.plist` `UIAppFonts`, both wired from `project.yml`), each role
+anchored to a **system text style** via `Font.custom(_:size:relativeTo:)` — so
+Dynamic Type is inherited exactly as it was on the system ramp. Never fixed
+point sizes for text.
 
-| Role | Font value | Use |
+| Face | Weights | Owns |
 | --- | --- | --- |
-| `ZiroType.display` | `.title.weight(.bold)` | Onboarding page titles |
-| `ZiroType.title` | `.title3.weight(.semibold)` | Empty-state hero title, outcome heroes |
-| `ZiroType.heading` | `.headline.weight(.semibold)` | Card headers, model-detail identity, sheet titles |
-| `ZiroType.rowTitle` | `.subheadline.weight(.semibold)` | List row titles, banner titles, header-pill label |
-| `ZiroType.body` | `.callout` | Message text, primary copy |
-| `ZiroType.supporting` | `.footnote` | Descriptions, banner messages, subtitles |
-| `ZiroType.footnote` | `.caption` | Inline support text, dense button labels |
-| `ZiroType.caption` | `.caption` | Metadata, banner actions |
-| `ZiroType.micro` | `.caption2` | Badges, micro-meta, percentages |
+| **Orbitron** | SemiBold 600, Bold 700 | The brand voice. `display`, `wordmark`. Never body copy. |
+| **Satoshi** | Regular 400, Medium 500, Bold 700 | Every text role: chat, chrome, hero copy. |
+| **Space Mono** | Regular 400, Bold 700 | The technical voice: model IDs, quant tiers, token counts, byte sizes, SHA fragments, timestamps. |
 
-This table matches `DesignSystem.swift` as shipped, which sits one step smaller than earlier revisions of this document claimed. The smaller scale is intended; do not "correct" the tokens back up.
-| `ZiroType.technical(style, weight)` | `.system(style, design: .monospaced, weight:)` | **Technical voice** — model IDs, quant tiers, token counts, byte sizes, SHA fragments, pinned revisions |
+| Role | Face @ style | Use |
+| --- | --- | --- |
+| `ZiroType.display` | Orbitron Bold @ `.title` | Onboarding page titles |
+| `ZiroType.wordmark` | Orbitron SemiBold @ `.caption` | The `ZIROEDGE` header wordmark |
+| `ZiroType.title` | Satoshi Bold @ `.title3` | Empty-state hero title, outcome heroes |
+| `ZiroType.heading` | Satoshi Medium @ `.headline` | Card headers, model-detail identity, sheet titles |
+| `ZiroType.rowTitle` | Satoshi Medium @ `.subheadline` | List row titles, banner titles, header-pill label |
+| `ZiroType.body` | Satoshi Regular @ `.callout` | Message text, primary copy |
+| `ZiroType.bodyMedium` | Satoshi Medium @ `.callout` | The user's own message bubble |
+| `ZiroType.bodyStrong` | Satoshi Bold @ `.callout` | Button labels + accent-on-container copy (§4) |
+| `ZiroType.supporting` | Satoshi Regular @ `.footnote` | Descriptions, banner messages, subtitles |
+| `ZiroType.footnote` | Satoshi Regular @ `.caption` | Inline support text, dense button labels |
+| `ZiroType.caption` | Satoshi Regular @ `.caption` | Metadata, banner actions |
+| `ZiroType.micro` | Satoshi Regular @ `.caption2` | Badges, micro-meta, percentages |
+| `ZiroType.technical(style, weight)` | Space Mono @ style | **Technical voice** — model IDs, quant tiers, token counts, byte sizes, SHA fragments, pinned revisions |
+| `ZiroType.meta` | Space Mono @ `.caption2` | Timestamps, day dividers |
 
-Technical voice defaults: `.footnote/.regular`; `.caption2` for SHA fragments; `.caption2/.semibold` inside badges; `.body` for model IDs in detail headers. Digits in streaming/technical contexts may use `.monospacedDigit()` as today.
+The anchors in `ZiroType.baseSize(for:)` are the point sizes those system styles
+resolve to at the default content size, so each role keeps the optical size its
+system counterpart had at every Dynamic Type setting. `TypographyContractTests`
+asserts the anchors against UIKit and asserts every face resolves in the built
+bundle — a font that fails to register falls back to the system face silently,
+which is the failure mode those tests exist to catch.
 
-Wordmark treatment: `Text("ZIROEDGE")`, `.caption.weight(.bold)`, `.tracking(1.4)`, `secondaryText` (matches onboarding header).
+**Weights go through the face table, not `.weight(_:)`.** SwiftUI resolves a
+weight on a custom face by descriptor, which can land back on the system font;
+where a weight is load-bearing (`bodyMedium`, `bodyStrong`) or the face is a
+separate registered family (Satoshi Medium), pick the face. `technical(_:_:)`
+maps any weight below medium to Regular and medium-or-heavier to Bold, since
+Space Mono ships only two.
+
+Technical voice defaults: `.footnote/.regular`; `.caption2` for SHA fragments;
+`.caption2/.semibold` inside badges; `.body` for model IDs in detail headers.
+Digits in streaming/technical contexts may use `.monospacedDigit()` as today.
+
+This table sits one step smaller than earlier revisions of this document
+claimed. The smaller scale is intended; do not "correct" the tokens back up.
+
+The three licenses are recorded in `Resources/THIRD_PARTY_NOTICES.md` — Satoshi
+is ITF Free Font License (commercial use allowed, **not** OFL); Inter is the
+drop-in OFL substitute.
 
 ---
 
@@ -174,11 +214,11 @@ Wordmark treatment: `Text("ZIROEDGE")`, `.caption.weight(.bold)`, `.tracking(1.4
 
 ### 6.1 Spacing (`ZiroTheme.Spacing`) — unchanged rhythm
 
-`micro 2` · `xSmall 4` · `small 8` · `medium 12` · `large 16` · `xLarge 24` · `xxLarge 40`; half-step `badge 6` (capsule h-padding); `heroTop 96` (empty-state top air). Screen-level h-padding is `large` (16) inside bubbles/rows and `xLarge` (24) on full-page scroll content.
+`micro 2` · `xSmall 4` · `small 8` · `medium 12` · `large 16` · `xLarge 24` · `xxLarge 40`; half-step `badge 6` (capsule h-padding). Screen-level h-padding is `large` (16) inside bubbles/rows and `xLarge` (24) on full-page scroll content. (`heroTop` was removed with the chat empty-state rewrite — see §8.1.)
 
 ### 6.2 Radius (`ZiroTheme.Radius`)
 
-`badge 6` badges/chips · `small 10` thumbnails, mini wells · `control 14` buttons, banners, composer field, text fields · `bubble 18` message bubbles + thinking indicator · `card 20` cards. Capsules for pills/primary buttons. All corners `style: .continuous` on cards/bubbles/fields.
+`badge 6` badges/chips · `small 10` thumbnails, mini wells · `control 14` buttons, banners, text fields, `ziroComposerField` · `bubble 20` message bubbles + thinking indicator · `card 20` cards · `composer 28` the chat composer's floating well (§8.1). Capsules for pills/primary buttons. All corners `style: .continuous` on cards/bubbles/fields.
 
 ### 6.3 Measure (`ZiroMeasure`)
 
@@ -246,7 +286,7 @@ Capability cards (`ZiroCapabilityCard`, reference-style, preferred for chat star
 
 ### 7.8 `ZiroEmptyState` — the brand moment (see §8.1)
 
-Brand mark + accent glow + wordmark + title + message + optional capability cards (`ZiroCapabilityCard` rows with per-card tinted dot + chevron, preferred for chat) or legacy suggestion chips + optional actions; `maxWidth: standard`, `heroTop` top padding applied by the caller.
+Brand mark + accent glow + wordmark + title + message + optional capability cards (`ZiroCapabilityCard` rows with per-card tinted dot + chevron) or legacy suggestion chips + optional actions; `maxWidth: standard`, top padding applied by the caller. The **chat** empty state no longer uses this component — it is the mark + one line, centered (§8.1). `ZiroEmptyState` remains for other resting moments and the design-system gallery.
 
 ### 7.9 `ZiroBrandMark` — the mark
 
@@ -262,11 +302,11 @@ Uppercase `.caption.weight(.semibold)`, tracking 0.8, `secondaryText`, optional 
 
 ### 7.12 `ziroMessageBubble(_:)` — bubble treatment
 
-`user`: accent fill, `Radius.bubble` continuous; label `accentForeground`, h-padding 16 / v-padding 12. `assistant`: `raisedBackground` + `hairline` stroke, same radius/padding. Streaming assistant bubble: assistant treatment + accent caret (attributed `|` in accent, `cursorPeriod` blink, static when Reduce Motion) — unchanged behavior, new token colors. Row metrics: bubbles centered in a `full`-width column; bubble rows `maxWidth: wide`.
+`user`: `userBubble` fill (accent blue `#2E6BFF` in light, deep navy `#1E2A6B` in dark), `Radius.bubble` (20) continuous, 1pt `hairline`; label `accentForeground`, h-padding 16 / v-padding 12. `assistant`: `raisedBackground` fill (dark charcoal `#1C1C1E` in dark, white in light) with the same radius, hairline, and padding; label `primaryText`. Streaming assistant bubble: assistant treatment + accent caret (attributed `|` in accent, `cursorPeriod` blink, static when Reduce Motion). Timestamps sit **outside** the bubble — `technical(.caption2)` in `tertiaryText`, aligned to the bubble's own edge (trailing for the user, leading for the assistant), rendered only when the row carries a `createdAt`. Row metrics: bubbles centered in a `full`-width column; bubble rows `maxWidth: wide`.
 
 ### 7.13 `ziroComposerField(isActive:)` — input well
 
-`wellBackground` fill, `Radius.control` continuous, h-padding 16 / v-padding 12; rest state `hairline` 1pt; focus state **accent 1.5pt ring** (`press` transition) — this is the keyboard focus indicator, never remove it.
+`wellBackground` fill, `Radius.control` continuous, h-padding 16 / v-padding 12; rest state `hairline` 1pt; focus state **accent 1.5pt ring** (`press` transition) — this is the keyboard focus indicator, never remove it. (The chat composer hand-rolls the same treatment at `Radius.composer` 28 with the same hairline-at-rest — see §8.1.)
 
 ### 7.14 `ZiroHero` — symbol hero (kept, refined)
 
@@ -282,13 +322,14 @@ Semantic tones map: `.positive` → `checkmark.circle.fill`, `.danger` → `excl
 
 ### 8.1 Chat (ChatView + ChatSurfaceDetails + MessageBubble + ChatOverlayComponents) — the flagship
 
-1. **Empty state (the brand moment).** Replace `emptyState`'s `ZiroHero` with `ZiroEmptyState`:
-   - Composition (top→bottom, centered, `maxWidth: standard`, `.padding(.top, heroTop)`): `ZiroBrandMark(68)` over a soft radial accent glow (accent 0.16→0, radius ≈ mark×1.15) → wordmark `ZIROEDGE` → `title` "Hello, Ask Me Anything" (`ZiroType.title`) → privacy message (`.subheadline`, secondary) → capability cards → CTA.
-   - **Suggestions:** the three starter prompts rendered by `ZiroEmptyState(suggestionItems:onSuggestion:)` as `ZiroCapabilityCard` rows (tinted dot + chevron, per-card `ZiroTheme` token tint); card action writes the prompt into `viewModel.inputText` (append with a trailing space) and focuses the composer (`isInputFocused = true`) — reuses the existing send flow, no new behavior. Cards hidden while `viewModel.messages.isEmpty == false` (they only render in the empty branch anyway).
-   - When `availableModels.isEmpty`, keep the `browse-models-button` CTA (identifier preserved) as `ZiroPrimaryButtonStyle` "Browse Models".
+1. **Empty state (the brand moment).** `ChatView.emptyState` is the mark and the line, and nothing else:
+   - Composition (top→bottom, centered, `maxWidth: standard`): `ZiroBrandMark(80)` (≈46pt of visible mark) → `title` "Ask me anything." (`ZiroType.title`, `primaryText`). No glow, no wordmark, no privacy caption, no suggestion cards.
+   - The block is **vertically centered in the transcript viewport** (`.containerRelativeFrame(.vertical, alignment: .center)`), not top-padded, so it sits in the space above the floating composer instead of under the navigation bar.
+   - When `availableModels.isEmpty`, keep the `browse-models-button` CTA (identifier preserved) as `ZiroPrimaryButtonStyle` "Browse Models" — with nothing installed the composer can do nothing and the catalog is the only way forward.
+   - `ZiroEmptyState` / `ZiroCapabilityCard` are no longer used by chat; they stay for other resting moments and the design-system gallery.
 2. **Banners** migrate `ZiroStatusBanner(tint:)` → `tone:`: startup + runtime errors and `errorBanner` → `.danger` with `dangerText` (kills the last raw `.red`); persistence recovery, unavailable model, truncation, vision, modelRetry banners → `.warning`. All identifiers/announcements unchanged.
-3. **Composer:** TextField gains `.ziroComposerField(isActive: isInputFocused)` (replacing the hand-rolled background/overlay — same metrics). `statusOrTokenHintRow`: token badge becomes `Text(...).font(ZiroType.technical(.caption2)).foregroundStyle(secondaryText)`; the "Download a model…" / "unloaded" hints stay `.caption2` `secondaryText`.
-4. **Message list:** transcript column `frame(maxWidth: ZiroMeasure.full)`; bubbles `ziroMessageBubble(role)` with `maxWidth: ZiroMeasure.wide` on the row; assistant text `primaryText`; user label `accentForeground` on accent fill (already token-aligned). Thinking indicator: assistant bubble treatment + `secondaryText` "Thinking…" row (`.subheadline`). Message enter transition per §6.5. Jump-to-bottom: accent circle + `accentForeground` glyph + `.ziroShadow(.floating)`.
+3. **Composer:** one floating well at `Radius.composer` (28) — `wellBackground` fill, 1pt `hairline` at rest, accent 1.5pt ring on focus (the keyboard focus indicator, never removed). Two rows inside it: `TextField("Message...", axis: .vertical)` on top, then the control row — `+` (`PhotosPicker`, `plus` glyph) left, model pill and send right. `ComposerModelPicker` is a capsule on the composer's own fill with a hairline: the sole identity surface, same phases/menu/labels as ever. `statusOrTokenHintRow` is gone — there is no separate status line above the well. Side margins `large`, bottom `medium`.
+4. **Message list:** transcript column `frame(maxWidth: ZiroMeasure.full)`; bubbles `ziroMessageBubble(role)` (both roles are bubbles: `userBubble` navy / `raisedBackground` charcoal, 1pt hairline, `Radius.bubble`) with `maxWidth: ZiroMeasure.wide` on the row; assistant text `primaryText`; user label `accentForeground` on the `userBubble` fill. Per-message timestamps: `technical(.caption2)` in `tertiaryText`, outside the bubble, aligned to its edge (§7.12). Thinking indicator: assistant bubble treatment + `secondaryText` "Thinking…" row (`.subheadline`). Message enter transition per §6.5. Jump-to-bottom: accent circle + `accentForeground` glyph + `.ziroShadow(.floating)`.
 5. **Header pill:** keeps capsule `wellBackground`; status dot → `positiveText`; failed/evicted tint → `warningText`; title `.headline`. All "Chat model, …" labels unchanged.
 6. **Streaming cursor:** caret color → `Color.accentColor` (already), cadence `cursorPeriod`.
 
@@ -337,7 +378,7 @@ System sidebar list — keep chrome. "New Conversation" row: accent label + `squ
 
 ### 8.9 Launch screen (branded, simple)
 
-1. New colorset **`LaunchBackground`** in `Assets.xcassets`: universal `#F7F3EC`, dark `#0A0F1E` (same as `pageBackground`).
+1. New colorset **`LaunchBackground`** in `Assets.xcassets`: universal `#F7F3EC`, dark `#0B0B0D` (same as `pageBackground`).
 2. In `Config/Info.plist` add:
 
    ```xml
@@ -364,7 +405,7 @@ System sidebar list — keep chrome. "New Conversation" row: accent label + `squ
 ## 10. UI-test contract (must survive verbatim)
 
 - **Identifiers:** `chatInput`, `sidebar-button`, `browse-models-button`, `modelRetryBanner`, `modelRetryButton`, `retryStartupButton`, `errorBanner`, `persistenceRecoveryBanner`, `unavailableConversationModelBanner`, `export-memory-calibration`, `export-download-summary`, `export-download-jsonl`, `memory-diagnostic-state`.
-- **Labels/values:** "Chat model, …", "No model yet", "Assistant said: ", "You said: ", "Send message", "Stop generating", "Message ZiroEdge", "Conversations", "New Conversation", "Settings", "Models", "Manage Models", "Active Model", "Available", "Installed", "Import from Hugging Face", "Inspect Repository", "Pinned Source", "owner/repository or URL", "Skip", "Continue", "Get Started".
+- **Labels/values:** "Chat model, …", "No model yet", "Assistant said: ", "You said: ", "Send message", "Stop generating", "Message...", "Conversations", "New Conversation", "Settings", "Models", "Manage Models", "Active Model", "Available", "Installed", "Import from Hugging Face", "Inspect Repository", "Pinned Source", "owner/repository or URL", "Skip", "Continue", "Get Started".
 - **Symbols:** `checkmark.circle.fill`, `exclamationmark.circle.fill`, `wrench.and.screwdriver` remain Image-based with those symbol names.
 - **Spoken phrases:** "installed", "needs repair", "available to download", "downloading, N percent complete".
 - **Announcements:** "Assistant response complete" / "Response stopped".
