@@ -207,11 +207,20 @@ enum MemoryProfileRegistry {
 
     /// Imported models have no retained device calibration yet. The estimate is
     /// conservative and only enables the explicit experimental-consent path.
-    /// P1-4: base+mmproj both ~1/3 resident (mmap'd Q4; full-pin unmeasured —
-    /// Aug 25 2026 Qwen cold-loaded in 1s under the 1/3 estimate), an absolute 4GB + dynamic
+    /// P1-4: separate base/mmproj weights (mmap'd Q4 base ~1/3 resident vs
+    /// projector pinned fully during vision init), an absolute 4GB + dynamic
     /// physical floor, and fail-closed nil evidence + .max floor on
     /// zero/negative catalog sizes. Artifact bytes shape the conservative
     /// estimate only — admission quantity stays nil (see sentinel).
+    ///
+    /// The projector weight is FULL, not a third. `d68bdc9` briefly divided it
+    /// by 3, which is reverted here: it understated vision memory by 2/3*mmproj
+    /// (~400MB for a 600MB projector) and broke the convergence contract this
+    /// registry shares with `ImportRAMAssessment.estimatedBytes` — asserted by
+    /// `testWizardPickerAndImportedProfileConverge`. That test names the /3
+    /// split "retired" for exactly this understatement. Both estimators compute
+    /// `base/3 + full projector + contextScale`, so the pre-import wizard
+    /// estimate and the post-import admission profile cannot disagree.
     static func importedProfile(for model: AIModel) -> MemoryProfile {
         let revision = model.huggingFaceProvenance?.revision.prefix(12) ?? "unknown"
         func failClosedProfile() -> MemoryProfile {
@@ -246,7 +255,7 @@ enum MemoryProfileRegistry {
         let baseResident = UInt64(clamping: model.baseFileSizeBytes / 3)
         let mmprojResident: UInt64 = {
             guard let mmprojBytes = model.mmprojFileSizeBytes, mmprojBytes > 0 else { return 0 }
-            return UInt64(clamping: mmprojBytes / 3)
+            return UInt64(clamping: mmprojBytes)
         }()
         let contextScale = SaturatedArithmetic.multiply(
             UInt64(clamping: max(model.config.contextLength, 512)),
