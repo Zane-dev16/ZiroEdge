@@ -69,16 +69,17 @@ final class LaunchSplashAssetTests: XCTestCase {
         XCTAssertNotNil(light, "LaunchBackground must resolve in light appearance")
         XCTAssertNotNil(dark, "LaunchBackground must resolve in dark appearance")
 
-        // Dark splash ground is the navy handoff token #0A0F1E (10, 15, 30).
-        var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
-        dark?.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
-        XCTAssertEqual(red, 10.0 / 255.0, accuracy: 0.02, "LaunchBackground dark red must match navy #0A0F1E")
-        XCTAssertEqual(green, 15.0 / 255.0, accuracy: 0.02, "LaunchBackground dark green must match navy #0A0F1E")
-        XCTAssertEqual(blue, 30.0 / 255.0, accuracy: 0.02, "LaunchBackground dark blue must match navy #0A0F1E")
+        // NOTE: deliberately no assertion on the splash ground's literal hex.
+        // The contract that matters is relational — the splash must match
+        // `ZiroTheme.pageBackground` so the handoff is seamless — and that is
+        // asserted below. Freezing the value here meant every palette retint
+        // failed this test for no reason, and the exact tokens are already
+        // gated by Scripts/verify-design-tokens.py.
 
         // The in-app loading surface sits on ZiroTheme.pageBackground, which
         // must equal the splash ground in both appearances for a seamless
-        // handoff (warm paper #F7F3EC / navy #0A0F1E).
+        // handoff. This also proves the dark variant exists: a missing dark
+        // entry falls back to the light ground and fails the dark comparison.
         let page = UIColor(ZiroTheme.pageBackground)
         let pageLight = page.resolvedColor(with: UITraitCollection(userInterfaceStyle: .light))
         let pageDark = page.resolvedColor(with: UITraitCollection(userInterfaceStyle: .dark))
