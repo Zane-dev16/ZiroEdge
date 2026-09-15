@@ -30,9 +30,18 @@ enum ChatModelPicker {
         case .ready, .idle:
             return modelName ?? "Private on-device chat"
         case .evicted:
-            return "\(modelName ?? "Model") unloaded"
+            // State word LEADS. The label is tail-truncated at `pickerMaxWidth`,
+            // and for imported models the name is long ("repo · quantization"),
+            // so a trailing state word was the first thing lost — leaving a
+            // bare amber model name with nothing to explain why it was amber.
+            // Now the NAME truncates instead: its head still identifies the
+            // model, and `accessibilityText` still speaks it in full.
+            return "unloaded · \(modelName ?? "Model")"
         case .failed:
-            return modelName ?? "Model failed"
+            // Previously `modelName ?? "Model failed"` — a named model carried
+            // no state word at all, so a failed picker was indistinguishable
+            // from a ready one apart from the tint.
+            return "failed · \(modelName ?? "Model")"
         }
     }
 
@@ -225,7 +234,7 @@ struct ComposerModelPicker: View {
 
     private var pickerLabel: some View {
         HStack(spacing: ZiroTheme.Spacing.xSmall) {
-            loadingSlot
+            statusSlot
             Text(ChatModelPicker.title(phase: phase, modelName: modelName))
                 .font(ZiroType.footnote)
                 .lineLimit(1)
@@ -248,23 +257,29 @@ struct ComposerModelPicker: View {
     }
 
     /// Fixed-width leading slot: reserves the indicator's space in every
-    /// phase so the label never shifts, and hosts the loading spinner.
-    /// Loading is the only phase with a mark — ready and idle show no dot
-    /// by design, the name alone is the status. The small ProgressView is
-    /// system-aware under Reduce Motion so no extra gating is needed.
+    /// phase so the label never shifts. Hosts the loading spinner while
+    /// loading, and a warning glyph for the two attention phases — so the
+    /// amber tint is explained by a symbol instead of reading as a randomly
+    /// coloured model name. The glyph matches the picker's own type voice
+    /// (`ZiroType.footnote`, same as the chevron): one size/weight set per
+    /// surface, and Dynamic Type aware rather than a fixed icon size.
     /// Decorative: the phase already reads in the title text and the
     /// shared accessibility label, so VoiceOver skips the slot itself.
-    private var loadingSlot: some View {
+    private var statusSlot: some View {
         Group {
-            if phase == .loading {
+            switch phase {
+            case .loading:
                 ProgressView().controlSize(.small)
-                    .transition(.asymmetric(insertion: .scale(scale: 0.25).combined(with: .opacity), removal: .scale(scale: 0.25).combined(with: .opacity)))
-            } else {
+            case .failed, .evicted:
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(ZiroType.footnote)
+                    .foregroundStyle(ZiroTheme.warningText)
+            case .ready, .idle, .needsDownload:
                 Color.clear
-                    .transition(.asymmetric(insertion: .scale(scale: 0.25).combined(with: .opacity), removal: .scale(scale: 0.25).combined(with: .opacity)))
             }
         }
         .frame(width: 16, height: 16)
+        .transition(.asymmetric(insertion: .scale(scale: 0.25).combined(with: .opacity), removal: .scale(scale: 0.25).combined(with: .opacity)))
         .ziroAnimation(ZiroMotion.press, value: phase)
         .accessibilityHidden(true)
     }

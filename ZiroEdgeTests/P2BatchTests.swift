@@ -27,6 +27,21 @@ final class P2BatchTests: XCTestCase {
         XCTAssertTrue(ChatModelPicker.title(phase: .evicted, modelName: "Llama").contains("unloaded"))
     }
 
+    /// The picker label is tail-truncated at `pickerMaxWidth`, so the phase word
+    /// must come FIRST. It used to trail the model name, so truncation removed
+    /// exactly the informative token — leaving a long imported model name
+    /// ("repo · quantization") rendering as a bare amber string with nothing on
+    /// screen to explain why it was amber.
+    func testPickerStateWordLeadsSoTruncationCannotRemoveIt() {
+        let name = "SmolLM2-135M-Instruct-GGUF · Q4_K_M"
+        let pinned: [(ModelLoadPhase, String)] = [(.evicted, "unloaded"), (.failed("boom"), "failed")]
+        for (phase, stateWord) in pinned {
+            let title = ChatModelPicker.title(phase: phase, modelName: name)
+            XCTAssertTrue(title.hasPrefix(stateWord), "\(phase) state word must lead; got \"\(title)\"")
+        }
+        XCTAssertTrue(ChatModelPicker.title(phase: .failed("boom"), modelName: nil).contains("failed"))
+    }
+
     // MARK: - R1 stale resumeData freshness
 
     func testStaleResumeBlobIsDiscarded() {
