@@ -53,6 +53,11 @@ struct AppShellView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var detailRoutes: [ShellRoute] = []
     @State private var showSidebarDrawer = false
+    /// Live swipe offset for the slide-over panel (<=0 while dragging left).
+    /// Plain @State (not @GestureState) so a commit close holds the finger
+    /// position through the exit transition instead of auto-zeroing
+    /// mid-flight and snapping the panel back to the edge first.
+    @State private var drawerDragOffset: CGFloat = 0
     /// Deferred "Start Chatting" target while the first-use experimental-consent
     /// alert is up (see startChatting): beginNewDraft stays deferred until the
     /// consent resolves so the chat never parks on .needsDownload behind the alert.
@@ -122,7 +127,10 @@ struct AppShellView: View {
                 // lands on an unsaved draft chat. The draft is the base layer
                 // (plan §A.2/§A.4), so any routed Models/Settings page is
                 // popped too — selection always wins over routed pages.
-                detailRoutes.removeAll()
+                // Sequenced: handleNewConversation's own dismissDrawerThen
+                // plus this handler double-enter per tap; a same-tick pop
+                // cancels the slide-out (see dismissDrawerThen).
+                dismissDrawerThen { detailRoutes.removeAll() }
                 chatViewModel.beginNewDraft()
             } else {
                 // Selection always wins over any routed page: return to chat.
@@ -130,9 +138,9 @@ struct AppShellView: View {
                 // selectedConversationID without touching the row tap closure,
                 // so the slide-over must dismiss here too (mirrors
                 // selectConversation) or the loaded chat stays hidden behind
-                // the open slide-over on iPhone.
-                detailRoutes.removeAll()
-                setSidebarDrawer(false)
+                // the open slide-over on iPhone. Sequenced so the pop does
+                // not cancel the exit transition (see dismissDrawerThen).
+                dismissDrawerThen { detailRoutes.removeAll() }
                 // Plan §B.4 routes conversation loading through this handler,
                 // so selection writes that bypass the sidebar row's tap
                 // gesture (full-keyboard/VoiceOver List(selection:) tag
@@ -315,7 +323,9 @@ struct AppShellView: View {
 
                 if showSidebarDrawer {
                     slideOverScrim
+                        .zIndex(1)
                     slideOverPanel(width: slideOverWidth(containerWidth: geometry.size.width))
+                        .zIndex(2)
                 }
             }
             .ziroAnimation(ZiroMotion.appear, value: showSidebarDrawer)
@@ -404,11 +414,14 @@ struct AppShellView: View {
         // P2-6: pushed routes cover the composer — resign its keyboard/focus
         // (the chat stays mounted beneath, so nothing else resigns for us).
         chatViewModel.requestComposerResign(reason: "openRoute")
-        setSidebarDrawer(false)
-        if let existingIndex = detailRoutes.firstIndex(of: route) {
-            detailRoutes.removeSubrange(detailRoutes.index(after: existingIndex)...)
-        } else {
-            detailRoutes.append(route)
+        // Sequenced (not same-tick): the route push would otherwise cancel
+        // the panel/scrim exit transition and the drawer snaps shut.
+        dismissDrawerThen {
+            if let existingIndex = detailRoutes.firstIndex(of: route) {
+                detailRoutes.removeSubrange(detailRoutes.index(after: existingIndex)...)
+            } else {
+                detailRoutes.append(route)
+            }
         }
     }
 
@@ -450,8 +463,9 @@ struct AppShellView: View {
         // P2-6: switching chats covers the composer mid-typing — resign first.
         chatViewModel.requestComposerResign(reason: "selectConversation")
         conversationListViewModel.selectConversation(id)
-        detailRoutes.removeAll()
-        setSidebarDrawer(false)
+        // Sequenced: popping routed pages same-tick as the drawer close
+        // cancels the exit transition (see dismissDrawerThen).
+        dismissDrawerThen { detailRoutes.removeAll() }
         // R4: single funnel — the selectedConversationID onChange owns the
         // load. A direct Task load here double-fires with it (tap + selection
         // write) and races loadGeneration/selectModel.
@@ -465,8 +479,9 @@ struct AppShellView: View {
     private func handleNewConversation() {
         // P2-6: the fresh draft replaces the composer mid-typing — resign.
         chatViewModel.requestComposerResign(reason: "newConversation")
-        setSidebarDrawer(false)
-        detailRoutes.removeAll()
+        // Sequenced: popping routed pages same-tick as the drawer close
+        // cancels the exit transition (see dismissDrawerThen).
+        dismissDrawerThen { detailRoutes.removeAll() }
         chatViewModel.beginNewDraft()
     }
 
@@ -589,6 +604,10 @@ extension AppShellView {
     /// the slide-out alive even when the dismiss lands alongside a
     /// navigation-stack change). Reduce Motion skips the animation.
     private func setSidebarDrawer(_ open: Bool) {
+        // A fresh open always starts flush: the sole reset for a held
+        // swipe offset from a commit close (which holds it through the
+        // exit) — so no delayed timer and no reopen/mid-drag reset race.
+        if open { drawerDragOffset = 0 }
         if reduceMotion {
             showSidebarDrawer = open
         } else {
@@ -598,6 +617,19 @@ extension AppShellView {
         }
     }
 
+    /// Close-then-act sequencing for drawer dismissals that also mutate
+    /// `detailRoutes`. A same-tick route change rebuilds the NavigationStack
+    /// subtree and the panel is removed without its exit transition (the
+    /// snap). Closing first and landing the route work on the next runloop
+    /// keeps the slide-out alive; the one-frame delay hides behind the
+    /// still-closing drawer. Always deferred when animated: the row tap +
+    /// List(selection:) double funnel reaches here twice per tap, and the
+    /// second call (drawer already closed) must not run work() back into
+    /// the close transaction. No-op delay on iPad split (never opened).
+    private func dismissDrawerThen(_ work: @escaping () -> Void) {
+        if showSidebarDrawer { setSidebarDrawer(false) }
+        if reduceMotion { work() } else { DispatchQueue.main.async(execute: work) }
+    }
     /// Full-screen tap-to-dismiss dim behind the slide-over panel. A Button
     /// (not a tap gesture) so VoiceOver lands on a labelled control. The
     /// fill uses the dedicated `ZiroTheme.scrim` token — an
@@ -641,6 +673,12 @@ extension AppShellView {
                 .frame(width: 1)
         }
         .transition(reduceMotion ? .opacity : .move(edge: .leading).combined(with: .opacity))
+        // Live swipe tracking: the panel follows the finger 1:1 (no
+        // animation on the follow — the container's value animation only
+        // fires on showSidebarDrawer changes, and the snap-back below
+        // carries its own transaction). Clamped to leading swipes so a
+        // rightward overscroll never gaps the edge.
+        .offset(x: min(0, drawerDragOffset))
         .simultaneousGesture(slideOverDismissDrag)
     }
 
@@ -651,23 +689,44 @@ extension AppShellView {
     }
 
     /// Leading-edge swipe to dismiss. Simultaneous (never high-priority) so
-    /// the conversation List keeps its vertical scroll and row swipe-actions:
-    /// only a clearly horizontal leftward drag past the commit threshold
-    /// dismisses; vertical (scroll) and short trailing (row-action reveal)
-    /// drags fall through untouched. Distances compose spacing tokens
-    /// (24pt engage, 56pt commit).
+    /// the conversation List keeps its vertical scroll and row swipe-actions.
+    /// onChanged tracks the finger 1:1 (horizontal-dominance gated so
+    /// vertical scrolls never shift the panel); past the commit threshold
+    /// the close holds the finger offset through the exit so the slide-out
+    /// starts under the finger with no snap, otherwise it springs back.
+    /// Distances compose spacing tokens (24pt engage, 56pt commit).
     private var slideOverDismissDrag: some Gesture {
         DragGesture(
             minimumDistance: ZiroTheme.Spacing.xLarge,
             coordinateSpace: .local
         )
+        .onChanged { value in
+            let translation = value.translation
+            guard translation.width < 0,
+                  abs(translation.width) > abs(translation.height) * 1.5
+            else { return }
+            drawerDragOffset = translation.width
+        }
         .onEnded { value in
             let commit = ZiroTheme.Spacing.xxLarge + ZiroTheme.Spacing.large
             let translation = value.translation
             guard translation.width < -commit,
                   abs(translation.width) > abs(translation.height) * 1.5
-            else { return }
+            else {
+                if reduceMotion {
+                    drawerDragOffset = 0
+                } else {
+                    withAnimation(ZiroMotion.appear) { drawerDragOffset = 0 }
+                }
+                return
+            }
             setSidebarDrawer(false)
+            // Hold the finger offset through the exit: zeroing now snaps
+            // the panel back to the edge for one frame. The next open is
+            // the sole reset (see setSidebarDrawer), so no delayed timer
+            // and no stale-reset-mid-drag/reopen race. Reduce Motion fades
+            // from the edge, so it still clears immediately.
+            if reduceMotion { drawerDragOffset = 0 }
         }
     }
 }
