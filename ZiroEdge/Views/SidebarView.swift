@@ -17,6 +17,7 @@ struct SidebarView: View {
     /// Library row tap (Models / Settings). The shell dismisses the drawer
     /// (compact) and pushes the destination onto the shared detail stack.
     var onOpenRoute: (ShellRoute) -> Void = { _ in }
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Confirmed-delete handoff. The shell owns the whole delete so it can
     /// cancel an in-flight chat stream targeting the doomed conversation
     /// first, before the list model's delete cascades the streaming row.
@@ -44,6 +45,10 @@ struct SidebarView: View {
         }
         .listStyle(.sidebar)
         .listSectionSpacing(ZiroTheme.Spacing.small)
+        // List parity: the animation rides the mutating value (row count),
+        // so inserts/deletes fade instead of snapping. Transitions live on
+        // the rows themselves; nothing blanket on the List.
+        .ziroAnimation(ZiroMotion.appear, value: viewModel.conversations.count)
         .scrollContentBackground(.hidden)
         .background(ZiroTheme.pageBackground)
         .navigationBarTitleDisplayMode(.inline)
@@ -160,7 +165,7 @@ struct SidebarView: View {
             .padding(.horizontal, ZiroTheme.Spacing.medium)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ZiroSubtlePressButtonStyle())
         .accessibilityIdentifier(identifier)
     }
 
@@ -195,7 +200,7 @@ struct SidebarView: View {
                         .overlay(Capsule().stroke(ZiroTheme.hairline, lineWidth: 1))
                         .contentShape(Capsule())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(ZiroSubtlePressButtonStyle())
                 .accessibilityHint("Creates a private on-device chat")
                 .accessibilityIdentifier("new-chat-button")
 
@@ -211,7 +216,7 @@ struct SidebarView: View {
                         .overlay(Capsule().stroke(ZiroTheme.hairline, lineWidth: 1))
                         .contentShape(Capsule())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(ZiroSubtlePressButtonStyle())
                 .accessibilityIdentifier("sidebar-settings-button")
             }
             .padding(.horizontal, ZiroTheme.Spacing.medium)
@@ -240,6 +245,7 @@ struct SidebarView: View {
                     systemImage: "bubble.left.and.bubble.right",
                     description: Text("Create a conversation to get started.")
                 )
+                .transition(.opacity)
                 // Directional hero glyph — mirror in RTL.
                 .flipsForRightToLeft(true)
                 .listRowBackground(Color.clear)
@@ -271,6 +277,9 @@ struct SidebarView: View {
             isSelected: viewModel.selectedConversationID == conversation.id
         )
             .tag(conversation.id)
+            // Row insert/delete rides the count-keyed appear above:
+            // opacity-only in Reduce Motion, subtle scale + fade otherwise.
+            .transition(reduceMotion ? .opacity : .scale(scale: 0.95).combined(with: .opacity))
             .contentShape(Rectangle())
             .listRowInsets(EdgeInsets(
                 top: ZiroTheme.Spacing.xSmall,
@@ -348,6 +357,8 @@ struct ConversationRow: View {
             RoundedRectangle(cornerRadius: ZiroTheme.Radius.small, style: .continuous)
                 .fill(isSelected ? ZiroTheme.selectedBackground : Color.clear)
         )
+        // Selection fill cross-fades on the press curve instead of flipping.
+        .ziroAnimation(ZiroMotion.press, value: isSelected)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilitySummary)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
@@ -399,6 +410,7 @@ struct ChatsView: View {
     var onDeleteConversation: (UUID) -> Void = { _ in }
 
     @State private var searchText: String = ""
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var conversationToRename: ConversationPayload?
     @State private var renameText: String = ""
     @State private var showDeleteConfirmation = false
@@ -437,11 +449,37 @@ struct ChatsView: View {
         return buckets.filter { !$0.items.isEmpty }
     }
 
+    /// The toolbar's New-chat control: exactly ONE capsule (fill-only
+    /// quiet canon — no ring overlay, scale-only press style, and the iOS 26
+    /// shared toolbar background hidden at the call site). Extracted so the
+    /// pre/post-iOS 26 toolbar branches share one definition.
+    private var newChatToolbarButton: some View {
+        Button(action: onNewConversation) {
+            HStack(spacing: ZiroTheme.Spacing.xSmall) {
+                Text("New chat")
+                    .font(ZiroType.footnote)
+                    .foregroundStyle(ZiroTheme.primaryText)
+                Image(systemName: "plus")
+                    .font(ZiroType.footnote)
+                    .foregroundStyle(ZiroTheme.tertiaryText)
+                    .accessibilityHidden(true)
+            }
+            .padding(.horizontal, ZiroTheme.Spacing.small)
+            .frame(minHeight: 33)
+            .background(ZiroTheme.wellBackground, in: Capsule())
+            .contentShape(Rectangle().inset(by: -6))
+        }
+        .buttonStyle(ZiroSubtlePressButtonStyle())
+        .accessibilityLabel("New chat")
+        .accessibilityIdentifier("chats-new-chat-button")
+    }
+
     /// One archive row: quiet treatment with rename/delete affordances.
     /// Delete funnels through the shell so an in-flight stream is cancelled
     /// first (mirrors the sidebar row).
     private func archiveRow(_ conversation: ConversationPayload) -> some View {
         ConversationRow(conversation: conversation)
+            .transition(reduceMotion ? .opacity : .scale(scale: 0.95).combined(with: .opacity))
             .contentShape(Rectangle())
             .listRowInsets(EdgeInsets(
                 top: ZiroTheme.Spacing.xSmall,
@@ -494,11 +532,13 @@ struct ChatsView: View {
                         systemImage: "bubble.left.and.bubble.right",
                         description: Text("Create a conversation to get started.")
                     )
+                    .transition(.opacity)
                     // Directional hero glyph — mirror in RTL.
                     .flipsForRightToLeft(true)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if visibleSections.isEmpty {
                     ContentUnavailableView.search(text: searchText)
+                        .transition(.opacity)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     List {
@@ -523,6 +563,10 @@ struct ChatsView: View {
                     .listSectionSpacing(ZiroTheme.Spacing.small)
                     .scrollContentBackground(.hidden)
                     .background(ZiroTheme.pageBackground)
+                    // Archive parity: count drives inserts/deletes, search
+                    // text drives the filter — same row transition as above.
+                    .ziroAnimation(ZiroMotion.appear, value: viewModel.conversations.count)
+                    .ziroAnimation(ZiroMotion.appear, value: searchText)
                 }
         }
         .background(ZiroTheme.pageBackground)
@@ -537,26 +581,18 @@ struct ChatsView: View {
                     .font(ZiroType.face(.orbitronBold, .title3))
                     .foregroundStyle(ZiroTheme.primaryText)
             }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button(action: onNewConversation) {
-                    HStack(spacing: ZiroTheme.Spacing.xSmall) {
-                        Text("New chat")
-                            .font(ZiroType.footnote)
-                            .foregroundStyle(ZiroTheme.primaryText)
-                        Image(systemName: "plus")
-                            .font(ZiroType.footnote)
-                            .foregroundStyle(ZiroTheme.tertiaryText)
-                            .accessibilityHidden(true)
-                    }
-                    .padding(.horizontal, ZiroTheme.Spacing.small)
-                    .frame(minHeight: 33)
-                    // Single quiet capsule — fill only, no ring overlay.
-                    .background(ZiroTheme.wellBackground, in: Capsule())
-                    .contentShape(Rectangle().inset(by: -6))
+            // Custom capsule (not the system glass): hide the iOS 26 shared
+            // background or it renders a second pill behind the fill.
+            // Same pattern as the chat toolbar's sidebar toggle.
+            if #available(iOS 26.0, *) {
+                ToolbarItem(placement: .topBarTrailing) {
+                    newChatToolbarButton
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("New chat")
-                .accessibilityIdentifier("chats-new-chat-button")
+                .sharedBackgroundVisibility(.hidden)
+            } else {
+                ToolbarItem(placement: .topBarTrailing) {
+                    newChatToolbarButton
+                }
             }
         }
         .alert("Rename Conversation", isPresented: Binding(
