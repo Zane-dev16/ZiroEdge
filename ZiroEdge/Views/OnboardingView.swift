@@ -58,7 +58,7 @@ struct OnboardingView: View {
                     .foregroundStyle(ZiroTheme.secondaryText)
                 Spacer()
                 Button("Skip", action: completeOnboarding)
-                    .font(ZiroType.footnote.weight(.semibold))
+                    .font(ZiroType.footnote)
                     .foregroundStyle(ZiroTheme.secondaryText)
                     // The app's quiet dismissal must still meet the 44×44pt
                     // hit-target floor; the scaled frame grows with Dynamic
@@ -78,7 +78,7 @@ struct OnboardingView: View {
                     ScrollView {
                         VStack(spacing: ZiroTheme.Spacing.xLarge) {
                             Image(systemName: page.symbol)
-                                .font(.system(size: heroIconSize, weight: .medium))
+                                .font(.system(size: heroIconSize))
                                 .foregroundStyle(page.color)
                                 .symbolRenderingMode(.hierarchical)
                                 // Decorative 72pt heroes stay .fill by design
@@ -89,7 +89,7 @@ struct OnboardingView: View {
 
                             VStack(spacing: ZiroTheme.Spacing.medium) {
                                 Text(page.eyebrow)
-                                    .font(.caption.weight(.bold))
+                                    .font(.caption)
                                     .tracking(1.1)
                                     .foregroundStyle(page.eyebrowColor)
                                 Text(page.title)

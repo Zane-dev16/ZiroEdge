@@ -69,12 +69,13 @@ enum ZiroType {
 
     // MARK: Roles
 
-    /// Onboarding page titles, the largest brand moments. Orbitron only.
+    /// Onboarding page titles — the largest brand moment. Orbitron only.
+    /// Empty-state greetings and outcome heroes are `title` (Satoshi).
     static let display = face(.orbitronBold, .title)
     /// The ZIROEDGE wordmark in the onboarding header — the one place the
     /// brand voice is a single word.
     static let wordmark = face(.orbitronSemiBold, .caption)
-    /// Empty-state hero titles, page-level statements.
+    /// Page-level statements that are not brand heroes. Satoshi.
     static let title = face(.satoshiBold, .title3)
     /// Card headers, model detail identity, sheet titles.
     static let heading = face(.satoshiMedium, .headline)

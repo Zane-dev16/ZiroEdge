@@ -22,16 +22,20 @@ struct ChatView: View {
 
     @FocusState var isInputFocused: Bool
     @State private var hasScrolledUp = false
-    // Composer hit targets: scale with Dynamic Type so glyphs never overflow
-    // their frames at accessibility sizes, while meeting the repo's 44×44
-    // minimum hit-target standard at the default size. Composer cluster
-    // shares one size (.title3) — send included, state via tint only.
-    @ScaledMetric(relativeTo: .title3) private var composerControlSide: CGFloat = 44
-    @ScaledMetric(relativeTo: .title3) private var sendControlSide: CGFloat = 44
+    // Composer discs draw at vision size (~32pt) and scale with Dynamic
+    // Type so glyphs never overflow at accessibility sizes. The 44x44
+    // hit target lives on contentShape (expanded rect), not the frame,
+    // so the drawn row stays ~33pt. Composer cluster shares one size
+    // (.title3) — send included, state via tint only.
+    @ScaledMetric(relativeTo: .title3) private var composerControlSide: CGFloat = 32
+    @ScaledMetric(relativeTo: .title3) private var sendControlSide: CGFloat = 32
     @ScaledMetric(relativeTo: .title3) private var imageRemoveControlSide: CGFloat = 44
     // Pending-attachment thumbnail: decorative image size that grows with
     // Dynamic Type (design-system §6.2 — Radius.small corners, no shadow).
     @ScaledMetric(relativeTo: .body) private var pendingImageSide: CGFloat = 68
+    // Empty-state brand mark (spec §8.1: 80pt): decorative size that grows
+    // with Dynamic Type instead of clamping at accessibility sizes.
+    @ScaledMetric(relativeTo: .largeTitle) private var emptyStateMarkSize: CGFloat = 80
     /// Pull-back distance that keeps the remove glyph anchored on the
     /// thumbnail corner as its hit-target frame scales with Dynamic Type:
     /// half the frame minus the 8pt glyph margin (14pt at the 44pt default).
@@ -213,7 +217,8 @@ struct ChatView: View {
                 Image(systemName: "plus")
                     .font(.title3)
                     .frame(width: composerControlSide, height: composerControlSide)
-                    .contentShape(Circle())
+                    // Drawn disc ~32pt; 44pt hit target via expanded shape.
+                    .contentShape(Rectangle().inset(by: -6))
                     // The composer's controls sit on their own discs (fill,
                     // not stroke — the glyph is the ink): the `+` on the
                     // neutral `controlDisc`, one step above the well, so the
@@ -275,7 +280,7 @@ struct ChatView: View {
                         .accessibilityLabel("Loading model")
                 } else {
                     Image(systemName: "arrow.up")
-                        .font(.title3.weight(.semibold))
+                        .font(.title3)
                         .transition(.asymmetric(insertion: .scale(scale: 0.25).combined(with: .opacity), removal: .scale(scale: 0.25).combined(with: .opacity)))
                 }
             }
@@ -286,7 +291,8 @@ struct ChatView: View {
             // `controlDiscActive` once a send can fire, a bare muted glyph
             // when it cannot. Fill-not-stroke keeps it a button, not a badge.
             .background(Circle().fill(sendDisc ?? .clear))
-            .contentShape(Circle())
+            // Drawn disc ~32pt; 44pt hit target via expanded shape.
+            .contentShape(Rectangle().inset(by: -6))
             .ziroAnimation(ZiroMotion.press, value: viewModel.isStreaming)
         }
         .disabled(sendDisabled)
@@ -412,6 +418,9 @@ extension ChatView {
             // every past reply turned the transcript into a wall of repeated
             // icons. Older replies stay fully selectable and readable.
             showsActions: isLastAssistant,
+            // Clock chrome is gated the same way: only time-block
+            // boundaries carry a timestamp (one O(n) pass below).
+            showsTimestamp: timestampVisibleIDs.contains(messageID),
             onBranch: { pendingBranchMessageID = messageID },
             onCopy: { [content = message.content] in viewModel.copyMessageText(content) },
             onRetry: isLastAssistant && viewModel.canRetryLastResponse
@@ -455,7 +464,7 @@ extension ChatView {
                             pendingRetryMessageID = viewModel.messages.last(where: { $0.role == .user })?.id
                         } label: {
                             Label("Retry response", systemImage: "arrow.clockwise")
-                                .font(ZiroType.footnote.weight(.semibold))
+                                .font(ZiroType.footnote)
                                 .foregroundStyle(Color.accentColor)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -579,7 +588,7 @@ extension ChatView {
     /// screen's single accent budget is never spent on the resting state.
     var emptyState: some View {
         VStack(spacing: ZiroTheme.Spacing.medium) {
-            ZiroBrandMark(size: 80)
+            ZiroBrandMark(size: emptyStateMarkSize)
 
             Text("Ask me anything.")
                 .font(ZiroType.title)
@@ -591,7 +600,7 @@ extension ChatView {
                     navigateToRoute(.models)
                 } label: {
                     Label("Browse Models", systemImage: "arrow.down.circle")
-                        .font(ZiroType.bodyStrong)
+                        .font(ZiroType.body)
                         .foregroundStyle(ZiroTheme.primaryText)
                         .padding(.horizontal, ZiroTheme.Spacing.large)
                         .frame(minHeight: 44)
@@ -613,11 +622,11 @@ extension ChatView {
     func jumpToBottomButton(action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: "arrow.down")
-                .font(.body.weight(.bold))
+                .font(.body)
                 .padding(ZiroTheme.Spacing.medium)
-                .foregroundStyle(ZiroTheme.accentForeground)
-                .background(ZiroTheme.accent, in: Circle())
-                .ziroShadow(.floating)
+                .foregroundStyle(ZiroTheme.primaryText)
+                .background(ZiroTheme.wellBackground, in: Circle())
+                .overlay(Circle().stroke(ZiroTheme.hairline, lineWidth: 1))
         }
         .accessibilityLabel("Jump to latest message")
     }
@@ -633,6 +642,35 @@ extension ChatView {
     /// per-token Array(enumerated()) copy).
     private var dayDividerLabels: [UUID: String] {
         Self.dayDividerLabels(for: viewModel.messages)
+    }
+
+    /// Timestamp visibility keyed by message id, computed in one O(n) pass
+    /// per body evaluation (same pattern as the day dividers above).
+    private var timestampVisibleIDs: Set<UUID> {
+        Self.timestampVisibleIDs(for: viewModel.messages)
+    }
+
+    /// Pure time-block rule (internal so it stays unit-testable like
+    /// dayDividerLabels). A message carries its clock time only when it
+    /// opens a new block — the first dated message, anything 5+ minutes
+    /// after the previous dated message, or the latest message (so the live
+    /// edge always carries a time). Undated messages never do — they join
+    /// the running block, same as with day dividers.
+    static func timestampVisibleIDs(
+        for messages: [ChatMessagePayload],
+        threshold: TimeInterval = 300
+    ) -> Set<UUID> {
+        var visible: Set<UUID> = []
+        var lastDate: Date?
+        for (index, message) in messages.enumerated() {
+            guard let date = message.createdAt else { continue }
+            let opensBlock = lastDate.map { date.timeIntervalSince($0) >= threshold } ?? true
+            if opensBlock || index == messages.count - 1 {
+                visible.insert(message.id)
+            }
+            lastDate = date
+        }
+        return visible
     }
 
     /// Pure label mapping (internal so the transcript rules are unit-testable).

@@ -15,6 +15,10 @@ struct MessageBubble: View {
     /// (latest assistant) turn only — repeating the row under every past
     /// reply buried the conversation in chrome.
     let showsActions: Bool
+    /// Timestamp gate. ChatView marks only time-block boundaries (first
+    /// dated message, >5min gaps, the live edge) — a clock under every
+    /// bubble turned the transcript into a ledger.
+    let showsTimestamp: Bool
     let onBranch: (() -> Void)?
     let onCopy: (() -> Void)?
     let onRetry: (() -> Void)?
@@ -30,6 +34,7 @@ struct MessageBubble: View {
         message: ChatMessagePayload,
         isStreaming: Bool = false,
         showsActions: Bool = true,
+        showsTimestamp: Bool = true,
         onBranch: (() -> Void)? = nil,
         onCopy: (() -> Void)? = nil,
         onRetry: (() -> Void)? = nil
@@ -37,6 +42,7 @@ struct MessageBubble: View {
         self.message = message
         self.isStreaming = isStreaming
         self.showsActions = showsActions
+        self.showsTimestamp = showsTimestamp
         self.onBranch = onBranch
         self.onCopy = onCopy
         self.onRetry = onRetry
@@ -84,9 +90,10 @@ struct MessageBubble: View {
                 // Message content.
                 if message.role == .user {
                     Text(message.content)
-                        // Satoshi Medium: the user's own words, one step of
-                        // optical weight above the model's reply.
-                        .font(ZiroType.bodyMedium)
+                        // Single transcript voice: the user's words read in
+                        // the same Regular callout as the model's reply —
+                        // role already reads from the bubble fill and side.
+                        .font(ZiroType.body)
                         .foregroundStyle(ZiroTheme.accentForeground)
                         .padding(.horizontal, ZiroTheme.Spacing.large)
                         .padding(.vertical, ZiroTheme.Spacing.medium)
@@ -123,13 +130,14 @@ struct MessageBubble: View {
                     .ziroMessageBubble(.assistant)
                 }
 
-                // Timestamp: outside the bubble, under it, aligned to the
-                // bubble's own edge (trailing for the user, leading for the
-                // assistant) and set in the technical voice — small, quiet,
-                // monospaced. Absent for rows with no stored date. Inset 12pt
-                // off the bubble edge so it reads as a caption *under* the
-                // bubble rather than a band aligned with its corner.
-                if let sentAt = message.createdAt {
+                // Timestamp (gated): outside the bubble, under it, aligned to
+                // the bubble's own edge (trailing for the user, leading for
+                // the assistant) and set in the technical voice — small,
+                // quiet, monospaced. Only time-block boundaries render one
+                // (see showsTimestamp); rows with no stored date never do.
+                // Inset 12pt off the bubble edge so it reads as a caption
+                // *under* the bubble rather than a band aligned with its corner.
+                if showsTimestamp, !isStreaming, let sentAt = message.createdAt {
                     Text(Self.timestampFormatter.string(from: sentAt))
                         .font(ZiroType.technical(.caption2))
                         .foregroundStyle(ZiroTheme.tertiaryText)

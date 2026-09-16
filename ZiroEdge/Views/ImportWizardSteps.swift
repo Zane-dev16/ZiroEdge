@@ -235,11 +235,7 @@ struct ConfigureStepView: View {
                             .foregroundStyle(ZiroTheme.secondaryText)
                     }
 
-                    Divider()
-
                     ImportArtifactSummaryRow(role: "Base Model", icon: "cpu", artifact: pair.base)
-
-                    Divider()
 
                     ImportArtifactSummaryRow(role: "Vision Projector", icon: "eye", artifact: pair.projector)
 
@@ -433,12 +429,12 @@ struct TransferStepView: View {
         ScrollView {
             VStack(spacing: ZiroTheme.Spacing.large) {
                 // The transfer card is the wizard's one truly floating card.
-                ZiroCard(showsShadow: true) {
+                ZiroCard() {
                     VStack(alignment: .leading, spacing: ZiroTheme.Spacing.medium) {
                         HStack(spacing: ZiroTheme.Spacing.small) {
-                            Image(systemName: "arrow.down.circle.fill")
+                            Image(systemName: "arrow.down.circle")
                                 .font(.title2)
-                                .foregroundStyle(ZiroTheme.accent)
+                                .foregroundStyle(ZiroTheme.secondaryText)
                             VStack(alignment: .leading, spacing: ZiroTheme.Spacing.micro) {
                                 Text(model.displayName)
                                     .font(ZiroType.rowTitle)
@@ -447,8 +443,7 @@ struct TransferStepView: View {
                                     .foregroundStyle(ZiroTheme.secondaryText)
                             }
                         }
-                        Divider()
-                        statusContent(model: model, status: status)
+                            statusContent(model: model, status: status)
                     }
                 }
                 Text("You can close this wizard — the transfer continues in the background and can be paused, resumed, or repaired from the Models page.")

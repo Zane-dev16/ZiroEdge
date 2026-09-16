@@ -269,11 +269,18 @@ extension ChatView {
                     attachmentButtons
                     Spacer(minLength: ZiroTheme.Spacing.small)
                     modelPicker
+                        // Hug the pill's ideal width and yield first under
+                        // pressure, so long names truncate inside the pill
+                        // instead of squeezing the send button.
+                        .layoutPriority(-1)
                     sendButton
                 }
             }
             .padding(.horizontal, ZiroTheme.Spacing.large)
-            .padding(.vertical, ZiroTheme.Spacing.small)
+            // Top-heavy pads (vision carries padding up top): 12/8 keeps the
+            // drawn well at ~89pt with the shorter control row.
+            .padding(.top, ZiroTheme.Spacing.medium)
+            .padding(.bottom, ZiroTheme.Spacing.small)
             .background(
                 RoundedRectangle(cornerRadius: ZiroTheme.Radius.composer, style: .continuous)
                     .fill(ZiroTheme.wellBackground)

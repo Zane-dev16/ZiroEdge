@@ -1,7 +1,7 @@
 // ModelsView.swift
 // ZiroEdge — Privacy-first local AI assistant
 //
-// Models catalog: one page split by a segmented scope picker into
+// Models catalog: one page split by a scope filter into
 // "Available" (browse/download) and "Installed" (on this device). Every row
 // is a single card-style entry with a clear download status and one primary
 // action (open the model's detail page, where capability choice and storage
@@ -64,7 +64,14 @@ struct ModelsView: View {
         .background(ZiroTheme.pageBackground.ignoresSafeArea())
         .listRowBackground(ZiroTheme.raisedBackground)
         .navigationTitle("Models")
-        .navigationBarTitleDisplayMode(.large)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Text("Models")
+                    .font(ZiroType.face(.orbitronBold, .title3))
+                    .foregroundStyle(ZiroTheme.primaryText)
+            }
+        }
         .sheet(isPresented: $viewModel.showingImporter) {
             ImportFlowView(
                 downloadManager: viewModel.downloadManager,
@@ -134,18 +141,43 @@ struct ModelsView: View {
 
     // MARK: - Scope
 
+    /// Catalog scope filter: quiet capsule pills (the selected scope reads
+    /// in the recessed-well fill with primary text — no segmented control,
+    /// no accent). Each pill keeps the 44pt-minimum-height touch floor and
+    /// grows with Dynamic Type; the selected pill carries `.isSelected` for
+    /// VoiceOver. The row groups as one "Catalog scope" container
+    /// (children `.contain`) so rotor users land on the group once, then
+    /// swipe through the pills. Plain labels keep the UI-test contract
+    /// (`app.buttons["Available"]`).
     private var scopeSection: some View {
         Section {
-            Picker("Catalog scope", selection: $scope) {
-                Text("Available").tag(Scope.available)
-                Text("Installed").tag(Scope.installed)
+            HStack(spacing: ZiroTheme.Spacing.small) {
+                scopePill(.available, label: "Available")
+                scopePill(.installed, label: "Installed")
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            // labelsHidden also drops the title from the a11y tree, leaving
-            // the segments unnamed for VoiceOver (r4 MEDIUM).
+            .accessibilityElement(children: .contain)
             .accessibilityLabel("Catalog scope")
         }
+    }
+
+    private func scopePill(_ item: Scope, label: String) -> some View {
+        Button {
+            scope = item
+        } label: {
+            Text(label)
+                .font(ZiroType.footnote)
+                .foregroundStyle(item == scope ? ZiroTheme.primaryText : ZiroTheme.secondaryText)
+                .padding(.horizontal, ZiroTheme.Spacing.small)
+                .frame(maxWidth: .infinity, minHeight: 33)
+                .background(
+                    Capsule().fill(item == scope ? ZiroTheme.wellBackground : .clear)
+                )
+                .overlay(Capsule().stroke(ZiroTheme.hairline, lineWidth: 1))
+                .contentShape(Rectangle().inset(by: -6))
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint("Filters the model catalog")
+        .accessibilityAddTraits(item == scope ? .isSelected : [])
     }
 
     private var introductionSection: some View {
@@ -153,7 +185,7 @@ struct ModelsView: View {
             VStack(alignment: .leading, spacing: ZiroTheme.Spacing.medium) {
                 Label("Runs entirely on your device", systemImage: "lock.shield")
                     .font(ZiroType.rowTitle)
-                    .foregroundStyle(ZiroTheme.accent)
+                    .foregroundStyle(ZiroTheme.primaryText)
                 Text("Download one model to begin. Larger models can be more capable, while smaller models load faster and use less memory.")
                     .font(ZiroType.supporting)
                     .foregroundStyle(ZiroTheme.secondaryText)
@@ -170,19 +202,19 @@ struct ModelsView: View {
                     // Import-entry icon in the spec's accent-tinted rounded
                     // square (44×44 min, Radius.small), scaling with
                     // Dynamic Type so the glyph never overflows.
-                    Image(systemName: "square.and.arrow.down.fill")
+                    Image(systemName: "square.and.arrow.down")
                         .font(.title3)
-                        .foregroundStyle(ZiroTheme.accent)
+                        .foregroundStyle(ZiroTheme.secondaryText)
                         .frame(width: importIconSide, height: importIconSide)
                         .background(
-                            ZiroTheme.accentContainer,
+                            ZiroTheme.wellBackground,
                             in: RoundedRectangle(cornerRadius: ZiroTheme.Radius.small, style: .continuous)
                         )
                         .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: ZiroTheme.Spacing.micro) {
                         Text("Import from Hugging Face")
                             .font(ZiroType.rowTitle)
-                            .foregroundStyle(ZiroTheme.accent)
+                            .foregroundStyle(ZiroTheme.primaryText)
                         Text("Bring a compatible GGUF model onto this device.")
                             .font(ZiroType.caption)
                             .foregroundStyle(ZiroTheme.secondaryText)
@@ -347,7 +379,7 @@ private struct ModelRow: View {
                 // The size/quantization tail is engineering data — technical
                 // (monospaced) voice per the type scale.
                 (Text(model.runtimeEligibility.label)
-                    .font(.caption.weight(.semibold))
+                    .font(.caption)
                     .foregroundStyle(eligibilityTint) +
                  Text(" · \(model.formattedSize) · \(model.quantization)")
                     .font(ZiroType.technical(.caption))
@@ -463,7 +495,7 @@ private struct ModelRow: View {
         case .notDownloaded:
             if status.isRepairNeeded || ModelManagerService.isRepairNeeded(for: model) {
                 Text("Repair")
-                    .font(ZiroType.caption.weight(.semibold))
+                    .font(ZiroType.caption)
                     .foregroundStyle(ZiroTheme.warningText)
                     .accessibilityLabel("Repair \(model.displayName)")
             } else {

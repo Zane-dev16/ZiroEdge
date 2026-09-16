@@ -82,7 +82,9 @@ struct VariantRow: View {
             Spacer()
             if isSelected {
                 Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(ZiroTheme.accent)
+                    // Selected state reads via the quiet secondary tint —
+                    // the well fill behind the row already marks the choice.
+                    .foregroundStyle(ZiroTheme.secondaryText)
                     .font(.title3)
                     .accessibilityHidden(true)
             }

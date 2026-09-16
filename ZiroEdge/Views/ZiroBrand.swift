@@ -85,13 +85,13 @@ struct ZiroCapabilityCard: View {
                     .frame(width: 10, height: 10)
                     .accessibilityHidden(true)
                 Text(item.text)
-                    .font(ZiroType.supporting.weight(.medium))
+                    .font(ZiroType.supporting)
                     .foregroundStyle(ZiroTheme.primaryText)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
                 Spacer(minLength: 0)
                 Image(systemName: "chevron.right")
-                    .font(.footnote.weight(.semibold))
+                    .font(.footnote)
                     .foregroundStyle(ZiroTheme.tertiaryText)
                     // Directional — mirror in RTL.
                     .flipsForRightToLeft(true)
@@ -119,11 +119,11 @@ private struct ZiroCapabilityCardStyle: ButtonStyle {
         configuration.label
             .background(
                 RoundedRectangle(cornerRadius: ZiroTheme.Radius.control, style: .continuous)
-                    .fill(configuration.isPressed ? ZiroTheme.accentContainer : .clear)
+                    .fill(configuration.isPressed ? ZiroTheme.wellBackground : .clear)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: ZiroTheme.Radius.control, style: .continuous)
-                    .stroke(configuration.isPressed ? Color.accentColor : .clear, lineWidth: 1)
+                    .stroke(ZiroTheme.hairline, lineWidth: 1)
             )
             .scaleEffect(reduceMotion || !configuration.isPressed ? 1 : 0.96)
             .animation(reduceMotion ? nil : ZiroMotion.press, value: configuration.isPressed)
@@ -232,7 +232,7 @@ struct ZiroHero: View {
     var body: some View {
         VStack(spacing: ZiroTheme.Spacing.large) {
             Image(systemName: symbol)
-                .font(.largeTitle.weight(.medium))
+                .font(.largeTitle)
                 .foregroundStyle(tint)
                 .symbolRenderingMode(.hierarchical)
                 .accessibilityHidden(true)
@@ -241,7 +241,7 @@ struct ZiroHero: View {
                 .foregroundStyle(ZiroTheme.primaryText)
                 .multilineTextAlignment(.center)
             Text(message)
-                .font(ZiroType.supporting)
+                .font(.subheadline)
                 .foregroundStyle(ZiroTheme.secondaryText)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)

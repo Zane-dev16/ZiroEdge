@@ -176,10 +176,10 @@ struct SourceStepView: View {
                     // Source icon in the spec's accent-tinted rounded square.
                     Image(systemName: "globe")
                         .font(.title2)
-                        .foregroundStyle(ZiroTheme.accent)
+                        .foregroundStyle(ZiroTheme.secondaryText)
                         .frame(width: sourceIconSide, height: sourceIconSide)
                         .background(
-                            ZiroTheme.accentContainer,
+                            ZiroTheme.wellBackground,
                             in: RoundedRectangle(cornerRadius: ZiroTheme.Radius.small, style: .continuous)
                         )
                         .accessibilityHidden(true)
@@ -192,7 +192,7 @@ struct SourceStepView: View {
                     }
                     Spacer()
                     Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(ZiroTheme.accent)
+                        .foregroundStyle(ZiroTheme.secondaryText)
                         .accessibilityLabel("Selected")
                 }
                 .accessibilityElement(children: .combine)
@@ -207,7 +207,7 @@ struct SourceStepView: View {
         ZiroCard {
             VStack(alignment: .leading, spacing: ZiroTheme.Spacing.medium) {
                 Text("Repository")
-                    .font(ZiroType.supporting.weight(.semibold))
+                    .font(ZiroType.supporting)
                 TextField("owner/repository or URL", text: $viewModel.repositoryInput)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
@@ -237,7 +237,7 @@ struct SourceStepView: View {
         ZiroCard {
             VStack(alignment: .leading, spacing: ZiroTheme.Spacing.small) {
                 Label("Import Rejected", systemImage: "exclamationmark.triangle.fill")
-                    .font(ZiroType.supporting.weight(.semibold))
+                    .font(ZiroType.supporting)
                     // Hard rejection → the danger token (warning reads as
                     // recoverable; per spec this card is danger).
                     .foregroundStyle(ZiroTheme.dangerText)

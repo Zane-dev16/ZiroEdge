@@ -2,8 +2,8 @@
 // ZiroEdge — Privacy-first local AI assistant
 //
 // Conversation list sidebar. Brand mark and destination rows (Chats,
-// Models) up top, recent conversations below, New chat / Settings pills
-// pinned to the bottom. The full searchable archive lives on the Chats
+// Models) up top, recent conversations below, New chat / Settings quiet
+// actions pinned to the bottom. The full searchable archive lives on the Chats
 // screen (pushed via ShellRoute.chats). Rendered inside the split-view
 // sidebar column on regular widths and inside the drawer sheet on
 // compact widths.
@@ -103,19 +103,16 @@ struct SidebarView: View {
     private var sidebarHeader: some View {
         VStack(spacing: 0) {
             HStack(spacing: ZiroTheme.Spacing.medium) {
-                ZiroBrandMark(size: 30)
-                    .padding(ZiroTheme.Spacing.xSmall)
-                    .background(
-                        ZiroTheme.accentContainer,
-                        in: RoundedRectangle(cornerRadius: ZiroTheme.Radius.small, style: .continuous)
-                    )
-                Text("ZiroEdge")
-                    .font(ZiroType.rowTitle)
-                    .foregroundStyle(ZiroTheme.primaryText)
+                ZiroBrandMark(size: 40)
+                Text("ZIROEDGE")
+                    .font(ZiroType.face(.orbitronSemiBold, .headline))
+                    .tracking(1.4)
+                    .foregroundStyle(ZiroTheme.secondaryText)
                 Spacer()
             }
             .padding(.horizontal, ZiroTheme.Spacing.medium)
-            .padding(.vertical, ZiroTheme.Spacing.small)
+            .padding(.top, ZiroTheme.Spacing.medium)
+            .padding(.bottom, ZiroTheme.Spacing.small)
             sidebarDestinationRow(
                     title: "Chats",
                     systemImage: "bubble.left.and.bubble.right",
@@ -131,14 +128,12 @@ struct SidebarView: View {
                     onOpenRoute(.models)
                 }
         }
-        .padding(.bottom, ZiroTheme.Spacing.xSmall)
+        .padding(.bottom, ZiroTheme.Spacing.medium)
         .background(ZiroTheme.pageBackground)
     }
 
     /// One plain navigation row: icon + title, no chevron. The whole row
     /// is the button — a trailing arrow adds chrome without information.
-    /// Deliberately not a pill — pills are reserved for the New chat /
-    /// Settings bottom bar.
     private func sidebarDestinationRow(
         title: String,
         systemImage: String,
@@ -180,43 +175,50 @@ struct SidebarView: View {
 
     // MARK: - Bottom Bar
 
-    /// Fixed bottom bar: New chat and Settings side by side. The list
-    /// itself carries only conversations — no section headers compete
-    /// for attention and no large navigation title is needed.
+    /// Fixed bottom bar: New chat and Settings side by side, separated
+    /// from the list by a full-bleed 1px hairline. The list itself carries
+    /// only conversations — no section headers compete for attention and
+    /// no large navigation title is needed.
     private var sidebarBottomBar: some View {
-        HStack(spacing: ZiroTheme.Spacing.small) {
-            Button(action: onNewConversation) {
-                Label("New chat", systemImage: "square.and.pencil")
-                    .font(.body.weight(.semibold))
-                    .frame(maxWidth: .infinity)
-                    .frame(minHeight: 44)
-                    .background(Color.accentColor, in: Capsule())
-                    .foregroundStyle(ZiroTheme.accentForeground)
-            }
-            .accessibilityHint("Creates a private on-device chat")
-            .accessibilityIdentifier("new-chat-button")
-
-            Button {
-                onOpenRoute(.settings)
-            } label: {
-                Label("Settings", systemImage: "gearshape")
-                    .font(.body.weight(.semibold))
-                    .frame(maxWidth: .infinity)
-                    .frame(minHeight: 44)
-                    .background(ZiroTheme.accentContainer, in: Capsule())
-                    .foregroundStyle(ZiroTheme.primaryText)
-            }
-            .accessibilityIdentifier("sidebar-settings-button")
-        }
-        .padding(.horizontal, ZiroTheme.Spacing.medium)
-        .padding(.top, ZiroTheme.Spacing.small)
-        .padding(.bottom, ZiroTheme.Spacing.medium)
-        .background(ZiroTheme.pageBackground)
-        .overlay(alignment: .top) {
+        VStack(spacing: 0) {
             Rectangle()
                 .fill(ZiroTheme.hairline)
                 .frame(height: 1)
+            HStack(spacing: ZiroTheme.Spacing.small) {
+                Button(action: onNewConversation) {
+                    Label("New chat", systemImage: "square.and.pencil")
+                        .font(.body)
+                        .frame(maxWidth: .infinity)
+                        .frame(minHeight: 44)
+                        .foregroundStyle(ZiroTheme.primaryText)
+                        .background(ZiroTheme.wellBackground, in: Capsule())
+                        .overlay(Capsule().stroke(ZiroTheme.hairline, lineWidth: 1))
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Creates a private on-device chat")
+                .accessibilityIdentifier("new-chat-button")
+
+                Button {
+                    onOpenRoute(.settings)
+                } label: {
+                    Label("Settings", systemImage: "gearshape")
+                        .font(.body)
+                        .frame(maxWidth: .infinity)
+                        .frame(minHeight: 44)
+                        .foregroundStyle(ZiroTheme.primaryText)
+                        .background(ZiroTheme.wellBackground, in: Capsule())
+                        .overlay(Capsule().stroke(ZiroTheme.hairline, lineWidth: 1))
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("sidebar-settings-button")
+            }
+            .padding(.horizontal, ZiroTheme.Spacing.medium)
+            .padding(.top, ZiroTheme.Spacing.small)
+            .padding(.bottom, ZiroTheme.Spacing.medium)
         }
+        .background(ZiroTheme.pageBackground)
     }
 
     // MARK: - Conversation Sections
@@ -309,10 +311,10 @@ struct SidebarView: View {
 
 struct ConversationRow: View {
     let conversation: ConversationPayload
-    /// Selected rows (sidebar `List(selection:)`) tint to the accent
-    /// container with a 2pt accent edge — the quiet row itself carries no
+    /// Selected rows (sidebar `List(selection:)`) fill with the subtle
+    /// selection tone and carry no edge — the quiet row itself carries no
     /// fill and no stroke, so selection is projected explicitly and only
-    /// when selected (card OR hairline, never both at rest).
+    /// when selected.
     var isSelected: Bool = false
 
     var body: some View {
@@ -323,7 +325,7 @@ struct ConversationRow: View {
             // fought the title for space.
             VStack(alignment: .leading, spacing: ZiroTheme.Spacing.micro) {
                 Text(conversation.title)
-                    .font(ZiroType.body.weight(.medium))
+                    .font(ZiroType.body)
                     .foregroundStyle(ZiroTheme.primaryText)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -344,11 +346,7 @@ struct ConversationRow: View {
         .frame(maxWidth: .infinity, minHeight: 44)
         .background(
             RoundedRectangle(cornerRadius: ZiroTheme.Radius.small, style: .continuous)
-                .fill(isSelected ? ZiroTheme.accentContainer : Color.clear)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: ZiroTheme.Radius.small, style: .continuous)
-                .stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 2)
+                .fill(isSelected ? ZiroTheme.selectedBackground : Color.clear)
         )
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilitySummary)
@@ -406,17 +404,9 @@ struct ChatsView: View {
     @State private var showDeleteConfirmation = false
     @State private var conversationToDelete: ConversationPayload?
 
-    /// Archive scope filter — the capsule pills above the list. Recent
-    /// means touched in the last 7 days; undated rows show under every scope.
-    private enum ArchiveScope: String, CaseIterable {
-        case all = "All"
-        case recent = "Recent"
-        case earlier = "Earlier"
-    }
-    @State private var scope: ArchiveScope = .all
-
-    /// Archive rows: every chat (no 50-row cap), scope-filtered and
-    /// title-searched, bucketed into recency sections like the sidebar.
+    /// Archive rows: every chat (no 50-row cap), title-searched and
+    /// bucketed into recency sections like the sidebar. No scope filter —
+    /// the list runs straight.
     private var visibleSections: [(id: String, title: String?, items: [ConversationPayload])] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         let calendar = Calendar.current
@@ -429,7 +419,6 @@ struct ChatsView: View {
             ("earlier", nil, [])
         ]
         for conversation in viewModel.conversations {
-            guard isInScope(conversation, cutoff: sevenDaysAgo) else { continue }
             if !query.isEmpty,
                !conversation.title.localizedCaseInsensitiveContains(query) { continue }
             let date = conversation.updatedAt ?? conversation.createdAt ?? now
@@ -446,13 +435,6 @@ struct ChatsView: View {
             buckets[slot].items.append(conversation)
         }
         return buckets.filter { !$0.items.isEmpty }
-    }
-
-    private func isInScope(_ conversation: ConversationPayload, cutoff: Date) -> Bool {
-        guard scope != .all else { return true }
-        guard let date = conversation.updatedAt ?? conversation.createdAt else { return true }
-        let isRecent = date >= cutoff
-        return scope == .recent ? isRecent : !isRecent
     }
 
     /// One archive row: quiet treatment with rename/delete affordances.
@@ -494,46 +476,8 @@ struct ChatsView: View {
             }
     }
 
-    /// Archive scope filter: quiet capsule pills (no accent fill/stroke —
-    /// the selected scope reads in the recessed-well fill with primary
-    /// text). Each pill keeps the 44pt-minimum-height touch floor and grows
-    /// with Dynamic Type; the selected pill carries `.isSelected` for
-    /// VoiceOver. The row groups as one "Archive scope" container
-    /// (children `.contain`) so rotor users land on the group once, then
-    /// swipe through the All/Recent/Earlier pills with their own labels.
-    private var archiveScopePills: some View {
-        HStack(spacing: ZiroTheme.Spacing.small) {
-            ForEach(ArchiveScope.allCases, id: \.self) { item in
-                Button {
-                    scope = item
-                } label: {
-                    Text(item.rawValue)
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(item == scope ? ZiroTheme.primaryText : ZiroTheme.secondaryText)
-                        .frame(maxWidth: .infinity, minHeight: 44)
-                        .background(
-                            Capsule().fill(item == scope ? ZiroTheme.wellBackground : .clear)
-                        )
-                        .contentShape(Capsule())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("\(item.rawValue) chats")
-                .accessibilityHint("Filters the chat archive")
-                .accessibilityAddTraits(item == scope ? .isSelected : [])
-            }
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Archive scope")
-        .padding(.horizontal, ZiroTheme.Spacing.large)
-        .padding(.vertical, ZiroTheme.Spacing.small)
-        .ziroAnimation(ZiroMotion.press, value: scope)
-    }
-
     var body: some View {
-        VStack(spacing: 0) {
-            archiveScopePills
-
-            Group {
+        Group {
                 if viewModel.isLoading && viewModel.conversations.isEmpty {
                     List {
                         ForEach(0..<8, id: \.self) { _ in
@@ -580,25 +524,37 @@ struct ChatsView: View {
                     .scrollContentBackground(.hidden)
                     .background(ZiroTheme.pageBackground)
                 }
-            }
         }
         .background(ZiroTheme.pageBackground)
         .navigationTitle("Chats")
-        .navigationBarTitleDisplayMode(.large)
+        .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $searchText, prompt: "Search chats")
         .autocorrectionDisabled()
         .refreshable { await viewModel.loadConversations() }
         .toolbar {
+            ToolbarItem(placement: .principal) {
+                Text("Chats")
+                    .font(ZiroType.face(.orbitronBold, .title3))
+                    .foregroundStyle(ZiroTheme.primaryText)
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Button(action: onNewConversation) {
-                    Label("New chat", systemImage: "plus")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(ZiroTheme.accentForeground)
-                        .padding(.leading, ZiroTheme.Spacing.medium - 2)
-                        .padding(.trailing, ZiroTheme.Spacing.medium)
-                        .frame(minHeight: 44)
-                        .background(Color.accentColor, in: Capsule())
+                    HStack(spacing: ZiroTheme.Spacing.xSmall) {
+                        Text("New chat")
+                            .font(ZiroType.footnote)
+                            .foregroundStyle(ZiroTheme.primaryText)
+                        Image(systemName: "plus")
+                            .font(ZiroType.footnote)
+                            .foregroundStyle(ZiroTheme.tertiaryText)
+                            .accessibilityHidden(true)
+                    }
+                    .padding(.horizontal, ZiroTheme.Spacing.small)
+                    .frame(minHeight: 33)
+                    // Single quiet capsule — fill only, no ring overlay.
+                    .background(ZiroTheme.wellBackground, in: Capsule())
+                    .contentShape(Rectangle().inset(by: -6))
                 }
+                .buttonStyle(.plain)
                 .accessibilityLabel("New chat")
                 .accessibilityIdentifier("chats-new-chat-button")
             }

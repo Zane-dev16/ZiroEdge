@@ -154,7 +154,7 @@ struct StoreOperationProgressView: View {
                     Image(systemName: symbol).symbolEffect(.pulse)
                 }
             }
-            .font(.largeTitle.weight(.medium))
+            .font(.largeTitle)
             .foregroundStyle(ZiroTheme.accent)
             .accessibilityHidden(true)
             ProgressView().controlSize(.large)

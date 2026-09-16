@@ -640,7 +640,6 @@ extension AppShellView {
                 .fill(ZiroTheme.hairline)
                 .frame(width: 1)
         }
-        .ziroShadow(.floating)
         .transition(reduceMotion ? .opacity : .move(edge: .leading).combined(with: .opacity))
         .simultaneousGesture(slideOverDismissDrag)
     }

@@ -76,6 +76,11 @@ enum ZiroTheme {
     /// Alias for the input-well elevation; prefer this name in new code.
     static let wellBackground = inputBackground
 
+    /// Subtle selection fill for selected rows (sidebar conversations,
+    /// lists): the input-well elevation — tonal, never vivid, never ringed.
+    /// Accent rings appear only as keyboard-focus indicators.
+    static let selectedBackground = wellBackground
+
     /// Floating custom layers above everything. Light: white. Dark: `#25252A`.
     static let overlayBackground = ziroColor(light: 0xFFFFFF, dark: 0x25252A)
 
@@ -368,14 +373,8 @@ private struct ZiroShadowModifier: ViewModifier {
     let level: ZiroShadowLevel?
 
     func body(content: Content) -> some View {
-        switch level {
-        case .raised:
-            content.shadow(color: ZiroTheme.shadowRaised, radius: 12, x: 0, y: 3)
-        case .floating:
-            content.shadow(color: ZiroTheme.shadowFloating, radius: 24, x: 0, y: 8)
-        case nil:
-            content
-        }
+        // Minimalist pass: hairline carries depth, shadows off.
+        content
     }
 }
 
@@ -466,16 +465,13 @@ struct ZiroPrimaryButtonStyle: ButtonStyle {
         configuration.label
             // System type ramp via token (Callout, Dynamic Type scaled) +
             // true 44pt floor: no vertical padding stacked on minHeight.
-            .font(ZiroType.bodyStrong)
+            .font(ZiroType.body)
             .frame(maxWidth: .infinity)
             .frame(minHeight: 44)
             .padding(.horizontal, ZiroTheme.Spacing.xLarge)
-            // Fade the label when disabled: the 0.3-opacity accent fill
-            // against full-contrast white/black is otherwise unreadable.
-            .foregroundStyle(ZiroTheme.accentForeground.opacity(isEnabled ? 1 : 0.6))
-            .background(Color.accentColor.opacity(isEnabled ? (configuration.isPressed ? 0.82 : 1) : 0.3))
-            .clipShape(Capsule())
-            .modifier(ZiroShadowModifier(level: .raised))
+            .foregroundStyle(ZiroTheme.primaryText.opacity(isEnabled ? 1 : 0.5))
+            .background(ZiroTheme.wellBackground, in: Capsule())
+            .overlay(Capsule().stroke(ZiroTheme.hairline, lineWidth: 1))
             .opacity(isEnabled ? 1 : 0.9)
             .scaleEffect(reduceMotion || isStatic || !configuration.isPressed ? 1 : 0.96)
             .animation(reduceMotion ? nil : ZiroMotion.press, value: configuration.isPressed)
@@ -491,17 +487,13 @@ struct ZiroSecondaryButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            // Bold, not semibold: accent on accentContainer is 3.84:1 (light)
-            // and only clears AA as bold ≥14pt (docs/DESIGN-SPEC.md §4).
-            .font(ZiroType.bodyStrong)
+            .font(ZiroType.body)
             .frame(maxWidth: .infinity)
             .frame(minHeight: 44)
             .padding(.horizontal, ZiroTheme.Spacing.large)
-            .foregroundStyle(Color.accentColor.opacity(isEnabled ? 1 : 0.5))
-            .background(
-                Capsule().fill(ZiroTheme.accentContainer)
-                    .overlay(configuration.isPressed && isEnabled ? Color.accentColor.opacity(0.12) : Color.clear)
-            )
+            .foregroundStyle(ZiroTheme.secondaryText.opacity(isEnabled ? 1 : 0.5))
+            .background(.clear, in: Capsule())
+            .overlay(Capsule().stroke(ZiroTheme.hairline, lineWidth: 1))
             .scaleEffect(reduceMotion || isStatic || !configuration.isPressed ? 1 : 0.96)
             .animation(reduceMotion ? nil : ZiroMotion.press, value: configuration.isPressed)
     }
@@ -516,15 +508,13 @@ struct ZiroDestructiveButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(ZiroType.bodyStrong)
+            .font(ZiroType.body)
             .frame(maxWidth: .infinity)
             .frame(minHeight: 44)
             .padding(.horizontal, ZiroTheme.Spacing.large)
             .foregroundStyle(ZiroTheme.dangerText.opacity(isEnabled ? 1 : 0.5))
-            .background(
-                Capsule().fill(ZiroTheme.dangerContainer)
-                    .overlay(configuration.isPressed && isEnabled ? ZiroTheme.dangerText.opacity(0.12) : Color.clear)
-            )
+            .background(ZiroTheme.wellBackground, in: Capsule())
+            .overlay(Capsule().stroke(ZiroTheme.hairline, lineWidth: 1))
             .scaleEffect(reduceMotion || isStatic || !configuration.isPressed ? 1 : 0.96)
             .animation(reduceMotion ? nil : ZiroMotion.press, value: configuration.isPressed)
     }
@@ -585,7 +575,7 @@ struct ZiroStatusBanner<Actions: View>: View {
     var body: some View {
         HStack(alignment: .top, spacing: ZiroTheme.Spacing.medium) {
             Image(systemName: icon)
-                .font(.body.weight(.semibold))
+                .font(.body)
                 .foregroundStyle(toneTint)
                 .frame(width: 22)
                 .accessibilityHidden(true)
@@ -594,7 +584,7 @@ struct ZiroStatusBanner<Actions: View>: View {
                 VStack(alignment: .leading, spacing: ZiroTheme.Spacing.xSmall) {
                     if let title {
                         Text(title)
-                            .font(.subheadline.weight(.semibold))
+                            .font(.subheadline)
                             .foregroundStyle(ZiroTheme.primaryText)
                     }
                     Text(message)
@@ -603,7 +593,7 @@ struct ZiroStatusBanner<Actions: View>: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 actions
-                    .font(.footnote.weight(.semibold))
+                    .font(ZiroType.footnote)
                     // 44×44pt hit-target floor (repo a11y standard): banner
                     // actions are the sole recovery/dismissal path for their
                     // banners and would otherwise measure ~20pt tall at
@@ -616,7 +606,11 @@ struct ZiroStatusBanner<Actions: View>: View {
         .padding(.vertical, ZiroTheme.Spacing.medium)
         .background(
             RoundedRectangle(cornerRadius: ZiroTheme.Radius.control, style: .continuous)
-                .fill(toneContainer)
+                .fill(ZiroTheme.wellBackground)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: ZiroTheme.Radius.control, style: .continuous)
+                .stroke(ZiroTheme.hairline, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: ZiroTheme.Radius.control, style: .continuous))
         .overlay(alignment: .leading) {
@@ -698,20 +692,21 @@ struct ZiroBadge: View {
         HStack(spacing: ZiroTheme.Spacing.xSmall) {
             if let icon {
                 Image(systemName: icon)
-                    .font(.caption2.weight(.bold))
+                    .font(.caption2)
                     .accessibilityHidden(true)
             }
             Text(text)
                 .font(
                     monospaced
-                        ? ZiroType.technical(.caption2, .semibold)
-                        : Font.caption2.weight(.bold)
+                        ? ZiroType.technical(.caption2)
+                        : Font.caption2
                 )
         }
         .foregroundStyle(tone.tint)
         .padding(.horizontal, ZiroTheme.Spacing.badge)
         .padding(.vertical, ZiroTheme.Spacing.micro)
-        .background(tone.container, in: Capsule())
+        .background(ZiroTheme.wellBackground, in: Capsule())
+        .overlay(Capsule().stroke(ZiroTheme.hairline, lineWidth: 1))
         // Badge copy is a single unit — keep the capsule hugging one line
         // instead of wrapping when the surrounding row gets tight.
         .fixedSize()
@@ -736,12 +731,12 @@ struct ZiroSuggestionChip: View {
                     Image(systemName: systemImage)
                         // Match the chip text voice (supporting.medium) — one
                         // weight/size set per surface.
-                        .font(ZiroType.supporting.weight(.medium))
-                        .foregroundStyle(Color.accentColor)
+                        .font(ZiroType.supporting)
+                        .foregroundStyle(ZiroTheme.secondaryText)
                         .accessibilityHidden(true)
                 }
                 Text(title)
-                    .font(ZiroType.supporting.weight(.medium))
+                    .font(ZiroType.supporting)
                     .foregroundStyle(ZiroTheme.primaryText)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
@@ -763,10 +758,10 @@ private struct ZiroSuggestionChipButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .background(
-                Capsule().fill(configuration.isPressed ? ZiroTheme.accentContainer : .clear)
+                Capsule().fill(configuration.isPressed ? ZiroTheme.wellBackground : .clear)
             )
             .overlay(
-                Capsule().stroke(configuration.isPressed ? Color.accentColor : .clear, lineWidth: 1)
+                Capsule().stroke(ZiroTheme.hairline, lineWidth: 1)
             )
             .scaleEffect(reduceMotion || isStatic || !configuration.isPressed ? 1 : 0.96)
             .animation(reduceMotion ? nil : ZiroMotion.press, value: configuration.isPressed)
@@ -838,8 +833,8 @@ struct ZiroSectionHeader: View {
         HStack(spacing: ZiroTheme.Spacing.xSmall) {
             if let systemImage {
                 Image(systemName: systemImage)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Color.accentColor)
+                    .font(.caption)
+                    .foregroundStyle(ZiroTheme.secondaryText)
                     // Directional glyphs (text.bubble, bubble.left.*) mirror
                     // in RTL; other symbols ignore the flip.
                     .flipsForRightToLeft(
@@ -850,7 +845,7 @@ struct ZiroSectionHeader: View {
                     .accessibilityHidden(true)
             }
             Text(title)
-                .font(.caption.weight(.semibold))
+                .font(.caption)
                 .textCase(.uppercase)
                 .tracking(0.8)
                 .foregroundStyle(ZiroTheme.secondaryText)

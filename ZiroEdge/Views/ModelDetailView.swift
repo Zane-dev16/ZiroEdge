@@ -342,7 +342,7 @@ struct ModelDetailView: View {
         Section("Runtime Status") {
             LabeledContent("Mode") {
                 Text(model.runtimeEligibility.label)
-                    .font(.subheadline.weight(.semibold))
+                    .font(.subheadline)
                     .foregroundStyle(eligibilityTint(model.runtimeEligibility))
             }
             Text(model.runtimeEligibilityExplanation)
@@ -485,7 +485,7 @@ private struct SafetyRuntimePage: View {
     private var lockedParameters: some View {
         VStack(alignment: .leading, spacing: ZiroTheme.Spacing.xSmall) {
             Text("Non-adjustable runtime parameters:")
-                .font(ZiroType.caption.weight(.medium))
+                .font(ZiroType.caption)
                 .foregroundStyle(ZiroTheme.secondaryText)
 
             // Locked values are engineering data — technical voice.

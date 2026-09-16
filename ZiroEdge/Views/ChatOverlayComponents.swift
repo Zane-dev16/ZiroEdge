@@ -215,8 +215,9 @@ struct ComposerModelPicker: View {
 
     /// Width cap scales with Dynamic Type (relative to the picker's
     /// footnote font) so long model names truncate with an ellipsis
-    /// instead of pushing past the pill.
-    @ScaledMetric(relativeTo: .footnote) private var pickerMaxWidth: CGFloat = 220
+    /// instead of pushing past the vision pill (~116pt outer: ~90pt text +
+    /// slim insets + text/chevron gap + chevron).
+    @ScaledMetric(relativeTo: .footnote) private var pickerMaxWidth: CGFloat = 90
 
     var body: some View {
         ChatModelPickerMenu(
@@ -234,7 +235,12 @@ struct ComposerModelPicker: View {
 
     private var pickerLabel: some View {
         HStack(spacing: ZiroTheme.Spacing.xSmall) {
-            statusSlot
+            // The slot only exists in phases that draw an indicator
+            // (loading/failed/evicted) — ready/idle/needsDownload hug the
+            // text + chevron with zero leading dead space, as the vision does.
+            if showsStatusIndicator {
+                statusSlot
+            }
             Text(ChatModelPicker.title(phase: phase, modelName: modelName))
                 .font(ZiroType.footnote)
                 .lineLimit(1)
@@ -252,26 +258,33 @@ struct ComposerModelPicker: View {
                 .foregroundStyle(ZiroTheme.tertiaryText)
                 .accessibilityHidden(true)
         }
-        .padding(.horizontal, ZiroTheme.Spacing.medium)
-        // 44pt minimum hit target (repo standard): the capsule never shrinks
-        // below the touch floor even though its label is footnote text.
-        .frame(minHeight: 44)
-        // Capsule on the composer's own fill — the outline is what makes it
-        // read as a pill, exactly as the vision draws it.
-        .background(Capsule().fill(ZiroTheme.wellBackground))
-        .overlay(Capsule().stroke(ZiroTheme.hairline, lineWidth: 1))
-        .contentShape(Capsule())
+        .padding(.horizontal, ZiroTheme.Spacing.small)
+        // Drawn height ~33pt (vision pill); 44pt hit target lives on the
+        // expanded contentShape, not the frame, so the row stays short.
+        .frame(minHeight: 33)
+        // Quiet text directly on the composer well — no pill fill or ring.
+        // The well already draws fill+stroke; a nested capsule only
+        // doubles the ring with zero fill contrast.
+        .contentShape(Rectangle().inset(by: -6))
     }
 
-    /// Fixed-width leading slot: reserves the indicator's space in every
-    /// phase so the label never shifts. Hosts the loading spinner while
-    /// loading, and a warning glyph for the two attention phases — so the
-    /// amber tint is explained by a symbol instead of reading as a randomly
-    /// coloured model name. The glyph matches the picker's own type voice
-    /// (`ZiroType.footnote`, same as the chevron): one size/weight set per
-    /// surface, and Dynamic Type aware rather than a fixed icon size.
-    /// Decorative: the phase already reads in the title text and the
-    /// shared accessibility label, so VoiceOver skips the slot itself.
+    /// Whether the phase draws a leading indicator (spinner / warning glyph).
+    private var showsStatusIndicator: Bool {
+        switch phase {
+        case .loading, .failed, .evicted: true
+        case .ready, .idle, .needsDownload: false
+        }
+    }
+
+    /// Leading indicator, hugging its content and present only in phases
+    /// that need it. Hosts the loading spinner while loading, and a warning
+    /// glyph for the two attention phases — so the amber tint is explained
+    /// by a symbol instead of reading as a randomly coloured model name.
+    /// The glyph matches the picker's own type voice (`ZiroType.footnote`,
+    /// same as the chevron): one size/weight set per surface, and Dynamic
+    /// Type aware rather than a fixed icon size. Decorative: the phase
+    /// already reads in the title text and the shared accessibility label,
+    /// so VoiceOver skips the slot itself.
     private var statusSlot: some View {
         Group {
             switch phase {
@@ -282,10 +295,10 @@ struct ComposerModelPicker: View {
                     .font(ZiroType.footnote)
                     .foregroundStyle(ZiroTheme.warningText)
             case .ready, .idle, .needsDownload:
+                // Unreachable: hidden behind `showsStatusIndicator`.
                 Color.clear
             }
         }
-        .frame(width: 16, height: 16)
         .transition(.asymmetric(insertion: .scale(scale: 0.25).combined(with: .opacity), removal: .scale(scale: 0.25).combined(with: .opacity)))
         .ziroAnimation(ZiroMotion.press, value: phase)
         .accessibilityHidden(true)
