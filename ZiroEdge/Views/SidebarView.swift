@@ -117,7 +117,7 @@ struct SidebarView: View {
             }
             .padding(.horizontal, ZiroTheme.Spacing.medium)
             .padding(.top, ZiroTheme.Spacing.medium)
-            .padding(.bottom, ZiroTheme.Spacing.small)
+            .padding(.bottom, ZiroTheme.Spacing.medium)
             sidebarDestinationRow(
                     title: "Chats",
                     systemImage: "bubble.left.and.bubble.right",
@@ -156,7 +156,8 @@ struct SidebarView: View {
                     .flipsForRightToLeft(systemImageNeedsRTLFlip(systemImage))
                     .frame(width: 24)
                 Text(title)
-                    .font(.body)
+                    .font(ZiroType.face(.orbitronSemiBold, .footnote))
+                    .tracking(0.8)
                     .foregroundStyle(ZiroTheme.primaryText)
                 Spacer()
             }
@@ -192,7 +193,8 @@ struct SidebarView: View {
             HStack(spacing: ZiroTheme.Spacing.small) {
                 Button(action: onNewConversation) {
                     Label("New chat", systemImage: "square.and.pencil")
-                        .font(.body)
+                        .font(ZiroType.face(.orbitronSemiBold, .footnote))
+                        .tracking(0.8)
                         .frame(maxWidth: .infinity)
                         .frame(minHeight: 44)
                         .foregroundStyle(ZiroTheme.primaryText)
@@ -208,7 +210,8 @@ struct SidebarView: View {
                     onOpenRoute(.settings)
                 } label: {
                     Label("Settings", systemImage: "gearshape")
-                        .font(.body)
+                        .font(ZiroType.face(.orbitronSemiBold, .footnote))
+                        .tracking(0.8)
                         .frame(maxWidth: .infinity)
                         .frame(minHeight: 44)
                         .foregroundStyle(ZiroTheme.primaryText)
@@ -261,9 +264,9 @@ struct SidebarView: View {
                 } header: {
                     if let title = group.title {
                         Text(title)
-                            .font(ZiroType.micro)
+                            .font(ZiroType.face(.orbitronSemiBold, .caption2))
                             .textCase(.uppercase)
-                            .tracking(0.5)
+                            .tracking(0.8)
                             .foregroundStyle(ZiroTheme.tertiaryText)
                     }
                 }
@@ -552,9 +555,9 @@ struct ChatsView: View {
                             } header: {
                                 if let title = section.title {
                                     Text(title)
-                                        .font(ZiroType.micro)
+                                        .font(ZiroType.face(.orbitronSemiBold, .caption2))
                                         .textCase(.uppercase)
-                                        .tracking(0.5)
+                                        .tracking(0.8)
                                         .foregroundStyle(ZiroTheme.tertiaryText)
                                 }
                             }

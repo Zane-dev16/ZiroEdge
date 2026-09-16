@@ -171,7 +171,8 @@ struct ModelsView: View {
             scope = item
         } label: {
             Text(label)
-                .font(ZiroType.footnote)
+                .font(ZiroType.face(.orbitronSemiBold, .footnote))
+                .tracking(0.8)
                 .foregroundStyle(item == scope ? ZiroTheme.primaryText : ZiroTheme.secondaryText)
                 .padding(.horizontal, ZiroTheme.Spacing.medium)
                 .frame(maxWidth: .infinity, minHeight: 33)
