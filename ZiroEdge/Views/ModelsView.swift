@@ -147,26 +147,30 @@ struct ModelsView: View {
 
     // MARK: - Scope
 
-    /// Catalog scope filter: quiet capsule pills (the selected scope reads
-    /// in the recessed-well fill with primary text — no segmented control,
-    /// no accent). Each pill keeps the 44pt-minimum-height touch floor and
-    /// grows with Dynamic Type; the selected pill carries `.isSelected` for
-    /// VoiceOver. The row groups as one "Catalog scope" container
+    /// Catalog scope filter: one split pill (single capsule track, two
+    /// segments share it — no nested pills). The selected segment reads
+    /// in the recessed-well fill with primary text. Each segment keeps a
+    /// 44pt-minimum-height touch floor via expanded contentShape and
+    /// grows with Dynamic Type; the selected segment carries `.isSelected`
+    /// for VoiceOver. The row groups as one "Catalog scope" container
     /// (children `.contain`) so rotor users land on the group once, then
-    /// swipe through the pills. Plain labels keep the UI-test contract
+    /// swipe through the segments. Plain labels keep the UI-test contract
     /// (`app.buttons["Available"]`).
     private var scopeSection: some View {
         Section {
-            HStack(spacing: ZiroTheme.Spacing.small) {
-                scopePill(.available, label: "Available")
-                scopePill(.installed, label: "Installed")
+            HStack(spacing: 0) {
+                scopeSegment(.available, label: "Available")
+                scopeSegment(.installed, label: "Installed")
             }
+            .padding(3)
+            .background(Capsule().fill(.clear))
+            .overlay(Capsule().stroke(ZiroTheme.hairline, lineWidth: 1))
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Catalog scope")
         }
     }
 
-    private func scopePill(_ item: Scope, label: String) -> some View {
+    private func scopeSegment(_ item: Scope, label: String) -> some View {
         Button {
             scope = item
         } label: {
@@ -175,11 +179,11 @@ struct ModelsView: View {
                 .tracking(0.8)
                 .foregroundStyle(item == scope ? ZiroTheme.primaryText : ZiroTheme.secondaryText)
                 .padding(.horizontal, ZiroTheme.Spacing.medium)
-                .frame(maxWidth: .infinity, minHeight: 33)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity, minHeight: 30)
                 .background(
                     Capsule().fill(item == scope ? ZiroTheme.wellBackground : .clear)
                 )
-                .overlay(Capsule().stroke(ZiroTheme.hairline, lineWidth: 1))
                 .contentShape(Rectangle().inset(by: -6))
                 // Selected fill cross-fades on the press curve.
                 .ziroAnimation(ZiroMotion.press, value: scope)
