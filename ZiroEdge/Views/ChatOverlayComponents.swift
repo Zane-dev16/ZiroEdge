@@ -258,7 +258,7 @@ struct ComposerModelPicker: View {
                 .foregroundStyle(ZiroTheme.tertiaryText)
                 .accessibilityHidden(true)
         }
-        .padding(.horizontal, ZiroTheme.Spacing.small)
+        .padding(.horizontal, ZiroTheme.Spacing.medium)
         // Drawn height ~33pt (vision pill); 44pt hit target lives on the
         // expanded contentShape, not the frame, so the row stays short.
         .frame(minHeight: 33)

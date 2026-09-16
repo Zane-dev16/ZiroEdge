@@ -173,7 +173,7 @@ struct ModelsView: View {
             Text(label)
                 .font(ZiroType.footnote)
                 .foregroundStyle(item == scope ? ZiroTheme.primaryText : ZiroTheme.secondaryText)
-                .padding(.horizontal, ZiroTheme.Spacing.small)
+                .padding(.horizontal, ZiroTheme.Spacing.medium)
                 .frame(maxWidth: .infinity, minHeight: 33)
                 .background(
                     Capsule().fill(item == scope ? ZiroTheme.wellBackground : .clear)

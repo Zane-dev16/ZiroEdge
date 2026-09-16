@@ -464,7 +464,7 @@ struct ChatsView: View {
                     .foregroundStyle(ZiroTheme.tertiaryText)
                     .accessibilityHidden(true)
             }
-            .padding(.horizontal, ZiroTheme.Spacing.small)
+            .padding(.horizontal, ZiroTheme.Spacing.medium)
             .frame(minHeight: 33)
             .background(ZiroTheme.wellBackground, in: Capsule())
             .contentShape(Rectangle().inset(by: -6))
