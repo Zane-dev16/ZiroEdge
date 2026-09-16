@@ -768,6 +768,20 @@ private struct ZiroSuggestionChipButtonStyle: ButtonStyle {
     }
 }
 
+/// Subtle press for chromeless pills/rows already carrying `.plain` visuals
+/// (sidebar destinations, bottom-bar capsules, scope pills, empty-state
+/// CTAs): scale-only, no fill change, so resting chrome never shifts.
+/// 0.97 keeps it quieter than the filled button styles' 0.96.
+struct ZiroSubtlePressButtonStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(reduceMotion || !configuration.isPressed ? 1 : 0.97)
+            .animation(reduceMotion ? nil : ZiroMotion.press, value: configuration.isPressed)
+    }
+}
+
 // MARK: - Flow Layout (wrapped chip rows)
 
 /// A simple wrapping flow for chip rows that must survive Dynamic Type:

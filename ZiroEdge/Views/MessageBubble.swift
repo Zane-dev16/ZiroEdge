@@ -28,6 +28,7 @@ struct MessageBubble: View {
     // at accessibility sizes, while meeting the 44×44 minimum at the default
     // size.
     @ScaledMetric(relativeTo: .body) private var actionControlSide: CGFloat = 44
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showCopiedAck = false
 
     init(
@@ -206,6 +207,10 @@ struct MessageBubble: View {
                         }
                     }
                     .padding(.leading, ZiroTheme.Spacing.xSmall)
+                    // Action-row reveal: subtle scale + fade on the appear
+                    // spring (opacity-only in Reduce Motion) instead of a snap.
+                    .transition(reduceMotion ? .opacity : .scale(scale: 0.95).combined(with: .opacity))
+                    .ziroAnimation(ZiroMotion.appear, value: showsActions)
                 }
             }
 

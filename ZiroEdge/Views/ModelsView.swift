@@ -23,6 +23,7 @@ struct ModelsView: View {
     var onStartChatting: (AIModel) -> Void = { _ in }
 
     @State private var scope: Scope
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     // Hit targets and icon gutters scale with Dynamic Type (like ChatView's
     // composerControlSide) so glyphs never overflow their frames at
@@ -63,6 +64,11 @@ struct ModelsView: View {
         .scrollContentBackground(.hidden)
         .background(ZiroTheme.pageBackground.ignoresSafeArea())
         .listRowBackground(ZiroTheme.raisedBackground)
+        // Catalog parity: scope drives the filter, counts drive
+        // installs/imports — rows carry the matching transition below.
+        .ziroAnimation(ZiroMotion.appear, value: scope)
+        .ziroAnimation(ZiroMotion.appear, value: viewModel.curatedModels.count)
+        .ziroAnimation(ZiroMotion.appear, value: viewModel.importedModels.count)
         .navigationTitle("Models")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -174,8 +180,10 @@ struct ModelsView: View {
                 )
                 .overlay(Capsule().stroke(ZiroTheme.hairline, lineWidth: 1))
                 .contentShape(Rectangle().inset(by: -6))
+                // Selected fill cross-fades on the press curve.
+                .ziroAnimation(ZiroMotion.press, value: scope)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ZiroSubtlePressButtonStyle())
         .accessibilityHint("Filters the model catalog")
         .accessibilityAddTraits(item == scope ? .isSelected : [])
     }
@@ -232,6 +240,7 @@ struct ModelsView: View {
         Section {
             ForEach(viewModel.curatedModels.filter { viewModel.isDownloaded($0) }) { model in
                 catalogRow(model, subtitle: installedSubtitle(for: model))
+                    .transition(reduceMotion ? .opacity : .scale(scale: 0.95).combined(with: .opacity))
             }
         } header: {
             Text("On This Device")
@@ -244,6 +253,7 @@ struct ModelsView: View {
         Section("Imported from Hugging Face") {
             ForEach(viewModel.importedModels) { model in
                 catalogRow(model, subtitle: model.description)
+                    .transition(reduceMotion ? .opacity : .scale(scale: 0.95).combined(with: .opacity))
             }
         }
     }
@@ -253,6 +263,7 @@ struct ModelsView: View {
         return Section(viewModel.hasInstalledModels ? "Available to Download" : "Choose a Model") {
             ForEach(available) { model in
                 catalogRow(model, subtitle: model.description)
+                    .transition(reduceMotion ? .opacity : .scale(scale: 0.95).combined(with: .opacity))
             }
             if available.isEmpty {
                 emptyAvailableSection
@@ -267,12 +278,12 @@ struct ModelsView: View {
                 systemImage: "tray",
                 description: Text("Download a curated model or import one from Hugging Face.")
             )
+            .transition(.opacity)
         }
     }
 
     private var emptyAvailableSection: some View {
-        VStack(spacing: ZiroTheme.Spacing.small) {
-            Image(systemName: "checkmark.seal.fill")
+        VStack(spacing: ZiroTheme.Spacing.small) {            Image(systemName: "checkmark.seal.fill")
                 .font(.largeTitle)
                 .foregroundStyle(ZiroTheme.positiveText)
                 .accessibilityHidden(true)
@@ -285,6 +296,7 @@ struct ModelsView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, ZiroTheme.Spacing.large)
+        .transition(.opacity)
     }
 
     // MARK: - Rows
@@ -307,7 +319,7 @@ struct ModelsView: View {
                         .frame(width: cancelControlSide, height: cancelControlSide)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(ZiroSubtlePressButtonStyle())
                 .foregroundStyle(ZiroTheme.secondaryText)
                 .accessibilityLabel("Cancel \(model.displayName) download")
             }

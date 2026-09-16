@@ -128,7 +128,7 @@ extension ChatView {
                     HStack(spacing: ZiroTheme.Spacing.small) {
                         if viewModel.isModelRetryInFlight {
                             ProgressView().controlSize(.small)
-                                .transition(.asymmetric(insertion: .scale(scale: 0.25).combined(with: .opacity), removal: .scale(scale: 0.25).combined(with: .opacity)))
+                                .transition(.opacity)
                         }
                         Button("Retry") { viewModel.retryModelLoad() }
                             .disabled(viewModel.isModelRetryInFlight)
@@ -155,7 +155,7 @@ extension ChatView {
                     HStack(spacing: ZiroTheme.Spacing.small) {
                         if viewModel.isModelRetryInFlight {
                             ProgressView().controlSize(.small)
-                                .transition(.asymmetric(insertion: .scale(scale: 0.25).combined(with: .opacity), removal: .scale(scale: 0.25).combined(with: .opacity)))
+                                .transition(.opacity)
                         }
                         Button(ModelEvictionPresentation.reloadButtonTitle) { viewModel.retryModelLoad() }
                             .disabled(viewModel.isModelRetryInFlight)

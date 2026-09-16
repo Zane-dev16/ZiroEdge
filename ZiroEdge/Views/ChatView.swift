@@ -272,16 +272,16 @@ struct ChatView: View {
             Group {
                 if viewModel.isStreaming {
                     Image(systemName: "stop.circle.fill")
-                        .transition(.asymmetric(insertion: .scale(scale: 0.25).combined(with: .opacity), removal: .scale(scale: 0.25).combined(with: .opacity)))
+                        .transition(.opacity)
                 } else if isModelLoading {
                     ProgressView()
                         .controlSize(.small)
-                        .transition(.asymmetric(insertion: .scale(scale: 0.25).combined(with: .opacity), removal: .scale(scale: 0.25).combined(with: .opacity)))
+                        .transition(.opacity)
                         .accessibilityLabel("Loading model")
                 } else {
                     Image(systemName: "arrow.up")
                         .font(.title3)
-                        .transition(.asymmetric(insertion: .scale(scale: 0.25).combined(with: .opacity), removal: .scale(scale: 0.25).combined(with: .opacity)))
+                        .transition(.opacity)
                 }
             }
             .font(.title3)
@@ -295,6 +295,7 @@ struct ChatView: View {
             .contentShape(Rectangle().inset(by: -6))
             .ziroAnimation(ZiroMotion.press, value: viewModel.isStreaming)
         }
+        .buttonStyle(ZiroSubtlePressButtonStyle())
         .disabled(sendDisabled)
         .accessibilityLabel(sendAccessibilityLabel)
         .accessibilityHint(sendAccessibilityHint)
@@ -385,6 +386,7 @@ struct ChatView: View {
                                     .frame(width: imageRemoveControlSide, height: imageRemoveControlSide)
                                     .contentShape(Rectangle())
                             }
+                            .buttonStyle(ZiroSubtlePressButtonStyle())
                             .accessibilityLabel("Remove attached image \(index + 1)")
                             // The scaled 44×44 hit target centers the glyph in
                             // a frame whose top-trailing corner is pinned to
@@ -443,12 +445,16 @@ extension ChatView {
                         loadingTranscript
                     } else if viewModel.messages.isEmpty && !viewModel.isStreaming {
                         emptyState
+                            .transition(.opacity)
                     }
 
                     // PERF: stable-id ForEach over the live array — no per-body
                     // Array(enumerated()) copy on every streaming token, and row
                     // identity survives inserts/deletes. Day dividers come from
                     // one O(n) labels pass (lazy enumerated, no copy).
+                    // Row inserts ride the appear spring (opacity-only rows,
+                    // so no layout pass per insert); keyed on count so the
+                    // empty-state swap animates through the same transaction.
                     ForEach(viewModel.messages, id: \.id) { message in
                         if let divider = dayDividerLabels[message.id] {
                             DayDivider(label: divider)
@@ -493,6 +499,7 @@ extension ChatView {
                 .frame(maxWidth: ZiroMeasure.full)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, ZiroTheme.Spacing.medium)
+                .ziroAnimation(ZiroMotion.appear, value: viewModel.messages.count)
                 // P2-7: background-only tap-to-dismiss. Sitting behind the
                 // rows, this never sees taps consumed by bubble buttons, the
                 // inline Retry/Reload row, or the jump button — unlike the
@@ -607,7 +614,7 @@ extension ChatView {
                         .background(ZiroTheme.wellBackground, in: Capsule())
                         .overlay(Capsule().stroke(ZiroTheme.hairline, lineWidth: 1))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(ZiroSubtlePressButtonStyle())
                 .accessibilityIdentifier("browse-models-button")
             }
         }
@@ -628,6 +635,7 @@ extension ChatView {
                 .background(ZiroTheme.wellBackground, in: Circle())
                 .overlay(Circle().stroke(ZiroTheme.hairline, lineWidth: 1))
         }
+        .buttonStyle(ZiroSubtlePressButtonStyle())
         .accessibilityLabel("Jump to latest message")
     }
 
@@ -843,6 +851,7 @@ extension ChatView {
                 .frame(minWidth: 44, minHeight: 44)
                 .contentShape(Rectangle())
         }
+        .buttonStyle(ZiroSubtlePressButtonStyle())
         .accessibilityLabel("Conversations")
         .accessibilityIdentifier("sidebar-button")
     }

@@ -299,7 +299,7 @@ struct ComposerModelPicker: View {
                 Color.clear
             }
         }
-        .transition(.asymmetric(insertion: .scale(scale: 0.25).combined(with: .opacity), removal: .scale(scale: 0.25).combined(with: .opacity)))
+        .transition(.opacity)
         .ziroAnimation(ZiroMotion.press, value: phase)
         .accessibilityHidden(true)
     }
