@@ -247,6 +247,13 @@ struct SettingsPage: View {
         .listRowBackground(ZiroTheme.raisedBackground)
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Text("Settings")
+                    .font(ZiroType.face(.orbitronBold, .title3))
+                    .foregroundStyle(ZiroTheme.primaryText)
+            }
+        }
         .task {
             await refreshMemoryInfo()
         }
