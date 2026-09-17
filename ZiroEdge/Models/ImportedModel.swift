@@ -788,8 +788,9 @@ struct ImportRAMAssessment: Equatable, Sendable {
     let classification: Classification
 
     /// Canonical pre-import RAM estimator. Matches MemoryProfile.importedProfile:
-    /// mmap'd base is ~1/3 resident while the vision projector pins fully
-    /// during vision init, plus a context scale and the fixed reserve.
+    /// both GGUFs ride the mmap path (~1/3 resident; mtmd exposes no pinning
+    /// toggle and retained device peaks confirm pageable behavior), plus a
+    /// context scale and the fixed reserve.
     /// Context clamps to the same 512...4096 range as
     /// ModelConfiguration.imported so a raw GGUF context_length (e.g. 32k
     /// qwen2-class) cannot inflate the pre-import estimate past the
@@ -802,7 +803,7 @@ struct ImportRAMAssessment: Equatable, Sendable {
         let base = UInt64(clamping: baseBytes / 3)
         let projector: UInt64 = {
             guard let mmprojBytes, mmprojBytes > 0 else { return 0 }
-            return UInt64(clamping: mmprojBytes)
+            return UInt64(clamping: mmprojBytes / 3)
         }()
         let context = SaturatedArithmetic.multiply(UInt64(clamping: clampedContextLength(contextLength)), 256_000)
         return SaturatedArithmetic.add(
@@ -812,8 +813,8 @@ struct ImportRAMAssessment: Equatable, Sendable {
     }
 
     // TODO: remove once all call sites migrate to base/mmproj split — the
-    // combined path understates pinned vision projectors by 2/3*mmproj.
-    @available(*, deprecated, message: "Use estimatedBytes(baseBytes:mmprojBytes:contextLength:) so vision projectors get full weight.")
+    // combined path folds both GGUFs at the same 1/3 mmap weight.
+    @available(*, deprecated, message: "Use estimatedBytes(baseBytes:mmprojBytes:contextLength:) so vision projectors are weighted separately from base weights.")
     static func estimatedBytes(artifactBytes: Int64, contextLength: Int) -> UInt64 {
         estimatedBytes(baseBytes: artifactBytes, mmprojBytes: 0, contextLength: contextLength)
     }

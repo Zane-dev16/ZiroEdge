@@ -207,20 +207,23 @@ enum MemoryProfileRegistry {
 
     /// Imported models have no retained device calibration yet. The estimate is
     /// conservative and only enables the explicit experimental-consent path.
-    /// P1-4: separate base/mmproj weights (mmap'd Q4 base ~1/3 resident vs
-    /// projector pinned fully during vision init), an absolute 4GB + dynamic
-    /// physical floor, and fail-closed nil evidence + .max floor on
-    /// zero/negative catalog sizes. Artifact bytes shape the conservative
-    /// estimate only — admission quantity stays nil (see sentinel).
+    /// P1-4: separate base/mmproj weights (both GGUFs mmap'd ~1/3 resident),
+    /// an absolute 4GB + dynamic physical floor, and fail-closed nil evidence
+    /// + .max floor on zero/negative catalog sizes. Artifact bytes shape the
+    /// conservative estimate only — admission quantity stays nil (see sentinel).
     ///
-    /// The projector weight is FULL, not a third. `d68bdc9` briefly divided it
-    /// by 3, which is reverted here: it understated vision memory by 2/3*mmproj
-    /// (~400MB for a 600MB projector) and broke the convergence contract this
-    /// registry shares with `ImportRAMAssessment.estimatedBytes` — asserted by
-    /// `testWizardPickerAndImportedProfileConverge`. That test names the /3
-    /// split "retired" for exactly this understatement. Both estimators compute
-    /// `base/3 + full projector + contextScale`, so the pre-import wizard
-    /// estimate and the post-import admission profile cannot disagree.
+    /// The projector weight is a third, like the base. `d68bdc9` tried this and
+    /// was reverted for understating vision memory — but device evidence since
+    /// proves the revert wrong: `mtmd_context_params` (bundled mtmd.h) exposes
+    /// no mmap toggle, so projector weights ride the same mmap path as the base
+    /// (pageable, never pinned), and the retained E2B full-workload peak delta
+    /// (798MB) sits BELOW base/3 alone (1142MB) with image turns included —
+    /// the 557MB projector demonstrably contributes a fraction, not its full
+    /// file size. Full weight overstated Qwen2-VL-2B (710MB projector) by
+    /// ~473MB, single-handedly refusing loads the device otherwise fits.
+    /// Both estimators compute `base/3 + mmproj/3 + contextScale`, so the
+    /// pre-import wizard estimate and the post-import admission profile
+    /// cannot disagree (see `testWizardPickerAndImportedProfileConverge`).
     static func importedProfile(for model: AIModel) -> MemoryProfile {
         let revision = model.huggingFaceProvenance?.revision.prefix(12) ?? "unknown"
         func failClosedProfile() -> MemoryProfile {
@@ -255,7 +258,7 @@ enum MemoryProfileRegistry {
         let baseResident = UInt64(clamping: model.baseFileSizeBytes / 3)
         let mmprojResident: UInt64 = {
             guard let mmprojBytes = model.mmprojFileSizeBytes, mmprojBytes > 0 else { return 0 }
-            return UInt64(clamping: mmprojBytes)
+            return UInt64(clamping: mmprojBytes / 3)
         }()
         let contextScale = SaturatedArithmetic.multiply(
             UInt64(clamping: max(model.config.contextLength, 512)),
