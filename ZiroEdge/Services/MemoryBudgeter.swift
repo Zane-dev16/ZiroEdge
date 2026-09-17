@@ -161,11 +161,16 @@ actor MemoryBudgeter {
     /// Device-calibrated actually-freed bytes (iPhone 5A3DC1B6, fresh signed
     /// DEBUG build 23:35 UTC, `devicectl launch --console`, `--switch-proof
     /// --memory-diagnostic`): gemma-4-e2b-q4 freed 736381808 (raw 2756243512
-    /// ->3492625320, admit vs qwen-required 3450000000), SmolLM prior
-    /// hf-cf4a0dfb60e5eb160978dd9e freed 4390984 (raw 3396418280->3400809264,
-    /// refuse by ~49M). Qwen target hf-ec6e37fe3e99bf0d922fe1fc requires
-    /// 3450000000, unchanged: no Qwen load peak exists, and required-side
-    /// conservatism stays fail-closed by design.
+    /// ->3492625320), SmolLM prior hf-cf4a0dfb60e5eb160978dd9e freed 4390984
+    /// (raw 3396418280->3400809264). Qwen target hf-ec6e37fe3e99bf0d922fe1fc
+    /// (986MB base + 710MB projector, ctx4096) requires 2850000000 under the
+    /// mmap-weighted estimator (est 1613886100 → 2100000000 + 750M reserve),
+    /// so the 3390MB device headroom admits with ~540MB margin. The old
+    /// full-projector weight demanded 3450000000 and refused by ~49M —
+    /// estimate noise treated as OOM. Narrow pre-teardown misses still attempt
+    /// teardown and let the post-teardown gates measure reality (with
+    /// prior-restore as the net). Required-side conservatism stays fail-closed
+    /// by design: no Qwen load peak exists yet.
     static let deviceMeasuredFreedValidatedVisionBytes: UInt64 = 736_381_808
     static let deviceMeasuredFreedUnvalidatedTextBytes: UInt64 = 4_390_984
 
@@ -174,10 +179,12 @@ actor MemoryBudgeter {
     /// min(required, 736M device: gemma freed 42% of required, 2.4x fantasy
     /// removed, verdict unchanged); unvalidated text min(peak, 4M device:
     /// mmap base + untouched ctx never resident, SmolLM ~247x fantasy, so
-    /// projected == post-teardown raw and the pre-gate refuses honestly with
-    /// the resident preserved instead of teardown-then-restore); unvalidated
-    /// vision keeps peak (pinned projector plausibly resident) until its own
-    /// teardown calibration lands; nil-peak priors (llama32-3B) stay 0 so
+    /// projected == post-teardown raw. A narrow miss on that projection is
+    /// estimate noise, so pre-teardown gates attempt teardown and let the
+    /// post-teardown gates measure reality (prior-restore on failure)
+    /// instead of refusing while manual unload+load succeeds. Vision priors
+    /// keep the mmap-weighted peak (projector pages like base) until their
+    /// own teardown calibration lands; nil-peak priors (llama32-3B) stay 0 so
     /// projected==raw. Post-teardown hard gate (raw>=req_target, zero credit)
     /// stays authoritative. Smaller is fail-closed (refuses, never admits).
     static func reclaimableBytes(for priorActive: AIModel?) -> UInt64 {

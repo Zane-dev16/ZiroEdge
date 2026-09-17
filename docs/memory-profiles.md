@@ -15,7 +15,7 @@ For a validated profile:
 5. Require the profile's minimum physical RAM and the resulting process headroom before native construction.
 6. After load, require at least the fixed reserve from one new process-headroom sample.
 
-When replacing an already loaded model, native unload must finish and a five-second recovery window must complete before the single admission sample. There is no arbitrary fallback headroom.
+When replacing an already loaded model, native unload must finish and a five-second recovery window must complete before the single admission sample. There is no arbitrary fallback headroom. A pre-teardown shortfall inside the one-gigabyte transient window is estimate noise rather than proof of OOM, so the switch path attempts teardown and lets the post-teardown gates measure reality (restoring the prior model on failure); wider shortfalls still refuse with the resident model preserved.
 
 ## Current evidence
 

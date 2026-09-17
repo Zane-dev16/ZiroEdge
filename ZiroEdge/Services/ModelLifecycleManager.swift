@@ -523,6 +523,31 @@ final class ModelLifecycleManager: ObservableObject {
 // type_body_length; same-file extension retains private access).
 @MainActor
 extension ModelLifecycleManager {
+    /// Narrow-miss attempt rule (switch-parity fix): pre-teardown projected
+    /// estimates are conservative on both sides — reclaimable is min()'d
+    /// against a single device-measured sample while required carries 100MB
+    /// rounding plus the 750MB reserve — so a miss inside
+    /// `transientDipSettleWindowBytes` is estimate noise, not proof of OOM.
+    /// When a resident prior exists, proceed to teardown and let the
+    /// authoritative post-teardown gates (fresh resample + pre-mmap +
+    /// post-load reserve) measure reality, with prior-restore as the safety
+    /// net. Wide misses still refuse pre-teardown preserving the resident.
+    /// Fresh loads (no prior) never proceed: nothing would be evicted, so
+    /// teardown could not change the verdict.
+    private static func shouldAttemptTeardownOnNarrowMiss(
+        decision: MemoryLoadDecision, priorActive: AIModel?
+    ) -> Bool {
+        guard priorActive != nil,
+              decision.reason == .insufficientProcessHeadroom,
+              let required = decision.requiredBytes,
+              let projected = decision.projectedAvailableBytes,
+              required > projected,
+              required - projected <= MemoryBudgeter.transientDipSettleWindowBytes else {
+            return false
+        }
+        return true
+    }
+
     private func preflightAndAdmit(
         _ model: AIModel,
         loadEpoch: UInt64,
@@ -603,6 +628,14 @@ extension ModelLifecycleManager {
         if decision.recommendation == .unloadCurrentFirst {
             logger.info("Load proceeds to teardown reclaiming resident \(model.id, privacy: .public) \(decision.logSummary, privacy: .public)")
             print("[SWITCH-PROOF-PROCEEDS] phase=preflight model=\(model.id) \(decision.logSummary)")
+            return (profile, nil)
+        }
+        if Self.shouldAttemptTeardownOnNarrowMiss(decision: decision, priorActive: priorActive),
+           let required = decision.requiredBytes,
+           let projected = decision.projectedAvailableBytes {
+            let shortfall = required - projected
+            logger.info("Load preflight narrow miss attempts teardown model=\(model.id, privacy: .public) shortfall=\(shortfall, privacy: .public) \(decision.logSummary, privacy: .public)")
+            print("[SWITCH-PROOF-PROCEEDS] phase=preflight-narrow-miss model=\(model.id) shortfall=\(shortfall) \(decision.logSummary)")
             return (profile, nil)
         }
         guard decision.recommendation == .proceed else {
@@ -821,6 +854,14 @@ extension ModelLifecycleManager {
         if fresh.recommendation == .unloadCurrentFirst {
             logger.info("Load pre-teardown resample proceeds to teardown \(model.id, privacy: .public) \(fresh.logSummary, privacy: .public)")
             print("[SWITCH-PROOF-PROCEEDS] phase=pre-teardown model=\(model.id) \(fresh.logSummary)")
+            return nil
+        }
+        if Self.shouldAttemptTeardownOnNarrowMiss(decision: fresh, priorActive: priorActive),
+           let required = fresh.requiredBytes,
+           let projected = fresh.projectedAvailableBytes {
+            let shortfall = required - projected
+            logger.info("Load pre-teardown narrow miss attempts teardown \(model.id, privacy: .public) shortfall=\(shortfall, privacy: .public) \(fresh.logSummary, privacy: .public)")
+            print("[SWITCH-PROOF-PROCEEDS] phase=pre-teardown-narrow-miss model=\(model.id) shortfall=\(shortfall) \(fresh.logSummary)")
             return nil
         }
         guard fresh.recommendation == .proceed else {
