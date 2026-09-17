@@ -415,6 +415,8 @@ enum SwitchProofRunner {
     private struct Parsed {
         var qwenID = "hf-ec6e37fe3e99bf0d922fe1fc"
         var priorID: String? = nil
+        var succession: [String]? = nil
+        var rounds = 2
     }
 
     private static func parse(_ arguments: [String]) -> Parsed {
@@ -427,7 +429,24 @@ enum SwitchProofRunner {
            arguments.indices.contains(idx + 1) {
             parsedArgs.priorID = arguments[idx + 1]
         }
+        parsedArgs.succession = parseSuccessionIDs(arguments)
+        parsedArgs.rounds = parseSuccessionRounds(arguments)
         return parsedArgs
+    }
+
+    private static func parseSuccessionIDs(_ arguments: [String]) -> [String]? {
+        guard let idx = arguments.firstIndex(of: "--switch-proof-succession"),
+              arguments.indices.contains(idx + 1) else { return nil }
+        return arguments[idx + 1].split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
+    private static func parseSuccessionRounds(_ arguments: [String]) -> Int {
+        guard let idx = arguments.firstIndex(of: "--switch-proof-rounds"),
+              arguments.indices.contains(idx + 1),
+              let roundsValue = Int(arguments[idx + 1].trimmingCharacters(in: .whitespaces)), roundsValue > 0 else { return 2 }
+        return roundsValue
     }
 
     private static func emit(_ line: String) {
@@ -486,9 +505,82 @@ enum SwitchProofRunner {
         return ctrlAdmitted
     }
 
+    // MARK: - Succession mode (round-robin switch chain)
+
+    private struct SuccessionLeg {
+        var round: Int
+        var target: String
+        var result: String
+        var active: String
+    }
+
+    private static func emitSuccessionFailure(rounds: Int, reason: String) {
+        emit("FAILURE step=succession-lookup reason=\(sanitize(reason))")
+        emit("SWITCH_SUCCESSION_JSON: {\"rounds\":\(rounds),\"legs\":[],\"done\":false}")
+    }
+
+    private static func grantSuccessionConsent(for models: [AIModel]) {
+        let importedIDs = Set(ModelRegistry.importedModels.map { $0.id })
+        for model in models where importedIDs.contains(model.id) {
+            ExperimentalModelConsent.setGranted(true, for: model)
+            emit("SUCCESSION_CONSENT model=\(model.id) granted=\(ExperimentalModelConsent.isGranted(for: model))")
+        }
+    }
+
+    private static func runSuccessionLeg(services: RuntimeServices, target: AIModel, round: Int, leg: Int) async -> SuccessionLeg {
+        let pre = await services.memoryBudgeter.appMemoryHeadroom()
+        let result = await services.lifecycleManager.switchToModel(target)
+        let post = await services.memoryBudgeter.appMemoryHeadroom()
+        let resultStr = describeResult(result)
+        let active = services.lifecycleManager.activeModel?.id ?? "nil"
+        emit("SWITCH_SUCCESSION round=\(round) leg=\(leg) target=\(target.id) result=\(resultStr) active=\(active) pre=\(pre) post=\(post)")
+        return SuccessionLeg(round: round, target: target.id, result: resultStr, active: active)
+    }
+
+    private static func emitSuccessionJSON(rounds: Int, legs: [SuccessionLeg]) {
+        let parts = legs.map {
+            "{\"round\":\($0.round),\"target\":\"\(sanitize($0.target))\",\"result\":\"\(sanitize($0.result))\",\"active\":\"\(sanitize($0.active))\"}"
+        }.joined(separator: ",")
+        emit("SWITCH_SUCCESSION_JSON: {\"rounds\":\(rounds),\"legs\":[\(parts)],\"done\":true}")
+    }
+
+    private static func runSuccession(services: RuntimeServices, targetIDs: [String], rounds: Int) async {
+        emit("SUCCESSION_BEGIN rounds=\(rounds) targets=\(targetIDs.joined(separator: ","))")
+        guard !targetIDs.isEmpty else {
+            emitSuccessionFailure(rounds: rounds, reason: "no targets")
+            return
+        }
+        var models: [AIModel] = []
+        for id in targetIDs {
+            guard let model = ModelRegistry.model(for: id) else {
+                let avail = ModelRegistry.importedModels.map { $0.id }.joined(separator: ",")
+                emitSuccessionFailure(rounds: rounds, reason: "id not found id=\(id) available=[\(avail)]")
+                return
+            }
+            models.append(model)
+        }
+        grantSuccessionConsent(for: models)
+        for _ in 0..<240 where services.lifecycleManager.isLoadAttemptInFlight {
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+        var legs: [SuccessionLeg] = []
+        var leg = 0
+        for round in 1...rounds {
+            for target in models {
+                leg += 1
+                legs.append(await runSuccessionLeg(services: services, target: target, round: round, leg: leg))
+            }
+        }
+        emitSuccessionJSON(rounds: rounds, legs: legs)
+    }
+
     private static func execute(services: RuntimeServices, arguments: [String]) async {
         let parsed = parse(arguments)
         emit("BEGIN qwenID=\(parsed.qwenID) priorID=\(parsed.priorID ?? "nil") args=\(sanitize(arguments.joined(separator: " ")))")
+        if let targets = parsed.succession {
+            await runSuccession(services: services, targetIDs: targets, rounds: parsed.rounds)
+            return
+        }
         for _ in 0..<240 where services.lifecycleManager.isLoadAttemptInFlight {
             try? await Task.sleep(for: .milliseconds(250))
         }
