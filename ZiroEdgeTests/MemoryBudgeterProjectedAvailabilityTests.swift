@@ -2,8 +2,8 @@ import XCTest
 @testable import ZiroEdge
 
 /// Regression tests for the A→B switch false-OOM:
-/// (1) pre-import size estimation now clamps context and weights the vision
-/// projector fully, matching MemoryProfile.importedProfile, so qwen2-class
+/// (1) pre-import size estimation now clamps context and weights both GGUFs
+/// at the mmap 1/3 rate, matching MemoryProfile.importedProfile, so qwen2-class
 /// estimates order below gemma4-class as their disk sizes do;
 /// (2) pre-teardown budget gates credit the reclaimable resident
 /// (projected availability) instead of demanding transient A+B coexistence,
@@ -223,7 +223,7 @@ final class MemoryBudgeterProjectedAvailabilityTests: XCTestCase {
         XCTAssertEqual(decision.reason, .profileUnvalidated)
     }
 
-    // MARK: - Estimator unity (H1): clamp + full projector weight
+    // MARK: - Estimator unity (H1): clamp + mmap projector weight
 
     func testRaw32kContextClampsTo4096() {
         let raw32k = ImportRAMAssessment.estimatedBytes(
@@ -282,11 +282,16 @@ final class MemoryBudgeterProjectedAvailabilityTests: XCTestCase {
         let physical: UInt64 = 8_000_000_000
         XCTAssertEqual(picker.memoryFit, .likelyFits)
         XCTAssertEqual(wizardBytes < physical ? .likelyFits : .mayExceed, picker.memoryFit)
-        // The retired combined/3 split understated this projector by 2/3*mmproj.
+        // The per-part /3 split reunifies with the old combined/3 formula to
+        // the byte here (all sizes evenly divisible): both GGUFs ride the mmap
+        // path, so weighting them together or separately is the same math.
+        // The retired FULL-projector weight overstated this projector by
+        // 2/3*mmproj (400MB); device peaks (E2B vision 798MB < base/3 alone)
+        // prove the projector pages like the base instead of pinning.
         let retiredCombined = UInt64(clamping: (base.size + projector.size) / 3)
             + UInt64(clamping: ImportRAMAssessment.clampedContextLength(32_768)) * 256_000
             + MemoryProfile.productionReserveBytes
-        XCTAssertEqual(wizardBytes - retiredCombined, 400_000_000)
+        XCTAssertEqual(wizardBytes, retiredCombined)
     }
 
     // MARK: - End-to-end A→B switch
@@ -678,12 +683,18 @@ func testSmolmPriorCreditEqualsMeasuredFreed() async throws {
     XCTAssertEqual(MemoryBudgeter.reclaimableCreditDetails(for: smol).evidenceStatus, "unvalidated")
 }
 
-func testSmolmPriorSwitchRefusesPreTeardownPreservingResident() async throws {
+func testSmolmPriorNarrowMissAttemptsTeardownThenRestoresPrior() async throws {
     // Device replication: SmolLM resident raw 3396418280 + freed 4390984 =
-    // 3400809264 < qwen-required 3450000000 (miss ~49M). Pre-gate refuses with
-    // the resident preserved — no teardown-then-restore (unloadCount stays 0).
+    // 3400809264 < qwen-required 3450000000 (miss ~49M). The miss is inside
+    // the transient window, so the pre-gate attempts teardown and lets the
+    // post-teardown gates measure reality. Stub reality matches the
+    // estimate (bonus == credit), so the post-teardown gate still refuses
+    // and the prior is restored — failed, but resident, never stranded.
+    // (Fixture sizes a 2.9GB base so required stays 3450000000 under the
+    // mmap-weighted estimator: base/3 966666666 + proj/3 83333333 + ctx
+    // 1048576000 = est 2098575999 → required 3450000000.)
     let smol = makeImportedModel(id: "hf-smolm-truth-a", baseBytes: 100_000_000, mmprojBytes: nil, rawContext: 4096, vision: false)
-    let qwen = makeImportedModel(id: "hf-qwen-truth-b", baseBytes: 2_500_000_000, mmprojBytes: 250_000_000, rawContext: 4096, vision: true)
+    let qwen = makeImportedModel(id: "hf-qwen-truth-b", baseBytes: 2_900_000_000, mmprojBytes: 250_000_000, rawContext: 4096, vision: true)
     let requiredA = try requiredHeadroom(for: smol)
     let requiredB = try requiredHeadroom(for: qwen)
     XCTAssertEqual(requiredB, 3_450_000_000)
@@ -702,13 +713,46 @@ func testSmolmPriorSwitchRefusesPreTeardownPreservingResident() async throws {
     let manager = ModelLifecycleManager(inferenceService: stub, memoryBudgeter: MemoryBudgeter(metrics: metrics), loadSafetyStore: store, availabilityProvider: { _ in .ready }, recoveryDelay: .zero)
     let loadedSmol = await manager.loadModel(smol)
     XCTAssertEqual(loadedSmol, .loaded)
-    guard case .failed(let failure) = await manager.switchToModel(qwen) else { return XCTFail("tight switch must refuse pre-teardown") }
+    guard case .failed(let failure) = await manager.switchToModel(qwen) else { return XCTFail("narrow miss must attempt teardown, then restore prior") }
     XCTAssertEqual(failure.kind, .insufficientMemory)
     XCTAssertEqual(manager.activeModel?.id, smol.id)
     XCTAssertEqual(manager.currentState, .loaded)
     XCTAssertTrue(manager.showInsufficientMemoryWarning)
     let unloadCount = await stub.unloadCount
-    XCTAssertEqual(unloadCount, 0)
+    XCTAssertGreaterThanOrEqual(unloadCount, 1, "narrow miss attempts teardown instead of refusing blind")
+}
+
+func testSmolmPriorNarrowMissAdmitsWhenPostTeardownRecovers() async throws {
+    // The user-visible bug: manual unload+load of Qwen succeeds, so reality
+    // beats the 4M-credit estimate once teardown settles. The stub models
+    // that (post-teardown bonus larger than the pre-teardown credit): the
+    // narrow miss must attempt teardown and the switch must admit — direct
+    // switch succeeds exactly when manual-offload-then-load does.
+    // (Fixture sizes a 2.9GB base so the pre-teardown projection still misses
+    // required 3450000000 by ~49M, exercising the narrow-miss path, while the
+    // stubbed post-teardown reality recovers past it like the manual path.)
+    let smol = makeImportedModel(id: "hf-smolm-recover-a", baseBytes: 100_000_000, mmprojBytes: nil, rawContext: 4096, vision: false)
+    let qwen = makeImportedModel(id: "hf-qwen-recover-b", baseBytes: 2_900_000_000, mmprojBytes: 250_000_000, rawContext: 4096, vision: true)
+    let requiredB = try requiredHeadroom(for: qwen)
+    XCTAssertEqual(requiredB, 3_450_000_000)
+    let creditA = MemoryBudgeter.reclaimableBytes(for: smol)
+    XCTAssertEqual(creditA, 4_390_984)
+    let available: UInt64 = 3_396_418_280
+    XCTAssertLessThan(available + creditA, requiredB)
+    XCTAssertLessThan(requiredB - (available + creditA), MemoryBudgeter.transientDipSettleWindowBytes)
+    for model in [smol, qwen] { ExperimentalModelConsent.setGranted(true, for: model) }
+    defer { for model in [smol, qwen] { ExperimentalModelConsent.setGranted(false, for: model) } }
+    // Post-teardown reality frees more than the conservative credit — the
+    // manual path admits here, so the switch must too.
+    let metrics = ReclaimOnUnloadMetrics(base: available, bonus: 100_000_000, total: totalRAM)
+    let store = try LoadSafetyStore(directory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
+    let stub = ProjectedAvailabilityStub(onUnload: { metrics.releaseBonus() })
+    let manager = ModelLifecycleManager(inferenceService: stub, memoryBudgeter: MemoryBudgeter(metrics: metrics), loadSafetyStore: store, availabilityProvider: { _ in .ready }, recoveryDelay: .zero)
+    let loadedSmol = await manager.loadModel(smol)
+    XCTAssertEqual(loadedSmol, .loaded)
+    let switched = await manager.switchToModel(qwen)
+    XCTAssertEqual(switched, .loaded)
+    XCTAssertEqual(manager.activeModel?.id, qwen.id)
 }
 
 func testGemmaPriorCreditEqualsMeasuredFreed() async {
@@ -723,12 +767,12 @@ func testGemmaPriorCreditEqualsMeasuredFreed() async {
 
 func testGemmaPriorSwitchAdmitsMatchingDevice() async throws {
     // Device replication: gemma resident raw 2756243512 + freed 736381808 =
-    // 3492625320 >= qwen-required 3450000000 → pre-gate unloadCurrentFirst,
+    // 3492625320 >= qwen-required 3250000000 → pre-gate unloadCurrentFirst,
     // post-teardown raw admits. Direct==manual.
     let gemma = ModelRegistry.gemma4_e2b
     let qwen = makeImportedModel(id: "hf-qwen-truth-gb", baseBytes: 2_500_000_000, mmprojBytes: 250_000_000, rawContext: 4096, vision: true)
     let requiredB = try requiredHeadroom(for: qwen)
-    XCTAssertEqual(requiredB, 3_450_000_000)
+    XCTAssertEqual(requiredB, 3_250_000_000)
     let creditGemma = MemoryBudgeter.reclaimableBytes(for: gemma)
     XCTAssertEqual(creditGemma, 736_381_808)
     let available: UInt64 = 2_756_243_512
@@ -746,6 +790,43 @@ func testGemmaPriorSwitchAdmitsMatchingDevice() async throws {
     let switched = await manager.switchToModel(qwen)
     XCTAssertEqual(switched, .loaded)
     XCTAssertEqual(manager.activeModel?.id, qwen.id)
+}
+
+func testVisionRoundTripSuccessionAcrossThreeModels() async throws {
+    // Device proof (iPhone 5A3DC1B6, --switch-proof-succession smol,qwen,gemma
+    // x2 rounds): 6/6 legs loaded, headroom falling as vision residents load
+    // and recovering on unload. Hermetic replica: text -> vision -> validated
+    // vision -> text, asserting every hop admits and the final resident is
+    // correct. Guards the mmproj load/unload cycle across successive switches.
+    let smol = makeImportedModel(id: "hf-succession-smol", baseBytes: 100_000_000, mmprojBytes: nil, rawContext: 4096, vision: false)
+    let qwen = makeImportedModel(id: "hf-succession-qwen", baseBytes: 2_500_000_000, mmprojBytes: 250_000_000, rawContext: 4096, vision: true)
+    let gemma = ModelRegistry.gemma4_e2b
+    let requiredQwen = try requiredHeadroom(for: qwen)
+    XCTAssertEqual(requiredQwen, 3_250_000_000)
+    for model in [smol, qwen] { ExperimentalModelConsent.setGranted(true, for: model) }
+    defer { for model in [smol, qwen] { ExperimentalModelConsent.setGranted(false, for: model) } }
+    // Device-shaped headroom: gemma-resident raw plus its measured freed
+    // bytes once teardown releases (single idempotent bonus like the device,
+    // where consecutive unloads settle at the same ceiling).
+    let metrics = ReclaimOnUnloadMetrics(base: 2_756_243_512, bonus: 736_381_808, total: totalRAM)
+    let store = try LoadSafetyStore(directory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
+    let stub = ProjectedAvailabilityStub(onUnload: { metrics.releaseBonus() })
+    let manager = ModelLifecycleManager(inferenceService: stub, memoryBudgeter: MemoryBudgeter(metrics: metrics), loadSafetyStore: store, availabilityProvider: { _ in .ready }, recoveryDelay: .zero)
+    let successionSmol = await manager.loadModel(smol)
+    XCTAssertEqual(successionSmol, .loaded)
+    let successionQwen = await manager.switchToModel(qwen)
+    XCTAssertEqual(successionQwen, .loaded)
+    XCTAssertEqual(manager.activeModel?.id, qwen.id)
+    let successionGemma = await manager.switchToModel(gemma)
+    XCTAssertEqual(successionGemma, .loaded)
+    XCTAssertEqual(manager.activeModel?.id, gemma.id)
+    let successionBack = await manager.switchToModel(smol)
+    XCTAssertEqual(successionBack, .loaded)
+    XCTAssertEqual(manager.activeModel?.id, smol.id)
+    XCTAssertFalse(manager.showLoadFailure)
+    XCTAssertFalse(manager.showInsufficientMemoryWarning)
+    let unloadCount = await stub.unloadCount
+    XCTAssertGreaterThanOrEqual(unloadCount, 3, "three switches each tear down the resident")
 }
 
 func testSmolmPriorTrueOOMStillRefuses() async throws {

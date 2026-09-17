@@ -121,16 +121,16 @@ final class ImportStoragePreflightTests: XCTestCase {
         )
         XCTAssertEqual(raw32k, clamped)
         // Huge artifacts still saturate without trapping via Int64.max base.
-        // NB: base is mmap-discounted (/3), so Int64.max+Int64.max no longer
-        // overflows UInt64: 3074457345618258602 + 9223372036854775807 +
-        // 1048576000 (ctx) + 750000000 (reserve) = 12297829384271610409.
+        // NB: base+mmproj both mmap-discounted (/3), so Int64.max+Int64.max no longer
+        // overflows UInt64: 3074457345618258602 + 3074457345618258602 +
+        // 1048576000 (ctx) + 750000000 (reserve) = 6148914693035093204.
         XCTAssertEqual(
             ImportRAMAssessment.estimatedBytes(
                 baseBytes: Int64.max,
                 mmprojBytes: Int64.max,
                 contextLength: 4_096
             ),
-            12_297_829_384_271_610_409
+            6_148_914_693_035_093_204
         )
     }
 

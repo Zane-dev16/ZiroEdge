@@ -135,8 +135,10 @@ final class MemoryProfileTests: XCTestCase {
 
     // MARK: - P1-4 imported weights / floor / fail-closed
 
-    /// Vision projector is fully resident while mmap'd base is ~1/3: the
-    /// vision-text delta equals the full projector size, not a third.
+    /// Both GGUFs ride the mmap path (~1/3 resident): the vision-text delta
+    /// equals a third of the projector size, not the full file. mtmd exposes
+    /// no pinning toggle and retained device peaks (E2B vision 798MB below
+    /// base/3 alone) confirm the projector pages like the base.
     func testP1ImportedSeparatesBaseAndProjectorWeights() {
         let baseBytes: Int64 = 3_000_000_000
         let mmprojBytes: Int64 = 600_000_000
@@ -147,11 +149,11 @@ final class MemoryProfileTests: XCTestCase {
         let vision = MemoryProfileRegistry.importedProfile(for: Self.makeImported(
             baseBytes: baseBytes, mmprojBytes: mmprojBytes, contextLength: context, modelType: .vision))
         XCTAssertEqual(text.measuredLoadDeltaBytes, UInt64(baseBytes / 3) + contextScale)
-        XCTAssertEqual(vision.measuredLoadDeltaBytes, UInt64(baseBytes / 3) + UInt64(mmprojBytes) + contextScale)
+        XCTAssertEqual(vision.measuredLoadDeltaBytes, UInt64(baseBytes / 3) + UInt64(mmprojBytes / 3) + contextScale)
         XCTAssertEqual(
             vision.measuredLoadDeltaBytes! - text.measuredLoadDeltaBytes!,
-            UInt64(mmprojBytes),
-            "projector weight must be full size, not a third"
+            UInt64(mmprojBytes / 3),
+            "projector weight must be a third like the mmap base, not full size"
         )
     }
 
