@@ -306,10 +306,15 @@ extension ChatView {
     var modelPicker: some View {
         ComposerModelPicker(
             phase: viewModel.modelLoadPhase,
-            modelName: viewModel.selectedModel?.displayName,
+            modelName: viewModel.isAppleEngineActive
+                ? AppleIntelligenceMarker.displayName
+                : viewModel.selectedModel?.displayName,
             isUserUnloaded: viewModel.lifecycleManager.isUserUnloaded,
             availableModels: viewModel.availableModels,
+            selectedEngine: viewModel.selectedEngine,
+            isFMReady: AppleIntelligenceAvailability.isReady,
             onSelectModel: { model in Task { await viewModel.selectModel(model) } },
+            onSelectEngine: { engine in _ = viewModel.selectEngine(engine) },
             onBrowseModels: { navigateToRoute(.models) },
             onRetryLoad: { viewModel.retryModelLoad() }
         )

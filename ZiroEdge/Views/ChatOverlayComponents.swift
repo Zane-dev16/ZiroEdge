@@ -116,11 +116,25 @@ struct ChatModelPickerMenuContent: View {
     let phase: ModelLoadPhase
     let modelName: String?
     let availableModels: [AIModel]
+    var selectedEngine: InferenceEngine = .llama
+    var isFMReady: Bool = false
     let onSelectModel: (AIModel) -> Void
+    var onSelectEngine: (InferenceEngine) -> Void = { _ in }
     let onBrowseModels: () -> Void
     let onRetryLoad: () -> Void
 
     var body: some View {
+        if isFMReady {
+            Button {
+                onSelectEngine(.appleIntelligence)
+            } label: {
+                let fmSelected = selectedEngine == .appleIntelligence
+                Label(AppleIntelligenceMarker.displayName, systemImage: "sparkles")
+                    .foregroundStyle(fmSelected ? ZiroTheme.accent : ZiroTheme.primaryText)
+                    .opacity(fmSelected ? 1 : 0.85)
+            }
+            Divider()
+        }
         if ChatModelPicker.needsDownload(phase: phase, availableModels: availableModels) {
             Button {
                 onBrowseModels()
@@ -164,7 +178,10 @@ struct ChatModelPickerMenu<PickerLabel: View>: View {
     let modelName: String?
     var isUserUnloaded: Bool = false
     let availableModels: [AIModel]
+    var selectedEngine: InferenceEngine = .llama
+    var isFMReady: Bool = false
     let onSelectModel: (AIModel) -> Void
+    var onSelectEngine: (InferenceEngine) -> Void = { _ in }
     let onBrowseModels: () -> Void
     let onRetryLoad: () -> Void
     @ViewBuilder let label: () -> PickerLabel
@@ -175,7 +192,10 @@ struct ChatModelPickerMenu<PickerLabel: View>: View {
                 phase: phase,
                 modelName: modelName,
                 availableModels: availableModels,
+                selectedEngine: selectedEngine,
+                isFMReady: isFMReady,
                 onSelectModel: onSelectModel,
+                onSelectEngine: onSelectEngine,
                 onBrowseModels: onBrowseModels,
                 onRetryLoad: onRetryLoad
             )
@@ -209,7 +229,10 @@ struct ComposerModelPicker: View {
     /// dimmed and disabled.
     var isUserUnloaded: Bool = false
     let availableModels: [AIModel]
+    var selectedEngine: InferenceEngine = .llama
+    var isFMReady: Bool = false
     let onSelectModel: (AIModel) -> Void
+    var onSelectEngine: (InferenceEngine) -> Void = { _ in }
     let onBrowseModels: () -> Void
     let onRetryLoad: () -> Void
 
@@ -225,7 +248,10 @@ struct ComposerModelPicker: View {
             modelName: modelName,
             isUserUnloaded: isUserUnloaded,
             availableModels: availableModels,
+            selectedEngine: selectedEngine,
+            isFMReady: isFMReady,
             onSelectModel: onSelectModel,
+            onSelectEngine: onSelectEngine,
             onBrowseModels: onBrowseModels,
             onRetryLoad: onRetryLoad
         ) {

@@ -93,9 +93,9 @@ final class ChatViewModel: ObservableObject {
     /// re-entry while a first send is suspended creating the conversation
     /// row (`startNewConversation`'s guard covers only the legacy path).
     /// Not published — no UI observes draft materialization directly.
-    private var isMaterializingDraft = false
+    var isMaterializingDraft = false // internal: engine-selection extension materializes FM drafts
     @Published var isStartupError = false
-    @Published private(set) var activeConversationSystemPrompt: String?
+    @Published var activeConversationSystemPrompt: String? // internal(set): FM draft path stages prompts
     @Published private(set) var hasPersistenceRecovery = false
     /// Conversation the retained partial response belongs to. Set alongside
     /// `hasPersistenceRecovery`; cleared with it. The banner renders only
@@ -131,7 +131,7 @@ final class ChatViewModel: ObservableObject {
 
     /// True while the visible surface is an unsaved chat. Drafts exist purely
     /// in memory — no persistence row until first send (`materializeDraftForSend`).
-    @Published private(set) var isDraftConversation: Bool
+    @Published var isDraftConversation: Bool // internal(set): FM draft path consumes the draft slot
 
     // MARK: - Chat UX State
 
@@ -166,7 +166,7 @@ final class ChatViewModel: ObservableObject {
 
     // MARK: - Model Selection
 
-    /// The currently selected model for this chat session.
+    /// The currently selected model for this chat session (llama path).
     @Published var selectedModel: AIModel?
 
     /// Whether we need to redirect user to the models page (no downloaded models).
@@ -205,7 +205,7 @@ final class ChatViewModel: ObservableObject {
     /// Weak reference to the conversation list ViewModel for sidebar reloads.
     weak var conversationListViewModel: ConversationListViewModel?
 
-    private(set) var activeConversationID: UUID?
+    var activeConversationID: UUID? // internal(set): FM draft path commits identity
     /// The active conversation's title for the nav bar. Nil for unsaved
     /// drafts — the bar reads "New chat" instead of a placeholder.
     @Published private(set) var activeConversationTitle: String?
@@ -325,6 +325,7 @@ final class ChatViewModel: ObservableObject {
 
         let previousSelection = selectedModel
         selectedModel = model
+        EngineStore.lastEngine = .llama // Naming a GGUF means llama answers.
         // Explicit selection consumes a prior user-unload intent (Settings →
         // Unload Model): the user is naming a model to work with again.
         lifecycleManager.consumeUserUnloadIntent()
@@ -691,11 +692,14 @@ extension ChatViewModel {
             text: text, hasImages: hasImages
         ) else { releaseSendSlot(); return }
         // R2: residency may have moved during validate's suspensions.
-        guard lifecycleManager.activeModel?.id == selectedModel?.id,
-              lifecycleManager.isModelLoaded else {
-            logger.info("Send aborted: residency lost post-validate")
-            errorMessage = "The model is no longer loaded. Retry once it reloads."
-            showError = true; releaseSendSlot(); return
+        // FM has no resident model — availability is the residency.
+        if !isAppleEngineActive {
+            guard lifecycleManager.activeModel?.id == selectedModel?.id,
+                  lifecycleManager.isModelLoaded else {
+                logger.info("Send aborted: residency lost post-validate")
+                errorMessage = "The model is no longer loaded. Retry once it reloads."
+                showError = true; releaseSendSlot(); return
+            }
         }
         // R3: snapshot identity pre-await; a switch during insert aborts.
         let sendConversationID = conversationID

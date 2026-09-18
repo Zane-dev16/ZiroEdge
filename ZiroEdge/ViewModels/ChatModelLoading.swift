@@ -19,6 +19,14 @@ extension ChatViewModel {
     /// Pure projection of lifecycle-manager state onto the observable phase.
     /// Driven by a Combine sink plus explicit calls at mutation points.
     func refreshModelLoadPhase() {
+        // FM needs no download/residency: availability is readiness.
+        // Minimalist — projects the same .ready the composer enables on.
+        if isAppleEngineActive {
+            let previousPhase = modelLoadPhase
+            modelLoadPhase = .ready
+            announceModelLoadTransitionIfNeeded(from: previousPhase)
+            return
+        }
         let previousPhase = modelLoadPhase
         switch lifecycleManager.currentState {
         case .loading:
@@ -98,6 +106,10 @@ extension ChatViewModel {
     /// appears. Idempotent per surface lifetime; eviction recovers exactly once
     /// per appear.
     func startDeferredModelLoadIfNeeded() {
+        // FM answers with no load: resolve the engine, never spawn GGUF work.
+        if isAppleEngineActive { refreshModelLoadPhase(); return }
+        _ = resolveEngineIfNeeded(hasDownloadedGGUF: !availableModels.isEmpty)
+        if isAppleEngineActive { refreshModelLoadPhase(); return }
         refreshModelLoadPhase()
         guard deferredLoadTask == nil,
               lifecycleManager.activeModel == nil,
@@ -269,6 +281,13 @@ extension ChatViewModel {
     /// Reimplemented atop `preferredAutoLoadCandidate()`; behavior (and the
     /// `needsModelRedirect` contract relied on by unit tests) is unchanged.
     func autoSelectModel() {
+        // FM answers with no download: a ready FM engine means the empty
+        // library must not redirect to Models — chat is usable as-is.
+        if isAppleEngineActive {
+            needsModelRedirect = false
+            refreshModelLoadPhase()
+            return
+        }
         guard let candidate = preferredAutoLoadCandidate() else {
             selectedModel = nil
             needsModelRedirect = true
@@ -358,6 +377,11 @@ extension ChatViewModel {
         guard !isLoadingConversation else {
             surfaceSendBlockedDuringConversationLoad()
             return nil
+        }
+
+        // FM path: no download, residency, or lifecycle load (see ChatEngineSelection).
+        if isAppleEngineActive {
+            return await fmSendConversationID(hasImages: hasImages)
         }
 
         if selectedModel == nil { autoSelectModel() }

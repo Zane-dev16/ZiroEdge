@@ -4,6 +4,7 @@ import SwiftUI
 struct RuntimeServices {
     let persistence: PersistenceController
     let inferenceService: InferenceService
+    let engineRouter: CompositeInferenceService
     let memoryBudgeter: MemoryBudgeter
     let lifecycleManager: ModelLifecycleManager
     let sessionActor: ChatSessionActor
@@ -186,6 +187,11 @@ final class AppRuntime: ObservableObject {
         services.modelsViewModel.updateOfflineReport(report)
     }
 
+    /// Builds the chat-path router. Extracted to hold makeServices' body-length gate.
+    private static func makeEngineRouter(llama: InferenceService) -> CompositeInferenceService {
+        CompositeInferenceService(llama: llama, apple: FoundationModelsProvider())
+    }
+
     private func makeServices(persistence: PersistenceController) async throws -> RuntimeServices {
         if case .ready(let existing) = state {
             existing.downloadManager.teardown()
@@ -207,12 +213,15 @@ final class AppRuntime: ObservableObject {
             memoryBudgeter: memoryBudgeter,
             loadSafetyStore: loadSafetyStore
         )
-        let sessionActor = ChatSessionActor(inferenceService: inferenceService, persistence: persistence)
+        // Chat-path router: llama stays the lifecycle/Settings engine;
+        // chat + titles answer through the router (FM or llama).
+        let engineRouter = Self.makeEngineRouter(llama: inferenceService)
+        let sessionActor = ChatSessionActor(inferenceService: engineRouter, persistence: persistence)
         let conversationListViewModel = ConversationListViewModel(persistence: persistence)
         let downloadManager = DownloadManager()
         let chatViewModel = ChatViewModel(
             persistence: persistence,
-            inferenceService: inferenceService,
+            inferenceService: engineRouter,
             sessionActor: sessionActor,
             lifecycleManager: lifecycleManager,
             downloadStatusProvider: downloadManager
@@ -231,6 +240,7 @@ final class AppRuntime: ObservableObject {
         return RuntimeServices(
             persistence: persistence,
             inferenceService: inferenceService,
+            engineRouter: engineRouter,
             memoryBudgeter: memoryBudgeter,
             lifecycleManager: lifecycleManager,
             sessionActor: sessionActor,
