@@ -130,6 +130,15 @@ struct P3EngineHelperTests {
         #expect(Array(over.tokens.prefix(8)) == (0..<8).map(Int32.init))
         #expect(Array(over.tokens.suffix(8)) == (92..<100).map(Int32.init))
     }
+
+    @Test("Vision preflight fails closed when prefix fills the window")
+    func visionPrefixFits() {
+        #expect(LlamaEngine.visionPrefixFits(chunkPositions: 100, contextLength: 4096, maxTokens: 2048) == true)
+        #expect(LlamaEngine.visionPrefixFits(chunkPositions: 2047, contextLength: 4096, maxTokens: 2048) == true)
+        #expect(LlamaEngine.visionPrefixFits(chunkPositions: 2048, contextLength: 4096, maxTokens: 2048) == false)
+        #expect(LlamaEngine.visionPrefixFits(chunkPositions: 5000, contextLength: 4096, maxTokens: 2048) == false)
+        #expect(LlamaEngine.visionPrefixFits(chunkPositions: 4095, contextLength: 4096, maxTokens: 0) == false)
+    }
 }
 
 private extension SamplingConfigSwift {

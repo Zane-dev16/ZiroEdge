@@ -23,12 +23,8 @@ public actor LlamaEngine {
     private var vocabulary: OpaquePointer?
     private var mtmdCtx: OpaquePointer?
     private let config: LlamaConfigSwift
-    /// Nonisolated cancellation flag. The decode loop is fully synchronous, so
-    /// an actor-isolated flag could only be observed by work queued *behind*
-    /// the entire generation — `cancel()` would be a no-op until it finished.
-    /// A lock-protected flag lets cancellation reach the loop at the next token
-    /// boundary. Reset at stream start (never at end) so a stale cancel cannot
-    /// kill a subsequent generation.
+    /// Lock-protected cancel flag: the sync decode loop monopolizes the actor,
+    /// so cancellation must land nonisolated at the next token boundary.
     private let cancelFlag = OSAllocatedUnfairLock<Bool>(initialState: false)
     private var eosTokenID: llama_token = -1
     private var isBackendInitialized = false
@@ -479,6 +475,15 @@ extension LlamaEngine {
                         throw LlamaError.tokenizationFailed
                     }
 
+                    // Pre-eval preflight: eval_chunks -> llama_decode -> ggml_abort
+                    // (SIGABRT, uncatchable) on n_ctx overflow. Fail closed here.
+                    // ponytail: no downscale/per-chunk loop without token-census evidence.
+                    let chunkPositions = Int(mtmd_helper_get_n_pos(chunks))
+                    if !Self.visionPrefixFits(chunkPositions: chunkPositions, contextLength: config.contextLength, maxTokens: sampling.maxTokens) {
+                        logger.fault("Vision prefix exceeds context window nPos=\(chunkPositions, privacy: .public) ctx=\(self.config.contextLength, privacy: .public)")
+                        throw LlamaError.contextWindowExceeded
+                    }
+
                     // Clear KV memory.
                     let mem = llama_get_memory(ctx)
                     llama_memory_clear(mem, true)
@@ -689,6 +694,12 @@ private extension LlamaEngine {
         let tailCount = max(0, capacity - prefix)
         let kept = Array(tokens.prefix(prefix)) + Array(tokens.suffix(tailCount))
         return (kept, true)
+    }
+
+    /// Vision preflight: true when chunk positions + generation reserve fit n_ctx.
+    /// Callers pass n_pos (M-RoPE-aware), not n_tokens. Pure for tests.
+    public nonisolated static func visionPrefixFits(chunkPositions: Int, contextLength: Int, maxTokens: Int) -> Bool {
+        chunkPositions + max(1, maxTokens) + 1 <= contextLength
     }
 
     // MARK: - Tokenization
