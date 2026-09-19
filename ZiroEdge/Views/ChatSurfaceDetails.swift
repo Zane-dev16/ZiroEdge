@@ -68,17 +68,26 @@ extension ChatView {
         }
 
         if let missingID = viewModel.unavailableConversationModelID {
+            // FM conversations whose engine is temporarily unavailable (AI
+            // off, downloading, unsupported locale) explain why — they were
+            // never "removed".
+            let isFMConversation = missingID == AppleIntelligenceMarker.modelID
+            let fmMessage = AppleIntelligenceAvailability.fallbackMessage(
+                for: AppleIntelligenceAvailability.status()
+            )
             ZiroStatusBanner(
                 icon: "questionmark.folder.fill",
-                title: "Model unavailable",
-                message: "This conversation used \(missingID), which was removed. Explicitly choose another installed model to continue.",
+                title: isFMConversation ? "Apple Intelligence unavailable" : "Model unavailable",
+                message: isFMConversation && !fmMessage.isEmpty ? fmMessage
+                    : "This conversation used \(missingID), which was removed. Explicitly choose another installed model to continue.",
                 tone: .warning
             ) {
                 Button("Choose Model") { navigateToRoute(.models) }
             }
             .accessibilityIdentifier("unavailableConversationModelBanner")
             .announcingOnAppear(
-                "Model unavailable. This conversation used \(missingID), which was removed. Choose another installed model to continue."
+                isFMConversation ? "Apple Intelligence unavailable. Choose another installed model to continue."
+                    : "Model unavailable. This conversation used \(missingID), which was removed. Choose another installed model to continue."
             )
         }
 

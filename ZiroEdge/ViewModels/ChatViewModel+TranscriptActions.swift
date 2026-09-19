@@ -74,11 +74,14 @@ extension ChatViewModel {
             isStreaming = false; return
         }
         // R2/R8: residency + vision may have moved while suspended.
-        guard lifecycleManager.activeModel?.id == selectedModel?.id,
-              lifecycleManager.isModelLoaded else {
-            logger.info("Retry aborted: residency lost post-validate")
-            errorMessage = "The model is no longer loaded. Retry once it reloads."
-            showError = true; isStreaming = false; return
+        // FM has no resident model — availability is the residency.
+        if !isAppleEngineActive {
+            guard lifecycleManager.activeModel?.id == selectedModel?.id,
+                  lifecycleManager.isModelLoaded else {
+                logger.info("Retry aborted: residency lost post-validate")
+                errorMessage = "The model is no longer loaded. Retry once it reloads."
+                showError = true; isStreaming = false; return
+            }
         }
         let images = lastUser.attachments
         if !images.isEmpty, !isVisionModel {

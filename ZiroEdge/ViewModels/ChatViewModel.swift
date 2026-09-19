@@ -533,7 +533,18 @@ final class ChatViewModel: ObservableObject {
         truncationWarning = nil
         errorMessage = nil
 
-        if let model = modelProvider().first(where: { $0.id == conversation.modelID }) {
+        if conversation.modelID == AppleIntelligenceMarker.modelID {
+            // FM is an engine, not a downloadable artifact: it can never be
+            // "removed". Select it when ready; otherwise surface the
+            // FM-aware unavailable banner (copy handled at the banner).
+            unavailableConversationModelID = nil
+            if selectEngine(.appleIntelligence) {
+                needsModelRedirect = false
+            } else {
+                unavailableConversationModelID = conversation.modelID
+                needsModelRedirect = true
+            }
+        } else if let model = modelProvider().first(where: { $0.id == conversation.modelID }) {
             unavailableConversationModelID = nil
             if let readyVariant = availableModels.first(where: { $0.id == model.id }) {
                 await selectModel(readyVariant)
