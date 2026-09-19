@@ -121,8 +121,27 @@ struct ModelConfiguration: Codable, Sendable, Hashable {
     /// Whether to use f16 for KV cache. Default true (halves KV memory).
     let f16KV: Bool
 
-    /// Number of GPU layers. 0 = CPU-only for v1.
+    /// Number of GPU layers. 0 = CPU-only. Presets resolve this via
+    /// `autoGpuLayers()` (full Metal offload on 8GB+ devices, CPU below).
     let gpuLayers: Int
+
+    /// Full Metal offload layer count. Exceeds any shipped model's layer
+    /// count; llama.cpp clamps to the model's actual layers.
+    static let fullMetalOffloadLayers = 999
+
+    /// Physical-RAM floor for Metal offload. Below this the GPU stays off:
+    /// base iPhones (6GB) lack the headroom, 8GB+ Pro/iPads fit.
+    static let metalMinimumRAMBytes: UInt64 = 8_000_000_000
+
+    /// Auto GPU tier by physical RAM. Pure for tests.
+    static func autoGpuLayers(physicalMemoryBytes: UInt64) -> Int {
+        physicalMemoryBytes >= metalMinimumRAMBytes ? fullMetalOffloadLayers : 0
+    }
+
+    /// Auto GPU tier for this device.
+    static func autoGpuLayers() -> Int {
+        autoGpuLayers(physicalMemoryBytes: ProcessInfo.processInfo.physicalMemory)
+    }
 
     /// Imported models expose only these bounded controls. Unsafe runtime knobs
     /// remain app-owned constants.
@@ -154,7 +173,7 @@ struct ModelConfiguration: Codable, Sendable, Hashable {
             threadCount: 2,
             useMmap: true,
             f16KV: true,
-            gpuLayers: 0
+            gpuLayers: autoGpuLayers()
         )
     }
 
@@ -172,7 +191,7 @@ struct ModelConfiguration: Codable, Sendable, Hashable {
         threadCount: 2,
         useMmap: true,
         f16KV: true,
-        gpuLayers: 0
+        gpuLayers: autoGpuLayers()
     )
 
     /// SmolVLM — vision model, raw prompt path. (Phase 2)
@@ -187,7 +206,7 @@ struct ModelConfiguration: Codable, Sendable, Hashable {
         threadCount: 2,
         useMmap: true,
         f16KV: true,
-        gpuLayers: 0
+        gpuLayers: autoGpuLayers()
     )
 
     /// Gemma 4 — vision model, chat template. Requires BOS token.
@@ -202,7 +221,7 @@ struct ModelConfiguration: Codable, Sendable, Hashable {
         threadCount: 2,
         useMmap: true,
         f16KV: true,
-        gpuLayers: 0
+        gpuLayers: autoGpuLayers()
     )
 
     /// E4B text-only runtime shape. It shares the base artifact with E4B vision
@@ -218,11 +237,12 @@ struct ModelConfiguration: Codable, Sendable, Hashable {
         threadCount: 2,
         useMmap: true,
         f16KV: true,
-        gpuLayers: 0
+        gpuLayers: autoGpuLayers()
     )
 
 #if DEBUG
     /// Calibration-only alias of the independently selectable Release text shape.
+    /// Pins CPU: the harness measures the CPU shape (see memory-profiles.md).
     static let gemma4E4BTextCalibration = ModelConfiguration(
         promptPath: .gemma,
         addBos: true,
@@ -250,6 +270,6 @@ struct ModelConfiguration: Codable, Sendable, Hashable {
         threadCount: 2,
         useMmap: true,
         f16KV: true,
-        gpuLayers: 0
+        gpuLayers: autoGpuLayers()
     )
 }

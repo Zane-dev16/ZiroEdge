@@ -132,7 +132,7 @@ final class ModelRegistryTests: XCTestCase {
         XCTAssertEqual(config.threadCount, 2)
         XCTAssertTrue(config.useMmap)
         XCTAssertTrue(config.f16KV)
-        XCTAssertEqual(config.gpuLayers, 0)
+        XCTAssertEqual(config.gpuLayers, ModelConfiguration.autoGpuLayers())
         XCTAssertNil(config.addBos)
         XCTAssertTrue(config.stopStrings.contains("<|eot_id|>"))
     }
@@ -292,7 +292,7 @@ final class ModelRegistryTests: XCTestCase {
         XCTAssertEqual(config.threadCount, 2)
         XCTAssertTrue(config.useMmap)
         XCTAssertTrue(config.f16KV)
-        XCTAssertEqual(config.gpuLayers, 0)
+        XCTAssertEqual(config.gpuLayers, ModelConfiguration.autoGpuLayers())
     }
 
     func testVisionModelDownloadStatusBothNeeded() throws {

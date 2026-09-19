@@ -492,7 +492,8 @@ private struct SafetyRuntimePage: View {
             lockedRow("Batch size", value: "\(model.config.batchSize)")
             lockedRow("Micro-batch", value: "\(model.config.microBatchSize)")
             lockedRow("Threads", value: "\(model.config.threadCount)")
-            lockedRow("GPU layers", value: "\(model.config.gpuLayers)")
+            let gpuState = model.config.gpuLayers > 0 ? "Auto Metal (\(model.config.gpuLayers) layers)" : "Auto CPU-only"
+            lockedRow("GPU offload", value: gpuState)
             lockedRow("mmap", value: model.config.useMmap ? "On" : "Off")
             lockedRow("KV-cache (f16)", value: model.config.f16KV ? "On" : "Off")
         }

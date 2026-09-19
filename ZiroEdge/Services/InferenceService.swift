@@ -179,7 +179,17 @@ actor InferenceService: InferenceServiceProtocol {
             }
         }
 
-        // Build engine config from model configuration.
+        // Persist immediately before native construction, including direct service callers.
+        guard let profile = MemoryProfileRegistry.profile(for: model) else {
+            throw InferenceError.nativeFailure(
+                kind: .memoryPressure,
+                diagnostic: "runtime-profile-missing"
+            )
+        }
+
+        // Build engine config from the admitted profile: execution follows
+        // admission, so a Metal shape with no evidence yet serves CPU instead
+        // of refusing a load CPU could serve (see MemoryProfileRegistry).
         let config = model.config
         let engineConfig = LlamaConfigSwift(
             modelPath: baseURL.path,
@@ -190,16 +200,8 @@ actor InferenceService: InferenceServiceProtocol {
             threadCount: config.threadCount,
             useMmap: config.useMmap,
             f16KV: config.f16KV,
-            gpuLayers: config.gpuLayers
+            gpuLayers: profile.gpuLayers
         )
-
-        // Persist immediately before native construction, including direct service callers.
-        guard let profile = MemoryProfileRegistry.profile(for: model) else {
-            throw InferenceError.nativeFailure(
-                kind: .memoryPressure,
-                diagnostic: "runtime-profile-missing"
-            )
-        }
         do {
             try loadSafetyStore.beginLoad(profileID: profile.id)
         } catch {

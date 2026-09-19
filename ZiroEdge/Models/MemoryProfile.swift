@@ -48,6 +48,10 @@ struct MemoryProfile: Codable, Hashable, Sendable {
     let contextLength: Int
     let batchSize: Int
     let microBatchSize: Int
+    /// GPU offload shape. 0 = CPU-only; >0 = Metal offload (matches
+    /// `ModelConfiguration.fullMetalOffloadLayers` on 8GB+ devices).
+    /// A GPU run is a different runtime shape with independent evidence.
+    let gpuLayers: Int
     let projectorPolicy: ProjectorPolicy
     let evidenceStatus: MemoryEvidenceStatus
     let policyVersion: Int
@@ -130,6 +134,7 @@ enum MemoryProfileRegistry {
     static let llama32Text = MemoryProfile(
         id: "llama32-3b-text-p1", modelID: ModelRegistry.llama32_3B.id,
         mode: .text, contextLength: 4096, batchSize: 512, microBatchSize: 128,
+        gpuLayers: 0,
         projectorPolicy: .disabled, evidenceStatus: .unvalidated, policyVersion: 1,
         measuredFullWorkloadPeakDeltaBytes: nil, measuredLoadDeltaBytes: nil,
         safetyMultiplier: 1.25, fixedReserveBytes: 750_000_000,
@@ -139,6 +144,7 @@ enum MemoryProfileRegistry {
     static let e2bVision = MemoryProfile(
         id: "gemma4-e2b-vision-p1", modelID: ModelRegistry.gemma4_e2b.id,
         mode: .vision, contextLength: 4096, batchSize: 512, microBatchSize: 128,
+        gpuLayers: 0,
         projectorPolicy: .required, evidenceStatus: .validated, policyVersion: 1,
         measuredFullWorkloadPeakDeltaBytes: 798_559_232, measuredLoadDeltaBytes: 790_334_488,
         safetyMultiplier: 1.25, fixedReserveBytes: 750_000_000,
@@ -148,6 +154,7 @@ enum MemoryProfileRegistry {
     static let e4bText = MemoryProfile(
         id: "gemma4-e4b-text-p1", modelID: ModelRegistry.gemma4_e4b_text.id,
         mode: .text, contextLength: 512, batchSize: 256, microBatchSize: 64,
+        gpuLayers: 0,
         projectorPolicy: .disabled, evidenceStatus: .unvalidated, policyVersion: 1,
         measuredFullWorkloadPeakDeltaBytes: nil, measuredLoadDeltaBytes: nil,
         safetyMultiplier: 1.25, fixedReserveBytes: 750_000_000,
@@ -157,6 +164,50 @@ enum MemoryProfileRegistry {
     static let e4bVision = MemoryProfile(
         id: "gemma4-e4b-vision-p1", modelID: ModelRegistry.gemma4_e4b.id,
         mode: .vision, contextLength: 4096, batchSize: 512, microBatchSize: 128,
+        gpuLayers: 0,
+        projectorPolicy: .required, evidenceStatus: .unvalidated, policyVersion: 1,
+        measuredFullWorkloadPeakDeltaBytes: nil, measuredLoadDeltaBytes: nil,
+        safetyMultiplier: 1.25, fixedReserveBytes: 750_000_000,
+        minimumPhysicalRAMBytes: 8_054_095_872
+    )
+
+    /// Metal offload mirrors of the CPU shapes above. Unvalidated with no
+    /// evidence: each GPU shape must complete physical calibration per
+    /// memory-profiles.md before it admits loads (fail-closed until then).
+    static let llama32TextMetal = MemoryProfile(
+        id: "llama32-3b-text-metal-p1", modelID: ModelRegistry.llama32_3B.id,
+        mode: .text, contextLength: 4096, batchSize: 512, microBatchSize: 128,
+        gpuLayers: ModelConfiguration.fullMetalOffloadLayers,
+        projectorPolicy: .disabled, evidenceStatus: .unvalidated, policyVersion: 1,
+        measuredFullWorkloadPeakDeltaBytes: nil, measuredLoadDeltaBytes: nil,
+        safetyMultiplier: 1.25, fixedReserveBytes: 750_000_000,
+        minimumPhysicalRAMBytes: 8_000_000_000
+    )
+
+    static let e2bVisionMetal = MemoryProfile(
+        id: "gemma4-e2b-vision-metal-p1", modelID: ModelRegistry.gemma4_e2b.id,
+        mode: .vision, contextLength: 4096, batchSize: 512, microBatchSize: 128,
+        gpuLayers: ModelConfiguration.fullMetalOffloadLayers,
+        projectorPolicy: .required, evidenceStatus: .unvalidated, policyVersion: 1,
+        measuredFullWorkloadPeakDeltaBytes: nil, measuredLoadDeltaBytes: nil,
+        safetyMultiplier: 1.25, fixedReserveBytes: 750_000_000,
+        minimumPhysicalRAMBytes: 8_054_095_872
+    )
+
+    static let e4bTextMetal = MemoryProfile(
+        id: "gemma4-e4b-text-metal-p1", modelID: ModelRegistry.gemma4_e4b_text.id,
+        mode: .text, contextLength: 512, batchSize: 256, microBatchSize: 64,
+        gpuLayers: ModelConfiguration.fullMetalOffloadLayers,
+        projectorPolicy: .disabled, evidenceStatus: .unvalidated, policyVersion: 1,
+        measuredFullWorkloadPeakDeltaBytes: nil, measuredLoadDeltaBytes: nil,
+        safetyMultiplier: 1.25, fixedReserveBytes: 750_000_000,
+        minimumPhysicalRAMBytes: 8_054_095_872
+    )
+
+    static let e4bVisionMetal = MemoryProfile(
+        id: "gemma4-e4b-vision-metal-p1", modelID: ModelRegistry.gemma4_e4b.id,
+        mode: .vision, contextLength: 4096, batchSize: 512, microBatchSize: 128,
+        gpuLayers: ModelConfiguration.fullMetalOffloadLayers,
         projectorPolicy: .required, evidenceStatus: .unvalidated, policyVersion: 1,
         measuredFullWorkloadPeakDeltaBytes: nil, measuredLoadDeltaBytes: nil,
         safetyMultiplier: 1.25, fixedReserveBytes: 750_000_000,
@@ -167,6 +218,7 @@ enum MemoryProfileRegistry {
     static let hermeticLlamaText = MemoryProfile(
         id: "uitest-llama-text-p1", modelID: ModelRegistry.llama32_3B.id,
         mode: .text, contextLength: 4096, batchSize: 512, microBatchSize: 128,
+        gpuLayers: 0,
         projectorPolicy: .disabled, evidenceStatus: .validated, policyVersion: 1,
         measuredFullWorkloadPeakDeltaBytes: 1, measuredLoadDeltaBytes: 1,
         safetyMultiplier: 1.25, fixedReserveBytes: 750_000_000,
@@ -176,6 +228,7 @@ enum MemoryProfileRegistry {
     static let e4bTextCalibration = MemoryProfile(
         id: "gemma4-e4b-text-calibration-p1", modelID: ModelRegistry.gemma4E4BTextCalibration.id,
         mode: .text, contextLength: 512, batchSize: 256, microBatchSize: 64,
+        gpuLayers: 0,
         projectorPolicy: .disabled, evidenceStatus: .unvalidated, policyVersion: 1,
         measuredFullWorkloadPeakDeltaBytes: nil, measuredLoadDeltaBytes: nil,
         safetyMultiplier: 1.25, fixedReserveBytes: 750_000_000,
@@ -185,24 +238,39 @@ enum MemoryProfileRegistry {
 
     static var all: [MemoryProfile] {
 #if DEBUG
-        [llama32Text, e2bVision, e4bText, e4bVision, e4bTextCalibration]
+        [llama32Text, e2bVision, e4bText, e4bVision, llama32TextMetal, e2bVisionMetal, e4bTextMetal, e4bVisionMetal, e4bTextCalibration]
 #else
-        [llama32Text, e2bVision, e4bText, e4bVision]
+        [llama32Text, e2bVision, e4bText, e4bVision, llama32TextMetal, e2bVisionMetal, e4bTextMetal, e4bVisionMetal]
 #endif
     }
 
-    static func profile(for modelID: String) -> MemoryProfile? {
+    static func profile(for modelID: String, usesGPU: Bool = ModelConfiguration.autoGpuLayers() > 0) -> MemoryProfile? {
 #if DEBUG
         if HermeticUITestRuntime.isEnabled, modelID == ModelRegistry.llama32_3B.id {
             return hermeticLlamaText
         }
 #endif
-        if let curated = all.first(where: { $0.modelID == modelID }) { return curated }
+        if let curated = curatedProfile(modelID: modelID, usesGPU: usesGPU) { return curated }
         return ImportedModelStore.shared.record(id: modelID).map { importedProfile(for: $0.model) }
     }
 
+    /// Serve-what-can-serve: a Metal shape with zero evidence is unavailable,
+    /// so resolve to the CPU shape instead of refusing a load CPU could serve
+    /// (even when the CPU shape is also unavailable, it keeps execution on the
+    /// conservative path). Once a Metal shape calibrates (experimental or
+    /// validated) it selects automatically with no code change. Engine
+    /// execution follows the selected profile's gpuLayers (see InferenceService).
+    private static func curatedProfile(modelID: String, usesGPU: Bool) -> MemoryProfile? {
+        let match = all.first(where: { $0.modelID == modelID && ($0.gpuLayers > 0) == usesGPU })
+        if usesGPU, let metal = match, metal.runtimeEligibility == .unavailable,
+           let cpu = all.first(where: { $0.modelID == modelID && $0.gpuLayers == 0 }) {
+            return cpu
+        }
+        return match ?? all.first(where: { $0.modelID == modelID })
+    }
+
     static func profile(for model: AIModel) -> MemoryProfile? {
-        model.isImported ? importedProfile(for: model) : profile(for: model.id)
+        model.isImported ? importedProfile(for: model) : profile(for: model.id, usesGPU: model.config.gpuLayers > 0)
     }
 
     /// Imported models have no retained device calibration yet. The estimate is
@@ -236,6 +304,7 @@ enum MemoryProfileRegistry {
                 contextLength: model.config.contextLength,
                 batchSize: model.config.batchSize,
                 microBatchSize: model.config.microBatchSize,
+                gpuLayers: model.config.gpuLayers,
                 projectorPolicy: model.requiresMMProj ? .required : .disabled,
                 evidenceStatus: .unvalidated,
                 policyVersion: 1,
@@ -281,6 +350,7 @@ enum MemoryProfileRegistry {
             contextLength: model.config.contextLength,
             batchSize: model.config.batchSize,
             microBatchSize: model.config.microBatchSize,
+            gpuLayers: model.config.gpuLayers,
             projectorPolicy: model.requiresMMProj ? .required : .disabled,
             evidenceStatus: .unvalidated,
             policyVersion: 1,

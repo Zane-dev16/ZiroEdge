@@ -36,10 +36,43 @@ public actor LlamaEngine {
     // MARK: - Initialization
 
     public init(config: LlamaConfigSwift) throws {
-        self.config = config
+        // Metal-fail -> CPU-retry: a GPU OOM or Metal init failure falls back
+        // to CPU once, never leaving the profile unloadable when CPU could
+        // serve. CPU-only configs throw through untouched. Construction runs
+        // in a nonisolated static so no self access precedes full init.
+        let handles: NativeHandles
+        let effective: LlamaConfigSwift
+        let firstError: Error?
+        do {
+            handles = try Self.construct(config: config)
+            effective = config
+            firstError = nil
+        } catch {
+            guard config.gpuLayers > 0 else { throw error }
+            let cpuConfig = config.cpuFallback
+            handles = try Self.construct(config: cpuConfig)
+            effective = cpuConfig
+            firstError = error
+        }
+        self.config = effective
+        self.model = handles.model
+        self.vocabulary = handles.vocabulary
+        self.context = handles.context
+        self.mtmdCtx = handles.mtmdCtx
+        self.eosTokenID = handles.eosTokenID
+        self.isBackendInitialized = true
+        if let firstError {
+            logger.error("Metal GPU init failed, running CPU-only: \(firstError.localizedDescription, privacy: .public)")
+        }
+        if effective.mmprojPath != nil {
+            logger.info("Multimodal context initialized")
+        }
+        logger.info("Model loaded: \(effective.modelPath, privacy: .public) ctx=\(effective.contextLength) threads=\(effective.threadCount) gpu=\(effective.gpuLayers)")
+    }
 
+    /// One native construction attempt; frees the backend on failure.
+    private nonisolated static func construct(config: LlamaConfigSwift) throws -> NativeHandles {
         llama_backend_init()
-        isBackendInitialized = true
 
         // Load model.
         var modelParams = llama_model_default_params()
@@ -48,20 +81,14 @@ public actor LlamaEngine {
 
         guard let loadedModel = llama_model_load_from_file(config.modelPath, modelParams) else {
             llama_backend_free()
-            isBackendInitialized = false
             throw LlamaError.modelLoadFailed(path: config.modelPath)
         }
-        model = loadedModel
-        vocabulary = llama_model_get_vocab(loadedModel)
-
-        guard let vocab = vocabulary else {
+        guard let vocab = llama_model_get_vocab(loadedModel) else {
             llama_model_free(loadedModel)
-            model = nil
             llama_backend_free()
-            isBackendInitialized = false
             throw LlamaError.modelLoadFailed(path: config.modelPath)
         }
-        eosTokenID = llama_vocab_eos(vocab)
+        let eos = llama_vocab_eos(vocab)
 
         // Create context.
         var ctxParams = llama_context_default_params()
@@ -74,33 +101,41 @@ public actor LlamaEngine {
 
         guard let ctx = llama_init_from_model(loadedModel, ctxParams) else {
             llama_model_free(loadedModel)
-            model = nil
             llama_backend_free()
-            isBackendInitialized = false
             throw LlamaError.contextCreationFailed
         }
-        context = ctx
 
         // Initialize multimodal context if mmprojPath is provided.
+        var mtmdCtx: OpaquePointer?
         if let mmprojPath = config.mmprojPath {
             var mtmdParams = mtmd_context_params_default()
             mtmdParams.n_threads = Int32(config.threadCount)
-            mtmdParams.use_gpu = false  // CPU-only for v1
+            mtmdParams.use_gpu = config.gpuLayers > 0
             mtmdCtx = mtmd_init_from_file(mmprojPath, loadedModel, mtmdParams)
             guard mtmdCtx != nil else {
                 llama_free(ctx)
-                context = nil
                 llama_model_free(loadedModel)
-                model = nil
-                vocabulary = nil
                 llama_backend_free()
-                isBackendInitialized = false
                 throw LlamaError.projectorInitializationFailed
             }
-            logger.info("Multimodal context initialized")
         }
 
-        logger.info("Model loaded: \(config.modelPath, privacy: .public) ctx=\(config.contextLength) threads=\(config.threadCount)")
+        return NativeHandles(
+            model: loadedModel,
+            vocabulary: vocab,
+            context: ctx,
+            mtmdCtx: mtmdCtx,
+            eosTokenID: eos
+        )
+    }
+
+    /// Constructed native handles. Matches the engine's stored properties.
+    private struct NativeHandles {
+        let model: OpaquePointer
+        let vocabulary: OpaquePointer
+        let context: OpaquePointer
+        let mtmdCtx: OpaquePointer?
+        let eosTokenID: llama_token
     }
 
     deinit {
@@ -296,7 +331,10 @@ extension LlamaEngine {
                         maxTokens: sampling.maxTokens
                     )
                     if preflight.didTruncate {
-                        logger.fault("Prompt truncated promptTokens=\(tokens.count, privacy: .public) kept=\(preflight.tokens.count, privacy: .public) ctx=\(self.config.contextLength, privacy: .public)")
+                        let promptCount = tokens.count
+                        let keptCount = preflight.tokens.count
+                        let ctxSize = self.config.contextLength
+                        logger.fault("Prompt truncated promptTokens=\(promptCount, privacy: .public) kept=\(keptCount, privacy: .public) ctx=\(ctxSize, privacy: .public)")
                     }
                     let promptTokens = preflight.tokens
 
@@ -587,8 +625,7 @@ private extension LlamaEngine {
         public let presencePenalty: Float
     }
 
-    /// Penalty sampler parameters, or nil when all penalties are disabled
-    /// (repeat == 1.0, freq == 0, presence == 0, or N == 0).
+    /// Penalty params, or nil when all penalties are disabled.
     public nonisolated static func penaltyChainParameters(
         for sampling: SamplingConfigSwift
     ) -> PenaltyParameters? {
@@ -605,9 +642,7 @@ private extension LlamaEngine {
         )
     }
 
-    /// True when `buffer` ends with a strict prefix of any stop string —
-    /// i.e. the tail could still grow into a stop. Such buffers must be
-    /// withheld, never flushed on maxTokens/n_ctx/cancel.
+    /// True when `buffer` ends with a strict prefix of any stop string.
     public nonisolated static func isPotentialStopPrefix(
         _ buffer: String,
         stopStrings: [String]
@@ -843,6 +878,24 @@ public struct LlamaConfigSwift: Sendable {
     public let useMmap: Bool
     public let f16KV: Bool
     public let gpuLayers: Int
+
+    /// True when any layer is offloaded to Metal.
+    public var usesGPU: Bool { gpuLayers > 0 }
+
+    /// CPU-only copy of this config: the Metal-fail retry target.
+    public var cpuFallback: LlamaConfigSwift {
+        LlamaConfigSwift(
+            modelPath: modelPath,
+            mmprojPath: mmprojPath,
+            contextLength: contextLength,
+            batchSize: batchSize,
+            microBatchSize: microBatchSize,
+            threadCount: threadCount,
+            useMmap: useMmap,
+            f16KV: f16KV,
+            gpuLayers: 0
+        )
+    }
 
     public init(
         modelPath: String,

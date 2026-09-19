@@ -25,6 +25,10 @@ When replacing an already loaded model, native unload must finish and a five-sec
 | Gemma 4 E4B text calibration | no projector, context 512, batch 256, microbatch 64, mmap enabled, CPU settings unchanged | Unvalidated | Disabled |
 | Gemma 4 E4B vision | projector required, context 4096, batch 512, microbatch 128 | Unvalidated | Disabled |
 | Llama 3.2 3B text | context 4096, batch 512, microbatch 128 | Unvalidated | Disabled |
+| Llama 3.2 3B text, Metal offload | as above, full Metal offload | Unvalidated | Disabled |
+| Gemma 4 E2B vision, Metal offload | as above, full Metal offload | Unvalidated | Disabled |
+| Gemma 4 E4B text, Metal offload | as above (512/256/64), full Metal offload | Unvalidated | Disabled |
+| Gemma 4 E4B vision, Metal offload | as above, full Metal offload | Unvalidated | Disabled |
 
 The retained E2B load-only delta remains 790,334,488 bytes for diagnostic history; production admission uses the larger accepted full-workload peak of 798,559,232 bytes. Configured context, batch, and microbatch values are specified runtime controls, not measurements. Evidence is retained under `test-output/memory-diagnostic-e2b-round1-warm-20260726T165800Z/`.
 

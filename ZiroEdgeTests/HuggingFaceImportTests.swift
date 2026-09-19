@@ -226,7 +226,7 @@ final class HuggingFaceImportTests: XCTestCase {
         XCTAssertEqual(config.batchSize, 256)
         XCTAssertEqual(config.microBatchSize, 64)
         XCTAssertEqual(config.threadCount, 2)
-        XCTAssertEqual(config.gpuLayers, 0)
+        XCTAssertEqual(config.gpuLayers, ModelConfiguration.autoGpuLayers())
         XCTAssertTrue(config.useMmap)
         XCTAssertTrue(config.f16KV)
     }

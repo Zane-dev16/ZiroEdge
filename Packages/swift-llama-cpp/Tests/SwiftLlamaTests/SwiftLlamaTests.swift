@@ -18,6 +18,38 @@ struct LlamaEngineTests {
         #expect(config.gpuLayers == 0)
     }
 
+    @Test("GPU helpers map tiers to engine config")
+    func gpuHelpers() {
+        let cpu = LlamaConfigSwift(modelPath: "/tmp/test.gguf")
+        #expect(cpu.usesGPU == false)
+        #expect(cpu.cpuFallback.gpuLayers == 0)
+        let gpu = LlamaConfigSwift(modelPath: "/tmp/test.gguf", gpuLayers: 999)
+        #expect(gpu.usesGPU == true)
+        let fallback = gpu.cpuFallback
+        #expect(fallback.gpuLayers == 0)
+        #expect(fallback.usesGPU == false)
+        #expect(fallback.modelPath == gpu.modelPath)
+        #expect(fallback.contextLength == gpu.contextLength)
+    }
+
+    @Test("GPU init failure retries CPU once, then throws")
+    func gpuFallbackThrows() async throws {
+        // Missing artifact fails both the GPU attempt and the CPU retry.
+        // Success criterion is the fail-closed error, not a hang or crash.
+        for layers in [999, 0] {
+            do {
+                let probe = LlamaConfigSwift(modelPath: "/tmp/definitely-missing.gguf", gpuLayers: layers)
+                _ = try await LlamaEngine(config: probe)
+                Issue.record("Expected modelLoadFailed for gpuLayers=\(layers)")
+            } catch let error as LlamaError {
+                guard case .modelLoadFailed = error else {
+                    Issue.record("Wrong error for gpuLayers=\(layers): \(error)")
+                    continue
+                }
+            }
+        }
+    }
+
     @Test("Explicit batch controls are retained")
     func explicitBatchControls() {
         let config = LlamaConfigSwift(
