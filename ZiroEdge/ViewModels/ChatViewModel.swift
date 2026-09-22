@@ -697,7 +697,7 @@ extension ChatViewModel {
         // suspension so a double-tap (or Send + keyboard submit) cannot enter
         // validate twice. Released on every early exit below.
         guard !isStreaming else {
-            logger.info("Send dropped: already streaming")
+            print("[FM-SEND] dropped: already streaming")
             return
         }
         isStreaming = true

@@ -252,6 +252,98 @@ struct AppShellView: View {
                 }
             }
 
+            // E2E: drive one FM send headlessly (DEBUG-only, no UI automation).
+            // Forces the FM engine, creates an FM conversation, sends, and
+            // prints the outcome for console capture. Usage:
+            //   --e2e-fm-send "Say ok"
+            if CommandLine.arguments.contains("--e2e-fm-send") {
+                let args = CommandLine.arguments
+                let text: String = {
+                    if let i = args.firstIndex(of: "--e2e-fm-send"), i + 1 < args.count {
+                        return args[i + 1]
+                    }
+                    return "Say ok"
+                }()
+                let fmReady = AppleIntelligenceAvailability.isReady
+                print("[FM-E2E] fmReady=\(fmReady ? 1 : 0)")
+                if fmReady {
+                    EngineStore.lastEngine = .appleIntelligence
+                    _ = chatViewModel.selectEngine(.appleIntelligence)
+                    if let id = await conversationListViewModel.createConversation(
+                        modelID: AppleIntelligenceMarker.modelID,
+                        title: "FM E2E Send Test"
+                    ) {
+                        for _ in 0..<480
+                        where chatViewModel.activeConversationID != id
+                            || chatViewModel.isLoadingConversation {
+                            try? await Task.sleep(for: .milliseconds(250))
+                        }
+                        if chatViewModel.activeConversationID == id,
+                           !chatViewModel.isLoadingConversation {
+                            chatViewModel.inputText = text
+                            await chatViewModel.sendMessage()
+                            // Poll for the assistant reply (sendMessage returns
+                            // once streaming is underway, not when it ends).
+                            var reply = ""
+                            for _ in 0..<360 {
+                                try? await Task.sleep(for: .milliseconds(250))
+                                if let last = chatViewModel.messages.last(where: { $0.role == .assistant }),
+                                   !last.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                    reply = last.content
+                                    if !chatViewModel.isStreaming { break }
+                                }
+                            }
+                            let shown = reply.prefix(300)
+                            print("[FM-E2E] replyChars=\(reply.count) streaming=\(chatViewModel.isStreaming ? 1 : 0) text=\(shown)")
+                            if reply.isEmpty {
+                                print("[FM-E2E] error=\(chatViewModel.errorMessage ?? "none") showError=\(chatViewModel.showError ? 1 : 0)")
+                            }
+                        } else {
+                            print("[FM-E2E] ERROR conversation never became active")
+                        }
+                    } else {
+                        print("[FM-E2E] ERROR conversation creation failed")
+                    }
+                }
+            }
+
+            // E2E: reopen the latest FM conversation + retry headlessly.
+            // Exercises loadConversation's FM branch (removed-banner fix) and
+            // retryLastResponse's FM bypass (residency-banner fix). Usage:
+            //   --e2e-fm-reopen
+            if CommandLine.arguments.contains("--e2e-fm-reopen") {
+                await conversationListViewModel.loadConversations()
+                let all = conversationListViewModel.conversations
+                let target = all.first(where: { $0.modelID == AppleIntelligenceMarker.modelID })
+                    ?? all.sorted(by: { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }).first
+                if let target {
+                    let wasMarker = target.modelID == AppleIntelligenceMarker.modelID
+                    await chatViewModel.loadConversation(target.id)
+                    let msgs = chatViewModel.messages
+                    print("[FM-E2E-REOPEN] marker=\(wasMarker ? 1 : 0) unavailable=\(chatViewModel.unavailableConversationModelID ?? "nil") redirect=\(chatViewModel.needsModelRedirect ? 1 : 0) messages=\(msgs.count)")
+                    let before = msgs.last(where: { $0.role == .assistant })?.content ?? ""
+                    if msgs.contains(where: { $0.role == .user }),
+                       msgs.contains(where: { $0.role == .assistant }) {
+                        await chatViewModel.retryLastResponse()
+                        var after = before
+                        for _ in 0..<360 {
+                            try? await Task.sleep(for: .milliseconds(250))
+                            let cur = chatViewModel.messages.last(where: { $0.role == .assistant })?.content ?? ""
+                            if !chatViewModel.isStreaming, !cur.isEmpty, cur != before {
+                                after = cur
+                                break
+                            }
+                            if !chatViewModel.isStreaming, !cur.isEmpty { after = cur }
+                        }
+                        print("[FM-E2E-RETRY] changed=\(after != before ? 1 : 0) chars=\(after.count) error=\(chatViewModel.errorMessage ?? "none")")
+                    } else {
+                        print("[FM-E2E-RETRY] skipped=no user+assistant pair to retry")
+                    }
+                } else {
+                    print("[FM-E2E-REOPEN] ERROR no conversations stored")
+                }
+            }
+
             // E2E: drive the FULL HuggingFace import flow headlessly.
             // Mirrors --uitesting-sendtest style; skipped under XCTest hosts.
             if CommandLine.arguments.contains("--e2e-hf-import") {
