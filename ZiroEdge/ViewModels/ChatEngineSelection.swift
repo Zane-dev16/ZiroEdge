@@ -38,6 +38,13 @@ extension ChatViewModel {
     /// when ready, else llama. Persists the resolution.
     @discardableResult
     func resolveEngineIfNeeded(hasDownloadedGGUF: Bool) -> InferenceEngine {
+#if DEBUG
+        // UI-test hook: force the real FM engine deterministically.
+        if CommandLine.arguments.contains("--uitesting-fm-engine"),
+           AppleIntelligenceAvailability.isReady {
+            EngineStore.lastEngine = .appleIntelligence
+        }
+#endif
         let fmStatus = AppleIntelligenceAvailability.status()
         let resolved = EngineStore.resolve(
             isFMReady: fmStatus.isReady,
@@ -55,6 +62,7 @@ extension ChatViewModel {
     /// FM send gate. Nil stops the send; non-nil is the conversation to send into.
     /// Vision is text-only in v1 — image sends stop with the picker warning.
     func fmSendConversationID(hasImages: Bool) async -> UUID? {
+        print("[FM-VAL] draft=\(isDraftConversation ? 1 : 0) active=\(activeConversationID?.uuidString ?? "nil")")
         if hasImages {
             visionWarning = "Vision not supported with Apple Intelligence yet. Switch to a vision model."
             return nil

@@ -240,7 +240,7 @@ class UITestBase: XCTestCase {
     }
 
     /// Find the first cell in the sidebar, trying both CollectionView and TableView.
-    private func firstCellInSidebar(app: XCUIApplication, timeout: TimeInterval) -> XCUIElement? {
+    func firstCellInSidebar(app: XCUIApplication, timeout: TimeInterval) -> XCUIElement? {
         // SwiftUI List(.sidebar) renders as CollectionView on iOS 16+
         let cvCell = app.collectionViews.cells.firstMatch
         if cvCell.waitForExistence(timeout: 2) { return cvCell }
