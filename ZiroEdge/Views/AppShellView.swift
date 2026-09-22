@@ -64,6 +64,7 @@ struct AppShellView: View {
     @State private var pendingStartChattingModel: AIModel?
 #if DEBUG
     @State private var memoryDiagnosticWorkloadState = "workload-starting"
+    @State private var visionBudgetState = "idle"
 #endif
 
     var body: some View {
@@ -262,9 +263,26 @@ struct AppShellView: View {
             if CommandLine.arguments.contains("--switch-proof") {
                 _ = SwitchProofRunner.run(services: services, arguments: CommandLine.arguments)
             }
+
+            // BUDGET-PROOF: live vision-budget turns A/B/C (DEBUG-only).
+            // Mirrors --e2e-hf-import style; runs in the app process so
+            // XCUITest XCTestConfigurationFilePath gating does not apply
+            // (that env is set in the runner, not the app).
+            if VisionBudgetRunner.isEnabled(arguments: CommandLine.arguments) {
+                VisionBudgetRunner.state = "running"
+                _ = VisionBudgetRunner.run(services: services, arguments: CommandLine.arguments)
+            }
 #endif
         }
 #if DEBUG
+        .task {
+            guard VisionBudgetRunner.isEnabled(arguments: CommandLine.arguments) else { return }
+            while true {
+                visionBudgetState = VisionBudgetRunner.state
+                if visionBudgetState.hasSuffix("-complete") || visionBudgetState.contains("-failed-") { break }
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+        }
         .task {
             guard MemoryDiagnosticRecorder.shared.controlledWorkloadEnabled else { return }
             for _ in 0..<240 where !lifecycleManager.isModelLoaded {
@@ -283,6 +301,13 @@ struct AppShellView: View {
             }
         }
         .overlay(alignment: .bottom) {
+            if VisionBudgetRunner.isEnabled(arguments: CommandLine.arguments) {
+                Text(visionBudgetState)
+                    .font(ZiroType.micro)
+                    .foregroundStyle(ZiroTheme.tertiaryText)
+                    .accessibilityIdentifier("vision-budget-state")
+                    .padding(ZiroTheme.Spacing.xSmall)
+            }
             if MemoryDiagnosticRecorder.shared.isEnabled {
                 Text(memoryDiagnosticState)
                     .font(ZiroType.micro)

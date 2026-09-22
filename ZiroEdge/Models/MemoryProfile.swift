@@ -269,8 +269,18 @@ enum MemoryProfileRegistry {
         return match ?? all.first(where: { $0.modelID == modelID })
     }
 
+#if DEBUG
+    /// Threshold-harness override: `--vision-force-cpu` serves the CPU shape
+    /// instead of auto-Metal for the CPU-vs-Metal abort comparison.
+    static var forceCPUVision = false
+#endif
+
     static func profile(for model: AIModel) -> MemoryProfile? {
-        model.isImported ? importedProfile(for: model) : profile(for: model.id, usesGPU: model.config.gpuLayers > 0)
+        if model.isImported { return importedProfile(for: model) }
+#if DEBUG
+        if forceCPUVision { return profile(for: model.id, usesGPU: false) }
+#endif
+        return profile(for: model.id, usesGPU: model.config.gpuLayers > 0)
     }
 
     /// Imported models have no retained device calibration yet. The estimate is
