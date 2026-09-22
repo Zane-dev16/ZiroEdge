@@ -344,6 +344,19 @@ struct AppShellView: View {
                 }
             }
 
+            // E2E: report disk truth for registry models (phantom probe).
+            // Prints managed-dir existence + byte size per model, no hashing.
+            // Usage: --e2e-disk-check
+            if CommandLine.arguments.contains("--e2e-disk-check") {
+                for model in ModelRegistry.libraryModels {
+                    let url = ModelManagerService.baseModelPath(for: model)
+                    var isDir: ObjCBool = false
+                    let exists = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
+                    let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? UInt64) ?? 0
+                    print("[FM-DISK] id=\(model.id) exists=\(exists ? 1 : 0) bytes=\(size)")
+                }
+            }
+
             // E2E: drive the FULL HuggingFace import flow headlessly.
             // Mirrors --uitesting-sendtest style; skipped under XCTest hosts.
             if CommandLine.arguments.contains("--e2e-hf-import") {
