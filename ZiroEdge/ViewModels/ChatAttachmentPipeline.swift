@@ -8,8 +8,19 @@
 // change — the pipeline is byte-for-byte identical).
 
 import ImageIO
+import SwiftLlama
 import SwiftUI
 import UniformTypeIdentifiers
+
+/// Pending attach-time vision choice: the original bytes plus the safe
+/// target the gate computed. The alert offers exactly [Send smaller
+/// version] (attaches the downscale) and [Cancel] (attaches nothing) —
+/// never proceed-with-original.
+struct VisionDownscaleOffer: Equatable {
+    let original: Data
+    let width: Int
+    let height: Int
+}
 
 extension ChatViewModel {
     // MARK: - Image Attachment
@@ -41,9 +52,55 @@ extension ChatViewModel {
 
     /// Add an image to the pending attachments. Validates size and downsamples if needed.
     /// Decoding/downsampling runs off the main actor via ImageIO, so multi-megabyte
-    /// photos never freeze the UI.
+    /// photos never freeze the UI. Conservative gate: over-safe images are downscaled
+    /// TO the safe size (never refused when downscalable); an unfixable
+    /// history or a tiny result surfaces a two-option choice (smaller
+    /// version / cancel) instead of risking a decode abort.
     func addImage(_ data: Data) async {
-        let output = await Self.prepareAttachment(data)
+        if let dims = Self.pixelDimensions(of: data) {
+            let budget = visionBudgetParams()
+            switch LlamaEngine.visionGate(
+                imageWidth: dims.width, imageHeight: dims.height,
+                promptTokens: budget.promptTokens,
+                contextLength: budget.contextLength, maxTokens: budget.maxTokens
+            ) {
+            case .fits:
+                applyAttachment(await Self.prepareAttachment(data))
+            case .downscaledTo(let width, let height)
+                where min(width, height) >= LlamaEngine.visionUsefulMinPixels:
+                applyAttachment(await Self.prepareAttachment(data, visionBudget: (width, height)))
+            case .downscaledTo(let width, let height):
+                // Tiny result (panorama sliver): ask instead of silently degrading.
+                visionDownscaleOffer = VisionDownscaleOffer(original: data, width: width, height: height)
+            case .refused:
+                // History too heavy (or invalid dims): offer the safe
+                // downscale, never the original. Send re-gates and fails
+                // closed if the history still cannot fit it.
+                guard dims.width > 0, dims.height > 0 else {
+                    visionWarning = "Image does not fit the remaining context window."
+                    return
+                }
+                let safe = LlamaEngine.visionSafeDownscale(imageWidth: dims.width, imageHeight: dims.height)
+                visionDownscaleOffer = VisionDownscaleOffer(original: data, width: safe.width, height: safe.height)
+            }
+            return
+        }
+        applyAttachment(await Self.prepareAttachment(data))
+    }
+
+    /// Choice confirm: attaches the safe downscale (always ≤ safe long edge).
+    func confirmVisionDownscale() async {
+        guard let offer = visionDownscaleOffer else { return }
+        visionDownscaleOffer = nil
+        applyAttachment(await Self.prepareAttachment(offer.original, visionBudget: (offer.width, offer.height)))
+    }
+
+    /// Choice cancel: attaches nothing.
+    func cancelVisionDownscale() {
+        visionDownscaleOffer = nil
+    }
+
+    private func applyAttachment(_ output: AttachmentPipelineOutput) {
         switch output.preparation {
         case .ready(let bytes):
             pendingImages.append(bytes)
@@ -57,17 +114,48 @@ extension ChatViewModel {
         }
     }
 
+    /// Budget params for the next attach: transcript tokens via the Batch4
+    /// helper, vision ctx/maxTokens from the selected model (vision presets:
+    /// ctx 4096, default maxTokens 2048). Sibling images split first:
+    /// perImage = (available - 3*N) / N, folded back into promptTokens so the
+    /// one-image function budgets exactly this image's share (N == 1 is identity).
+    private func visionBudgetParams() -> (promptTokens: Int, contextLength: Int, maxTokens: Int) {
+        let transcriptChars = messages.reduce(0) { $0 + $1.content.count }
+            + inputText.count + (activeConversationSystemPrompt?.count ?? 0)
+        let promptTokens = Self.estimatedTokens(characterCount: transcriptChars)
+        let contextLength = selectedModel?.config.contextLength ?? 4096
+        let maxTokens = selectedModel?.config.defaultSampling.maxTokens ?? SamplingConfig.default.maxTokens
+        let imageCount = pendingImages.count + 1
+        let reserve = max(1, maxTokens)
+        let available = contextLength - promptTokens - reserve - 1 - LlamaEngine.visionTokenMargin - 3
+        let perImage = (available - 3 * imageCount) / imageCount
+        let adjustedPromptTokens = contextLength - reserve - 1 - LlamaEngine.visionTokenMargin - 3 - perImage
+        return (adjustedPromptTokens, contextLength, maxTokens)
+    }
+
     /// Decode, validate, and downsample attachment data using ImageIO.
     ///
     /// Nonisolated async functions execute on the cooperative thread pool, never on
     /// the main thread, so full-resolution bitmaps are never materialized for the UI.
     nonisolated static func prepareAttachment(_ data: Data) async -> AttachmentPipelineOutput {
+        await prepareAttachmentCore(data, maxPixelSize: Int(Self.maxImageDimension))
+    }
+
+    /// Budgeted overload: the token budget only shrinks below the absolute
+    /// ceiling — `maxImageDimension` stays. Pass-through and legacy fallback
+    /// semantics are unchanged.
+    nonisolated static func prepareAttachment(_ data: Data, visionBudget: (width: Int, height: Int)) async -> AttachmentPipelineOutput {
+        let ceiling = min(Int(Self.maxImageDimension), max(visionBudget.width, visionBudget.height))
+        return await prepareAttachmentCore(data, maxPixelSize: ceiling)
+    }
+
+    private nonisolated static func prepareAttachmentCore(_ data: Data, maxPixelSize: Int) async -> AttachmentPipelineOutput {
         let startedOnMainThread = isExecutingOnMainThread
 
         // Read pixel bounds without decoding the bitmap.
         let dimensions = Self.pixelDimensions(of: data)
         let exceedsPixelBudget = dimensions.map {
-            $0.width > Int(Self.maxImageDimension) || $0.height > Int(Self.maxImageDimension)
+            $0.width > maxPixelSize || $0.height > maxPixelSize
         } ?? false
 
         let preparation: AttachmentPreparation
@@ -75,7 +163,7 @@ extension ChatViewModel {
             // Small enough already: attach as-is (matches legacy pass-through,
             // including undecodable payloads, which report no dimensions).
             preparation = .ready(data)
-        } else if let cgImage = Self.downsampledCGImage(from: data, maxPixelSize: Int(Self.maxImageDimension)),
+        } else if let cgImage = Self.downsampledCGImage(from: data, maxPixelSize: maxPixelSize),
                   let jpeg = Self.jpegData(from: cgImage, quality: 0.8) {
             preparation = .ready(jpeg)
         } else if data.count > Self.maxImageBytes {
@@ -105,7 +193,8 @@ extension ChatViewModel {
     }
 
     /// Read pixel width/height from image metadata without decoding the bitmap.
-    private nonisolated static func pixelDimensions(of data: Data) -> (width: Int, height: Int)? {
+    /// Internal for the send-time budget gate (no new decoder there).
+    nonisolated static func pixelDimensions(of data: Data) -> (width: Int, height: Int)? {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
               let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
               let width = properties[kCGImagePropertyPixelWidth] as? Int,
@@ -137,6 +226,7 @@ extension ChatViewModel {
     func clearImages() {
         pendingImages.removeAll()
         visionWarning = nil
+        visionDownscaleOffer = nil
     }
 
     /// Attempt to paste an image from the clipboard.

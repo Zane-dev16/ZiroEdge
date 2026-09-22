@@ -477,6 +477,24 @@ extension InferenceService {
             presencePenalty: sampling.presencePenalty
         )
 
+        // Send-time re-budget: history may have grown since attach. Fail
+        // closed pre-decode; the engine preflight stays the final backstop.
+        // DEBUG-only probe bypass (`--vision-probe-bypass`, like
+        // `--vision-force-cpu`) lets threshold probes reach eval; prod (no
+        // flag) keeps refusing over-safe images.
+#if DEBUG
+        let probeBypass = CommandLine.arguments.contains("--vision-probe-bypass")
+#else
+        let probeBypass = false
+#endif
+        try Self.throwIfVisionExceedsBudget(
+            messages: templateMessages,
+            images: images,
+            contextLength: config.contextLength,
+            maxTokens: engineSampling.maxTokens,
+            probeBypass: probeBypass
+        )
+
         let imageEvaluationStarted = ContinuousClock.now
         let stream = try await gatedGenerationStream {
             switch config.promptPath {
@@ -515,6 +533,66 @@ extension InferenceService {
             firstEvaluationCheckpoint: .firstImageEval,
             evaluationStarted: imageEvaluationStarted
         )
+    }
+
+    /// Send-time vision gate: re-gates every image against the current
+    /// history (chars/4 via the Batch4 helper, no new estimator). Sibling
+    /// images split first, same as attach. Throws
+    /// `LlamaError.contextWindowExceeded` instead of reaching eval unless
+    /// every decodable image fits as-is — attach already downscaled anything
+    /// over-safe, so an over-threshold image here bypassed attach and must
+    /// never reach eval. Pure (sync, no engine) for hermetic tests.
+    /// - Parameter probeBypass: DEBUG-only threshold-probe bypass
+    ///   (`--vision-probe-bypass`): over-safe-but-downscalable images pass
+    ///   through to the engine `visionPrefixFits` preflight (where n_pos /
+    ///   peak / console logging happens) instead of refusing. History-too-
+    ///   heavy and invalid dims still refuse. Honored in DEBUG only; release
+    ///   always refuses regardless of the flag.
+    static func throwIfVisionExceedsBudget(
+        messages: [(role: String, content: String)],
+        images: [Data],
+        contextLength: Int,
+        maxTokens: Int,
+        probeBypass: Bool = false
+    ) throws {
+        let promptTokens = ChatViewModel.estimatedTokens(
+            characterCount: messages.reduce(0) { $0 + $1.content.count }
+        )
+        let imageCount = max(1, images.count)
+        let reserve = max(1, maxTokens)
+        let available = contextLength - promptTokens - reserve - 1 - LlamaEngine.visionTokenMargin - 3
+        let perImage = (available - 3 * imageCount) / imageCount
+        let adjustedPromptTokens = contextLength - reserve - 1 - LlamaEngine.visionTokenMargin - 3 - perImage
+        let ceiling = Int(ChatViewModel.maxImageDimension)
+        for image in images {
+            guard let dims = ChatViewModel.pixelDimensions(of: image) else {
+                // Undecodable bytes cannot be measured; assume the attach
+                // ceiling (legacy). Only a refusal throws here — the engine
+                // preflight stays the backstop for these.
+                let gate = LlamaEngine.visionGate(
+                    imageWidth: ceiling, imageHeight: ceiling,
+                    promptTokens: adjustedPromptTokens,
+                    contextLength: contextLength, maxTokens: maxTokens
+                )
+                if case .refused = gate {
+                    throw LlamaError.contextWindowExceeded
+                }
+                continue
+            }
+            let gate = LlamaEngine.visionGate(
+                imageWidth: dims.width, imageHeight: dims.height,
+                promptTokens: adjustedPromptTokens,
+                contextLength: contextLength, maxTokens: maxTokens
+            )
+            if gate == .fits { continue }
+#if DEBUG
+            // Threshold probe: over-safe-but-downscalable images reach the
+            // engine preflight (n_pos/peak/console logging) instead of
+            // refusing. History-too-heavy / invalid dims still throw.
+            if probeBypass, case .downscaledTo = gate { continue }
+#endif
+            throw LlamaError.contextWindowExceeded
+        }
     }
 
     /// Serializes engine-stream creation through the generation gate. Throws

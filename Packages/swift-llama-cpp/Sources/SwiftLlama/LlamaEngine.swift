@@ -479,6 +479,8 @@ extension LlamaEngine {
                     // (SIGABRT, uncatchable) on n_ctx overflow. Fail closed here.
                     // ponytail: no downscale/per-chunk loop without token-census evidence.
                     let chunkPositions = Int(mtmd_helper_get_n_pos(chunks))
+                    Self.lastVisionChunkPositions = chunkPositions
+                    print("[VISION-BUDGET] n_pos=\(chunkPositions) ctx=\(config.contextLength) maxTokens=\(sampling.maxTokens)")
                     if !Self.visionPrefixFits(chunkPositions: chunkPositions, contextLength: config.contextLength, maxTokens: sampling.maxTokens) {
                         logger.fault("Vision prefix exceeds context window nPos=\(chunkPositions, privacy: .public) ctx=\(self.config.contextLength, privacy: .public)")
                         throw LlamaError.contextWindowExceeded
@@ -700,6 +702,67 @@ private extension LlamaEngine {
     /// Callers pass n_pos (M-RoPE-aware), not n_tokens. Pure for tests.
     public nonisolated static func visionPrefixFits(chunkPositions: Int, contextLength: Int, maxTokens: Int) -> Bool {
         chunkPositions + max(1, maxTokens) + 1 <= contextLength
+    }
+
+    // Conservative gate: fitted census math (441 positions fits 512) APPROVED
+    // a 1024px image that SIGABRTd in eval — positions-predict-safety is
+    // falsified. Cap to visionSafeMaxPixels; refuse only when history alone
+    // fills the window. `visionPrefixFits` stays the backstop.
+    /// Safe long edge: 512px fixtures pass, 1024px aborts; SPEC-typical input.
+    /// UNMEASURED: the device threshold phase produced no artifacts (phone
+    /// locked, run blocked pre-probe), so this stays conservative. Device
+    /// phase raises with proof.
+    public nonisolated static let visionSafeMaxPixels = 512
+    /// Silent-downscale floor: a downscale whose short edge stays at/above
+    /// this attaches without asking; below it (panorama slivers) the attach
+    /// offers a choice instead of silently degrading to a thumbnail.
+    public nonisolated static let visionUsefulMinPixels = 256
+    private nonisolated static let visionMarkerTokens = 3
+    /// Token margin: chars/4 noise + template drift.
+    /// Named constant, test-overridable per call only.
+    public nonisolated static let visionTokenMargin = 64
+    /// Last observed mtmd n_pos (M-RoPE-aware chunk positions) from a vision eval.
+    /// Updated on every vision eval (success or preflight refusal); read by the
+    /// DEBUG-only budget-proof harness. Starts at 0 (no eval yet this launch).
+    public nonisolated(unsafe) static var lastVisionChunkPositions: Int = 0
+
+    /// Typed attach outcome for UI. Pure for tests.
+    public enum VisionGateResult: Equatable, Sendable {
+        case fits, downscaledTo(width: Int, height: Int), refused(reason: VisionGateReason)
+    }
+    public enum VisionGateReason: Equatable, Sendable { case historyTooHeavy, invalidDimensions }
+
+    /// One image: refuse when history alone fills the window or dims are
+    /// invalid; downscale over-safe long edges TO safe (aspect-preserved,
+    /// never upscaled). Multi-image callers divide first and gate one here.
+    public nonisolated static func visionGate(imageWidth: Int, imageHeight: Int, promptTokens: Int, contextLength: Int, maxTokens: Int, margin: Int = visionTokenMargin) -> VisionGateResult {
+        guard imageWidth > 0, imageHeight > 0 else { return .refused(reason: .invalidDimensions) }
+        guard contextLength - promptTokens - max(1, maxTokens) - 1 - margin > visionMarkerTokens else { return .refused(reason: .historyTooHeavy) }
+        let longEdge = max(imageWidth, imageHeight)
+        guard longEdge > visionSafeMaxPixels else { return .fits }
+        let safe = visionSafeDownscale(imageWidth: imageWidth, imageHeight: imageHeight)
+        return .downscaledTo(width: safe.width, height: safe.height)
+    }
+
+    /// Aspect-preserved fit of valid dims to the safe long edge. Never
+    /// upscales; shared by the gate and the refused-path choice offer so the
+    /// "smaller version" copy cannot diverge from gate math.
+    public nonisolated static func visionSafeDownscale(imageWidth: Int, imageHeight: Int) -> (width: Int, height: Int) {
+        let scale = min(1.0, Double(visionSafeMaxPixels) / Double(max(imageWidth, imageHeight)))
+        return (
+            width: max(1, Int((Double(imageWidth) * scale).rounded(.down))),
+            height: max(1, Int((Double(imageHeight) * scale).rounded(.down)))
+        )
+    }
+
+    /// Compat (DEBUG harness): gate as an optional target size. Never upscales.
+    public nonisolated static func visionTargetSize(imageWidth: Int, imageHeight: Int, promptTokens: Int, contextLength: Int, maxTokens: Int, margin: Int = visionTokenMargin
+    ) -> (width: Int, height: Int)? {
+        switch visionGate(imageWidth: imageWidth, imageHeight: imageHeight, promptTokens: promptTokens, contextLength: contextLength, maxTokens: maxTokens, margin: margin) {
+        case .fits: return (imageWidth, imageHeight)
+        case .downscaledTo(let outWidth, let outHeight): return (outWidth, outHeight)
+        case .refused: return nil
+        }
     }
 
     // MARK: - Tokenization
