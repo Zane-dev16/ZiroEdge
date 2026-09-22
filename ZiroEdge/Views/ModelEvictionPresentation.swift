@@ -67,6 +67,7 @@ enum ZiroAlert: Identifiable, Equatable {
     case memoryWarning(modelName: String?)
     case loadFailure(message: String)
     case insufficientMemory(message: String)
+    case visionDownscale(modelName: String)
 
     var id: String {
         switch self {
@@ -75,6 +76,7 @@ enum ZiroAlert: Identifiable, Equatable {
         case .memoryWarning: return "memoryWarning"
         case .loadFailure: return "loadFailure"
         case .insufficientMemory: return "insufficientMemory"
+        case .visionDownscale: return "visionDownscale"
         }
     }
 
@@ -86,6 +88,7 @@ enum ZiroAlert: Identifiable, Equatable {
         case .memoryWarning: return ModelEvictionPresentation.alertTitle
         case .loadFailure: return "Model Load Failed"
         case .insufficientMemory: return "Model Needs More Memory"
+        case .visionDownscale: return "Photo Too Detailed"
         }
     }
 
@@ -103,14 +106,23 @@ enum ZiroAlert: Identifiable, Equatable {
             return message
         case .insufficientMemory(let message):
             return message
+        case .visionDownscale(let modelName):
+            return "This photo is too detailed for \(modelName) on this iPhone. " +
+                "Send a smaller version instead?"
         }
     }
 
     /// Chat queue priority (pure for tests): experimental consent wins over
-    /// the delete confirmation.
-    static func chatQueue(experimentalConsent: Bool, deleteConversation: Bool) -> ZiroAlert? {
+    /// the delete confirmation, which wins over the vision-downscale choice.
+    /// `visionChoiceModelName` is non-nil iff a downscale offer is pending
+    /// (call sites resolve the display-name fallback, keeping this pure).
+    static func chatQueue(
+        experimentalConsent: Bool, deleteConversation: Bool,
+        visionChoiceModelName: String? = nil
+    ) -> ZiroAlert? {
         if experimentalConsent { return .experimentalConsent }
         if deleteConversation { return .deleteConversation }
+        if let visionChoiceModelName { return .visionDownscale(modelName: visionChoiceModelName) }
         return nil
     }
 

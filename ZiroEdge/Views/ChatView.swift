@@ -195,6 +195,13 @@ struct ChatView: View {
                 Button("Cancel", role: .cancel) {
                     showDeleteChatConfirmation = false
                 }
+            case .visionDownscale:
+                Button("Send smaller version") {
+                    Task { await viewModel.confirmVisionDownscale() }
+                }
+                Button("Cancel", role: .cancel) {
+                    viewModel.cancelVisionDownscale()
+                }
             default:
                 Button("OK", role: .cancel) {}
             }
@@ -863,7 +870,10 @@ extension ChatView {
     private var chatAlertQueue: ZiroAlert? {
         ZiroAlert.chatQueue(
             experimentalConsent: viewModel.showingExperimentalConsent,
-            deleteConversation: showDeleteChatConfirmation
+            deleteConversation: showDeleteChatConfirmation,
+            visionChoiceModelName: viewModel.visionDownscaleOffer.map { _ in
+                viewModel.selectedModel?.displayName ?? "this model"
+            }
         )
     }
 

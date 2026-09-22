@@ -145,6 +145,9 @@ final class ChatViewModel: ObservableObject {
 
     /// Warning shown when user tries to send images with a text-only model.
     @Published var visionWarning: String?
+    /// Pending attach-time vision choice (nil when no choice is outstanding).
+    /// Cleared with the staged attachments on conversation switch.
+    @Published var visionDownscaleOffer: VisionDownscaleOffer?
 
 #if DEBUG
     /// Test hook injected between the two awaits in sendMessage to simulate
@@ -522,6 +525,7 @@ final class ChatViewModel: ObservableObject {
         if previousConversationID != conversationID {
             pendingImages = []
             visionWarning = nil
+            visionDownscaleOffer = nil
         }
         activeConversationID = conversationID
         activeConversationTitle = conversation.title
@@ -539,6 +543,7 @@ final class ChatViewModel: ObservableObject {
             // FM-aware unavailable banner (copy handled at the banner).
             unavailableConversationModelID = nil
             if selectEngine(.appleIntelligence) {
+                print("[FM-CONV] opened apple-intelligence conversation, FM engine active")
                 needsModelRedirect = false
             } else {
                 unavailableConversationModelID = conversation.modelID
@@ -592,6 +597,7 @@ final class ChatViewModel: ObservableObject {
         // sent into the wrong conversation. beginNewDraft funnels through here.
         pendingImages = []
         visionWarning = nil
+        visionDownscaleOffer = nil
         // A fresh draft orphans any retained partial response: release the
         // recovery outright (P1-5) so its banner can never follow onto the
         // unsaved chat. Switching between persisted conversations keeps the
