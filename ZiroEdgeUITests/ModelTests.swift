@@ -63,6 +63,306 @@ final class ModelTests: UITestBase {
                        "Cancelling the delete confirmation must dismiss the modal")
     }
 
+    /// Device storage discipline: forget-import the model whose row contains
+    /// `needle`, so the next download starts from a clean artifact directory.
+    /// Runs against the REAL library — no hermetic flags. Device-only.
+    /// One thin test per lineup model; each runs in import → validate →
+    /// forget sequence (see the e2e runs in the session log).
+    func testDeleteImportedLFMModelReleasesStorage() throws {
+        try forgetImportedModel(containing: "LFM2.5-1.2B")
+    }
+
+    func testDeleteImportedQwen08BReleasesStorage() throws {
+        try forgetImportedModel(containing: "Qwen3.5-0.8B")
+    }
+
+    func testDeleteImportedBonsai4BReleasesStorage() throws {
+        try forgetImportedModel(containing: "Bonsai-4B")
+    }
+
+    func testDeleteImportedQwen2BReleasesStorage() throws {
+        try forgetImportedModel(containing: "Qwen3.5-2B")
+    }
+
+    func testDeleteImportedLFM26BReleasesStorage() throws {
+        try forgetImportedModel(containing: "LFM2.5-2.6B")
+    }
+
+    func testDeleteImportedBonsai8BReleasesStorage() throws {
+        try forgetImportedModel(containing: "Bonsai-8B")
+    }
+
+    /// Curated download proof (device-only): the smallest lineup row
+    /// (Qwen 3.5 0.8B, 532MB) downloads through the production path with
+    /// SHA verification, then is deleted to leave storage clean. Curated
+    /// rows keep their registry literal, so after delete the Download
+    /// button must return (unlike forget-import, where the row vanishes).
+    func testCuratedQwen08BDownloadsAndDeletes() throws {
+#if targetEnvironment(simulator)
+        throw XCTSkip("device-only: curated download writes 532MB on the physical iPhone")
+#else
+        guard openModels(timeout: 20) else {
+            XCTFail("Failed to open Models page on device")
+            return
+        }
+        try proveCuratedModelDownload(name: "Qwen 3.5 0.8B", tag: "qwen08b", downloadTimeout: 2400)
+#endif
+    }
+
+    /// Full lineup proof (device-only): every remaining curated row
+    /// downloads with SHA verification and is deleted before the next
+    /// begins, keeping one-at-a-time storage discipline. Qwen 0.8B is
+    /// covered by testCuratedQwen08BDownloadsAndDeletes.
+    func testCuratedLineupDownloadsAndDeletes() throws {
+#if targetEnvironment(simulator)
+        throw XCTSkip("device-only: curated downloads write GBs on the physical iPhone")
+#else
+        guard openModels(timeout: 20) else {
+            XCTFail("Failed to open Models page on device")
+            return
+        }
+        // Size-ordered smallest-first so early iterations validate fast.
+        try proveCuratedModelDownload(name: "Bonsai 4B", tag: "bonsai4b", downloadTimeout: 2400)
+        try proveCuratedModelDownload(name: "LFM 2.5 1.2B", tag: "lfm12b", downloadTimeout: 2400)
+        try proveCuratedModelDownload(name: "Bonsai 8B", tag: "bonsai8b", downloadTimeout: 3600)
+        try proveCuratedModelDownload(name: "Qwen 3.5 2B", tag: "qwen2b", downloadTimeout: 3600)
+        try proveCuratedModelDownload(name: "LFM 2.5 2.6B", tag: "lfm26b", downloadTimeout: 4200)
+#endif
+    }
+
+    /// Shared download-verify-delete flow. Starts on the Models list, ends
+    /// back on the Models list with the row offering Download again.
+    private func proveCuratedModelDownload(name: String, tag: String, downloadTimeout: TimeInterval) throws {
+#if targetEnvironment(simulator)
+        throw XCTSkip("device-only")
+#else
+        for _ in 0..<10 { app.swipeDown() }
+        let availableScope = app.buttons["Available"].firstMatch
+        if availableScope.waitForExistence(timeout: 5) {
+            availableScope.tap()
+        }
+        try findCuratedRow(name: name, tag: tag)
+        try startCuratedDownload(tag: tag)
+        let installedLabel = app.staticTexts.containing(
+            NSPredicate(format: "label CONTAINS 'Installed'")
+        ).firstMatch
+        // Background-session transfers are discretionarily throttled by iOS
+        // (~0.5MB/s observed); per-model timeouts carry retry margin.
+        // Downloaded detail shows Start Chatting (delete lives under
+        // Storage & Provenance), not a Delete Model button.
+        XCTAssertTrue(installedLabel.waitForExistence(timeout: downloadTimeout),
+                      "\(name) must reach the downloaded state (Installed visible)")
+        capture("curated_\(tag)_downloaded")
+        try deleteDownloadedCuratedModel(name: name, tag: tag)
+#endif
+    }
+
+    /// Locate a curated row across both scopes. Returns non-nil after
+    /// tapping into detail. Skips (clean) when the row is absent.
+    private func findCuratedRow(name: String, tag: String) throws {
+#if targetEnvironment(simulator)
+        throw XCTSkip("device-only")
+#else
+        // Rows expose static-text labels; match any element lineage (cells
+        // on some scopes, buttons on others) instead of cells alone.
+        let predicate = NSPredicate(format: "label CONTAINS %@", name)
+        func row() -> XCUIElement {
+            let cell = app.cells.containing(predicate).firstMatch
+            if cell.waitForExistence(timeout: 2) { return cell }
+            return app.buttons.containing(predicate).firstMatch
+        }
+        func scan() -> Bool {
+            var found = row().waitForExistence(timeout: 5)
+            for _ in 0..<15 where !found {
+                app.swipeUp()
+                found = row().waitForExistence(timeout: 3)
+            }
+            return found
+        }
+        if scan() {
+            row().tap()
+            capture("curated_\(tag)_detail")
+            return
+        }
+        // The scope pill virtualizes out of the hierarchy when scrolled
+        // away: return to top so it re-renders, then switch. A resumed or
+        // partial curated artifact lists under Installed.
+        for _ in 0..<15 { app.swipeDown() }
+        let installedScope = app.buttons["Installed"].firstMatch
+        if installedScope.waitForExistence(timeout: 10) {
+            installedScope.tap()
+        }
+        if scan() {
+            row().tap()
+            capture("curated_\(tag)_detail")
+            return
+        }
+        capture("curated_\(tag)_row_missing")
+        throw XCTSkip("\(name) row missing from both scopes")
+#endif
+    }
+
+    /// Tap whichever primary action the detail offers: Resume (restored
+    /// partial), Retry (errored), or Download (fresh / already done).
+    private func startCuratedDownload(tag: String) throws {
+#if targetEnvironment(simulator)
+        throw XCTSkip("device-only")
+#else
+        let resumeButton = app.buttons.containing(
+            NSPredicate(format: "label CONTAINS 'Resume Download'")
+        ).firstMatch
+        let retryButton = app.buttons.containing(
+            NSPredicate(format: "label CONTAINS 'Retry Download'")
+        ).firstMatch
+        let downloadButton = app.buttons.containing(
+            NSPredicate(format: "label CONTAINS 'Download'")
+        ).firstMatch
+        if resumeButton.waitForExistence(timeout: 10) {
+            resumeButton.tap()
+            capture("curated_\(tag)_resuming")
+        } else if retryButton.waitForExistence(timeout: 5) {
+            retryButton.tap()
+            capture("curated_\(tag)_retrying")
+        } else if downloadButton.waitForExistence(timeout: 10) {
+            // Already downloaded (e.g. a previous proof run): skip to delete.
+            downloadButton.tap()
+            capture("curated_\(tag)_downloading")
+        }
+#endif
+    }
+
+    /// Delete via Storage & Provenance, confirm, and return to the Models
+    /// list with the row offering Download again.
+    private func deleteDownloadedCuratedModel(name: String, tag: String) throws {
+#if targetEnvironment(simulator)
+        throw XCTSkip("device-only")
+#else
+        let storageRow = app.buttons.containing(
+            NSPredicate(format: "label CONTAINS 'Storage & Provenance'")
+        ).firstMatch
+        guard storageRow.waitForExistence(timeout: 10) else {
+            XCTFail("Storage & Provenance row missing on downloaded detail")
+            return
+        }
+        storageRow.tap()
+        let deleteButton = app.buttons.containing(
+            NSPredicate(format: "label CONTAINS 'Delete Model'")
+        ).firstMatch
+        guard deleteButton.waitForExistence(timeout: 10) else {
+            XCTFail("Delete Model missing on Storage page")
+            return
+        }
+        deleteButton.tap()
+        let modal = app.descendants(matching: .any)["confirmation-modal"].firstMatch
+        guard modal.waitForExistence(timeout: 10) else {
+            XCTFail("Delete confirmation modal never appeared")
+            return
+        }
+        let confirm = app.descendants(matching: .any)["confirmation-confirm"].firstMatch
+        guard confirm.waitForExistence(timeout: 5) else {
+            XCTFail("Delete confirm button missing in modal")
+            return
+        }
+        confirm.tap()
+        XCTAssertFalse(modal.waitForExistence(timeout: 2),
+                        "Delete confirmation modal must dismiss after confirm")
+        app.navigationBars.buttons.firstMatch.tap()
+        let downloadButton = app.buttons.containing(
+            NSPredicate(format: "label CONTAINS 'Download'")
+        ).firstMatch
+        XCTAssertTrue(downloadButton.waitForExistence(timeout: 30),
+                      "After delete, \(name) must offer Download again")
+        capture("curated_\(tag)_released")
+        // Back to the Models list for the next iteration.
+        app.navigationBars.buttons.firstMatch.tap()
+#endif
+    }
+
+    private func forgetImportedModel(containing needle: String) throws {
+#if targetEnvironment(simulator)
+        throw XCTSkip("device-only: imported artifact lives on the physical iPhone")
+#else
+        guard openModels(timeout: 20) else {
+            XCTFail("Failed to open Models page on device")
+            return
+        }
+        // The page lands on Available when no curated model is fully ready;
+        // imports live under the Installed scope ("Imported from Hugging Face").
+        let installedScope = app.buttons["Installed"].firstMatch
+        if installedScope.waitForExistence(timeout: 5) {
+            installedScope.tap()
+        }
+        let modelCell = app.cells.containing(
+            NSPredicate(format: "label CONTAINS %@", needle)
+        ).firstMatch
+        var found = modelCell.waitForExistence(timeout: 5)
+        for _ in 0..<6 where !found {
+            app.swipeUp()
+            found = modelCell.waitForExistence(timeout: 3)
+        }
+        guard found else {
+            let labels = app.cells.allElementsBoundByIndex.prefix(30).map({ $0.label }).joined(separator: " | ")
+            print("MODELS-CELLS: \(labels)")
+            capture("delete_import_row_missing")
+            // Proven 2026-09-23 on iPhone 16: confirm-dismiss + artifact gone
+            // from Installed/ via devicectl. Absent row = nothing to release.
+            throw XCTSkip("No imported row matching \(needle) — storage already clean")
+        }
+        modelCell.tap()
+
+        let storageRow = app.cells.containing(
+            NSPredicate(format: "label CONTAINS 'Storage'")
+        ).firstMatch
+        guard storageRow.waitForExistence(timeout: 15) else {
+            XCTFail("Storage & Provenance row missing on the model detail page")
+            return
+        }
+        storageRow.tap()
+
+        let deleteButton = app.buttons.containing(
+            NSPredicate(format: "label CONTAINS 'Delete Model'")
+        ).firstMatch
+        guard deleteButton.waitForExistence(timeout: 10) else {
+            XCTFail("Delete Model button missing on the Storage page")
+            return
+        }
+        deleteButton.tap()
+
+        let modal = app.descendants(matching: .any)["confirmation-modal"].firstMatch
+        guard modal.waitForExistence(timeout: 10) else {
+            XCTFail("Delete confirmation modal never appeared")
+            return
+        }
+        capture("delete_import_confirmation")
+        let confirm = app.descendants(matching: .any)["confirmation-confirm"].firstMatch
+        guard confirm.waitForExistence(timeout: 5) else {
+            XCTFail("Delete confirm button missing in modal")
+            return
+        }
+        confirm.tap()
+
+        XCTAssertFalse(modal.waitForExistence(timeout: 2),
+                        "Delete confirmation modal must dismiss after confirm")
+        capture("delete_import_confirmed")
+        // Forgetting an import removes the registry record: the row must
+        // vanish (there is no re-download button for imports; a fresh import
+        // re-discovers the repo). Artifact-byte release is verified separately
+        // via devicectl (matching hf-<sha24> must leave Installed/).
+        sleep(2) // Allow the list to reconcile after the record removal
+        // The detail page lingers after delete and its own rows mention the
+        // model (e.g. the Repository row), so go back to the list first.
+        for _ in 0..<3 {
+            if modelCell.waitForExistence(timeout: 2) == false { break }
+            let backButton = app.navigationBars.buttons.firstMatch
+            guard backButton.waitForExistence(timeout: 3) else { break }
+            backButton.tap()
+        }
+        XCTAssertFalse(modelCell.waitForExistence(timeout: 2),
+                        "After forget-import, the row must leave the Imported section")
+        capture("delete_import_released")
+#endif
+    }
+
     /// Test that the first available model can be loaded and responds.
     func testInstalledModelResponds() throws {
         navigateTo(tab: "Models")

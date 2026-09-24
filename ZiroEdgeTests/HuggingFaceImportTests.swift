@@ -74,6 +74,26 @@ final class HuggingFaceImportTests: XCTestCase {
         }
     }
 
+    func testInspectionAcceptsLFM2AndQwen35Architectures() async throws {
+        // LFM2.5-1.2B-Instruct (lfm2) + Qwen3.5-2B/0.8B (qwen35) + Qwen3 dense (qwen3):
+        // all backed by stock b9821 kernels (lfm2 #14620, qwen35 qwen35.cpp,
+        // qwen3/Q1_0 upstream #21273 — verified via nm on the pinned xcframework).
+        for architecture in ["lfm2", "qwen3", "qwen35"] {
+            let data = try payload(architecture: architecture, siblings: [artifact("model-Q4_K_M.gguf")])
+            let inspector = HFRepositoryInspector { _ in (data, self.response()) }
+            let review = try await inspector.inspect("acme/model")
+            XCTAssertEqual(review.baseArtifacts.count, 1, "arch \(architecture) should inspect")
+            XCTAssertEqual(review.baseArtifacts.first?.architecture, architecture)
+        }
+    }
+
+    func testInspectionLabelsQ10Filenames() async throws {
+        // Bonsai ships Q1_0 1-bit; the picker label must reflect it, not Unknown.
+        let data = try payload(architecture: "qwen3", siblings: [artifact("Bonsai-8B-Q1_0.gguf")])
+        let review = try await HFRepositoryInspector { _ in (data, self.response()) }.inspect("acme/model")
+        XCTAssertEqual(review.baseArtifacts.first?.quantization, "Q1_0")
+    }
+
     func testInspectionRejectsMissingDigestMalformedSizeAndUnsupportedArchitecture() async throws {
         let cases: [(Data, HFInspectionError)] = [
             (try payload(siblings: [["rfilename": "model.gguf", "size": 16]]), .missingDigest("model.gguf")),

@@ -4,7 +4,7 @@ import XCTest
 final class VariantCapabilityEstimateTests: XCTestCase {
     func testCanonicalQuantizationPrecisionMapping() {
         let cases: [(String, Int?)] = [
-            ("Q2_K", 2), ("Q3_K_M", 3), ("Q4_0", 4), ("Q5_K_M", 5),
+            ("Q1_0", 1), ("Q2_K", 2), ("Q3_K_M", 3), ("Q4_0", 4), ("Q5_K_M", 5),
             ("Q6_K", 6), ("Q7_K", 7), ("Q8_0", 8), ("F16", 16),
             ("BF16", 16), ("Unknown", nil),
         ]

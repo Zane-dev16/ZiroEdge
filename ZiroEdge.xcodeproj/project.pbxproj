@@ -114,8 +114,10 @@
 		8AE4E286EAC7993589DEE298 /* StorageCleanupTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDAFFFD76B609BFDBEA00BA3 /* StorageCleanupTests.swift */; };
 		8CAEA1DB3327ADEFEFAF7749 /* P2BatchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B976F8CF748FE910BCE02D80 /* P2BatchTests.swift */; };
 		8EB704874FD7F17E9A50773E /* DownloadManager+ImportedModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5EC199E03A68C0BA22E425F /* DownloadManager+ImportedModels.swift */; };
+		8EC52CF251D0E8C833C34E7A /* HuggingFaceLineupTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCB17A294AE2C8E666BA1C69 /* HuggingFaceLineupTests.swift */; };
 		8EDAF62707F28FB64B504804 /* ImportedChatCompositionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 440A60B727C591390EC86E87 /* ImportedChatCompositionTests.swift */; };
 		8F7F776200E4CB69FA6ABF24 /* ModelDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 387DC457818126F788BDBB8A /* ModelDetailView.swift */; };
+		92D9F6E0B00178FD5B023A08 /* CatalogLineupTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDDA94D5985B90E0C3F5E92A /* CatalogLineupTests.swift */; };
 		92F264A5827B682E9CC833A2 /* FoundationModelsBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDDC5314A944787DCED46D90 /* FoundationModelsBridgeTests.swift */; };
 		94D00310384A39694C397008 /* PersistenceFailure.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA21BAD9C35A80778AADBEE7 /* PersistenceFailure.swift */; };
 		9551A9134A89D315EE2D2B4E /* VisionChatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07DC1FB1D85AF2096C573AD /* VisionChatTests.swift */; };
@@ -388,6 +390,7 @@
 		DA21BAD9C35A80778AADBEE7 /* PersistenceFailure.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceFailure.swift; sourceTree = "<group>"; };
 		DC832BC073DA224EAC3043C9 /* VisionRejectionRepairTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisionRejectionRepairTests.swift; sourceTree = "<group>"; };
 		DDB90E3A144D9EADA2BDCE0F /* ModelRegistryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelRegistryTests.swift; sourceTree = "<group>"; };
+		DDDA94D5985B90E0C3F5E92A /* CatalogLineupTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CatalogLineupTests.swift; sourceTree = "<group>"; };
 		DDDC5314A944787DCED46D90 /* FoundationModelsBridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FoundationModelsBridgeTests.swift; sourceTree = "<group>"; };
 		E062782C2D43D2D7302B9723 /* DesignSystemGallery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignSystemGallery.swift; sourceTree = "<group>"; };
 		E1A40DF4E9C684D2C73CBEE7 /* LicenseView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LicenseView.swift; sourceTree = "<group>"; };
@@ -415,6 +418,7 @@
 		FA32FFB006B54EC9A7AA1AE3 /* MemoryBudgeterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryBudgeterTests.swift; sourceTree = "<group>"; };
 		FB6503688D985EAD5140D5FA /* ModelMigrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelMigrationTests.swift; sourceTree = "<group>"; };
 		FC62F9915166C3A428F2A879 /* BackgroundDownloadLifecycle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundDownloadLifecycle.swift; sourceTree = "<group>"; };
+		FCB17A294AE2C8E666BA1C69 /* HuggingFaceLineupTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HuggingFaceLineupTests.swift; sourceTree = "<group>"; };
 		FCE578920BBAA116B807CAA9 /* ChatViewModel+TranscriptActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatViewModel+TranscriptActions.swift"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -639,6 +643,7 @@
 				5414A416B87503F91E36C7F0 /* Batch23ImagePipelineTests.swift */,
 				D79222DD49FA3359BD00F3FF /* Batch24VisionBudgetTests.swift */,
 				B1DD2E57188D48275A834354 /* BoundedVerificationTests.swift */,
+				DDDA94D5985B90E0C3F5E92A /* CatalogLineupTests.swift */,
 				BA6F7F043FCBD8CDA3179D6F /* ChatTranscriptPresentationTests.swift */,
 				CDA3D7504BF8CD7CDA9BE445 /* ChatUXTests.swift */,
 				816C6B541E5012339E31CAB1 /* ConversationHistoryEligibilityTests.swift */,
@@ -651,6 +656,7 @@
 				DDDC5314A944787DCED46D90 /* FoundationModelsBridgeTests.swift */,
 				4883E4DECBEC5AFCEB01B952 /* GenerationGateTests.swift */,
 				F326C43E59F135B73796DCCA /* HuggingFaceImportTests.swift */,
+				FCB17A294AE2C8E666BA1C69 /* HuggingFaceLineupTests.swift */,
 				440A60B727C591390EC86E87 /* ImportedChatCompositionTests.swift */,
 				720366CE0BE5BA12FD5EACA2 /* ImportedModelConfigurationTests.swift */,
 				C78E5C9EFE0C3FDFCE037A38 /* ImportedModelLoadFailureTests.swift */,
@@ -902,6 +908,7 @@
 				EFF35D59FCA93E2713D8E8C1 /* Batch24VisionBudgetTests.swift in Sources */,
 				C936F4BA4DC3DFA54A087A89 /* Batch4TokenEstimatorTests.swift in Sources */,
 				2CA9459765DE0FD509952BA5 /* BoundedVerificationTests.swift in Sources */,
+				92D9F6E0B00178FD5B023A08 /* CatalogLineupTests.swift in Sources */,
 				698402B615DF404FDB454A25 /* ChatTranscriptPresentationTests.swift in Sources */,
 				9E55E4716493115AFEB5D119 /* ChatUXTests.swift in Sources */,
 				89FDF43AFCC905D098565544 /* ConversationHistoryEligibilityTests.swift in Sources */,
@@ -914,6 +921,7 @@
 				92F264A5827B682E9CC833A2 /* FoundationModelsBridgeTests.swift in Sources */,
 				128E086810611ACA1A0B5369 /* GenerationGateTests.swift in Sources */,
 				36F06E1E35A9F36342000440 /* HuggingFaceImportTests.swift in Sources */,
+				8EC52CF251D0E8C833C34E7A /* HuggingFaceLineupTests.swift in Sources */,
 				BE0AA8C78C349B7CA5A838D3 /* ImportRejectionTests.swift in Sources */,
 				CA33BA029597FDFD306841A4 /* ImportRelaunchPersistenceTests.swift in Sources */,
 				04A3588F3DB6A23052798267 /* ImportStoragePreflightTests.swift in Sources */,
