@@ -528,7 +528,14 @@ struct HFRepositoryInspector: Sendable {
     typealias Loader = @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)
     private let loader: Loader
     private static let supportedArchitectures: Set<String> = [
-        "llama", "gemma", "gemma2", "gemma3", "qwen2", "qwen2vl", "phi3", "mistral", "clip"
+        "llama", "gemma", "gemma2", "gemma3", "qwen2", "qwen2vl", "phi3", "mistral", "clip",
+        // Metal-aware lineup (b9821 kernels verified): lfm2 via #14620/#14705,
+        // qwen35 via qwen35.cpp (merged 2026-02 #19435/#19468), qwen3 dense for
+        // Bonsai-class Qwen3 derivatives. Q1_0 1-bit is upstream (merged Apr 2026
+        // #21273 CPU + Metal/CUDA/Vulkan per docs.prismml.com; b9821 iOS binary
+        // exports dequantize/vec_dot/quantize Q1_0 symbols + FTYPE_MOSTLY_Q1_0).
+        // Ternary TQ1_0/TQ2_0 still needs the PrismML fork per docs — excluded.
+        "lfm2", "qwen3", "qwen35",
     ]
     /// Defensive supported-artifact ceiling. Larger metadata is rejected before
     /// it can influence storage, transfer, or memory arithmetic.
@@ -755,7 +762,7 @@ struct HFRepositoryInspector: Sendable {
 
     private static func quantization(_ filename: String) -> String {
         let upper = filename.uppercased()
-        let patterns = ["Q2_K", "Q3_K_S", "Q3_K_M", "Q3_K_L", "Q4_0", "Q4_K_S", "Q4_K_M", "Q5_0", "Q5_K_S", "Q5_K_M", "Q6_K", "Q8_0", "F16", "BF16"]
+        let patterns = ["Q1_0", "Q2_K", "Q3_K_S", "Q3_K_M", "Q3_K_L", "Q4_0", "Q4_K_S", "Q4_K_M", "Q5_0", "Q5_K_S", "Q5_K_M", "Q6_K", "Q8_0", "F16", "BF16"]
         return patterns.first(where: upper.contains) ?? "Unknown"
     }
 

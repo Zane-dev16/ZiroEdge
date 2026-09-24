@@ -11,6 +11,10 @@
 //   --e2e-repo <repo-id-or-url>         default bartowski/SmolLM2-135M-Instruct-GGUF
 //   --e2e-file <filename.gguf>          default: prefer *Q4_K_M*, else smallest base artifact
 //   --e2e-prompt <text>                 default "Reply with exactly OK."
+//   --e2e-text-only                     skip projector pairing: register the
+//                                       base as text-only even when the repo
+//                                       carries mmproj files (storage-lean
+//                                       text validation; no image attached)
 //   --e2e-download-timeout <seconds>    default 900
 // Terminal markers (last line of every run):
 //   E2E_RESULT: SUCCESS repo=<r> file=<f> modelID=<id> conversationID=<uuid> reply=<text>
@@ -108,7 +112,8 @@ enum HFImportE2ERunner {
         // ---- Step 4: register (or reuse) the imported record ------------------
         // Vision repos carry companion projector artifacts; pick the smallest
         // so the import exercises the full pairing path when one exists.
-        let projector = review.projectorArtifacts.min(by: { $0.size < $1.size })
+        // --e2e-text-only skips pairing for storage-lean text validation.
+        let projector = parsed.textOnly ? nil : review.projectorArtifacts.min(by: { $0.size < $1.size })
         if let projector {
             emit("SELECTED mmproj=\(projector.filename) bytes=\(projector.size) arch=\(projector.architecture)", step: 4)
         }
@@ -292,6 +297,7 @@ enum HFImportE2ERunner {
         var file: String?
         var prompt = "Reply with exactly OK."
         var promptExplicit = false
+        var textOnly = false
         var downloadTimeout = 900
     }
 
@@ -342,6 +348,8 @@ enum HFImportE2ERunner {
                 }
             case "--e2e-download-timeout":
                 parsed.downloadTimeout = Int(value(after: "--e2e-download-timeout") ?? "") ?? parsed.downloadTimeout
+            case "--e2e-text-only":
+                parsed.textOnly = true
             default:
                 break
             }

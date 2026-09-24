@@ -58,7 +58,7 @@ struct VariantCapabilityEstimate: Equatable, Sendable {
     static func precisionBits(for quantization: String) -> Int? {
         let canonical = quantization.uppercased()
         if canonical == "F16" || canonical == "BF16" { return 16 }
-        for bits in 2...8 where canonical.hasPrefix("Q\(bits)") { return bits }
+        for bits in 1...8 where canonical.hasPrefix("Q\(bits)") { return bits }
         return nil
     }
 
