@@ -209,6 +209,23 @@ struct ModelConfiguration: Codable, Sendable, Hashable {
         gpuLayers: autoGpuLayers()
     )
 
+    /// Shared preset for the curated chat-template text lineup (LFM2.5 /
+    /// Qwen3.5 / Bonsai Q1_0). Stop sequences come from each GGUF's embedded
+    /// chat template; sampling stays at app defaults, bounded like imports.
+    static let curatedText4K = ModelConfiguration(
+        promptPath: .chatTemplate,
+        addBos: nil,
+        stopStrings: [],
+        defaultSampling: .default,
+        contextLength: 4096,
+        batchSize: 512,
+        microBatchSize: 128,
+        threadCount: 2,
+        useMmap: true,
+        f16KV: true,
+        gpuLayers: autoGpuLayers()
+    )
+
     /// Gemma 4 — vision model, chat template. Requires BOS token.
     static let gemma4 = ModelConfiguration(
         promptPath: .gemma,

@@ -93,6 +93,48 @@ ship beside the font files in `app/ZiroEdge/Resources/Fonts/`.
 - **URL**: <https://ai.google.dev/gemma/terms>
 - **Attribution**: Based on Google Gemma 4
 
+### LFM 2.5 1.2B (lfm2.5-1.2b-q4)
+
+- **Base model**: LiquidAI LFM 2.5 1.2B Instruct
+- **License**: LFM Open License v1.0
+- **URL**: <https://huggingface.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF>
+- **Attribution**: Official LiquidAI GGUF release, device-validated 2026-09-23
+
+### LFM 2.5 2.6B (lfm2.5-2.6b-q4)
+
+- **Base model**: LiquidAI LFM 2.5 2.6B (base, non-instruct)
+- **License**: LFM Open License v1.0
+- **URL**: <https://huggingface.co/LiquidAI/LFM2.5-2.6B-GGUF>
+- **Attribution**: Official LiquidAI GGUF release, device-validated 2026-09-23
+
+### Qwen 3.5 2B (qwen3.5-2b-q4)
+
+- **Base model**: Qwen 3.5 2B (Alibaba Cloud)
+- **License**: Apache 2.0
+- **URL**: <https://huggingface.co/unsloth/Qwen3.5-2B-GGUF>
+- **Attribution**: Community conversion by unsloth, device-validated 2026-09-23
+
+### Qwen 3.5 0.8B (qwen3.5-0.8b-q4)
+
+- **Base model**: Qwen 3.5 0.8B (Alibaba Cloud)
+- **License**: Apache 2.0
+- **URL**: <https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF>
+- **Attribution**: Community conversion by unsloth, device-validated 2026-09-23
+
+### Bonsai 8B (bonsai-8b-q1)
+
+- **Base model**: PrismML Bonsai 8B (Qwen3-8B dense, end-to-end 1-bit Q1_0)
+- **License**: Apache 2.0
+- **URL**: <https://huggingface.co/prism-ml/Bonsai-8B-gguf>
+- **Attribution**: Official PrismML release, runs on stock llama.cpp b9821, device-validated 2026-09-23
+
+### Bonsai 4B (bonsai-4b-q1)
+
+- **Base model**: PrismML Bonsai 4B (Qwen3-4B dense, end-to-end 1-bit Q1_0)
+- **License**: Apache 2.0
+- **URL**: <https://huggingface.co/prism-ml/Bonsai-4B-gguf>
+- **Attribution**: Official PrismML release, runs on stock llama.cpp b9821, device-validated 2026-09-23
+
 ---
 
 ## mmproj Files
@@ -101,4 +143,4 @@ The multimodal projector (.mmproj.gguf) files for Gemma 4 vision models were sou
 
 ---
 
-*All models are hosted on HuggingFace under the `zanish-labs` organization in GGUF format. Model files are downloaded on-demand by the user and stored locally on the device.*
+*Curated models are hosted on HuggingFace under the `zanish-labs` organization in GGUF format, except the experimental lineup rows above, which pin their upstream sources (official LiquidAI / PrismML repos, unsloth community conversions) at verified revisions. Model files are downloaded on-demand by the user and stored locally on the device.*

@@ -396,6 +396,128 @@ enum ModelRegistry {
     )
     */
 
+    // MARK: - Validated import lineup (text-only, device-verified 2026-09-23)
+
+    /// Shared runtime preset for the chat-template text lineup: bounded ctx
+    /// 4096, 2 threads, mmap + f16 KV, auto Metal tiering. Per-model stop
+    /// strings come from the embedded GGUF chat template.
+    static let lineupText = [
+        AIModel(
+            id: "lfm2.5-1.2b-q4",
+            displayName: "LFM 2.5 1.2B",
+            description: "Everyday default. Fast sub-gigabyte text chat.",
+            modelType: .text,
+            baseURL: URL(string: "https://huggingface.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF/resolve/8ed288026e23958ad9dfa92d53ed773a8eee7125/LFM2.5-1.2B-Instruct-Q4_K_M.gguf")!,
+            mmprojURL: nil,
+            baseFileSizeBytes: 730_895_168,
+            mmprojFileSizeBytes: nil,
+            baseSHA256: "b1b3de114215d9507409a662a501a631095a479a419584e8a2ded6304b19b4f5",
+            mmprojSHA256: nil,
+            quantization: "Q4_K_M",
+            config: .curatedText4K,
+            license: LicenseInfo(
+                name: "LFM Open License v1.0",
+                url: URL(string: "https://huggingface.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF/resolve/8ed288026e23958ad9dfa92d53ed773a8eee7125/LICENSE")!,
+                copyright: "Copyright 2026 Liquid AI"
+            )
+        ),
+        AIModel(
+            id: "lfm2.5-2.6b-q4",
+            displayName: "LFM 2.5 2.6B",
+            description: "On-phone agent flagship. Base model: pair with a strong system prompt.",
+            modelType: .text,
+            baseURL: URL(string: "https://huggingface.co/LiquidAI/LFM2.5-2.6B-GGUF/resolve/e7caca5d835a3901a8e0d63e94009429bafafdfc/LFM2.5-2.6B-Q4_K_M.gguf")!,
+            mmprojURL: nil,
+            baseFileSizeBytes: 1_674_455_040,
+            mmprojFileSizeBytes: nil,
+            baseSHA256: "02a8b7e17487d326e46d68ce0ba24211e1b80a14c4cd0597fa73c1cd697f52ed",
+            mmprojSHA256: nil,
+            quantization: "Q4_K_M",
+            config: .curatedText4K,
+            license: LicenseInfo(
+                name: "LFM Open License v1.0",
+                url: URL(string: "https://huggingface.co/LiquidAI/LFM2.5-2.6B-GGUF/resolve/e7caca5d835a3901a8e0d63e94009429bafafdfc/LICENSE")!,
+                copyright: "Copyright 2026 Liquid AI"
+            )
+        ),
+        AIModel(
+            id: "qwen3.5-2b-q4",
+            displayName: "Qwen 3.5 2B",
+            description: "Long-memory dense text chat. Community conversion, Apache-2.0.",
+            modelType: .text,
+            baseURL: URL(string: "https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/f6d5376be1edb4d416d56da11e5397a961aca8ae/Qwen3.5-2B-Q4_K_M.gguf")!,
+            mmprojURL: nil,
+            baseFileSizeBytes: 1_280_835_840,
+            mmprojFileSizeBytes: nil,
+            baseSHA256: "aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223",
+            mmprojSHA256: nil,
+            quantization: "Q4_K_M",
+            config: .curatedText4K,
+            license: LicenseInfo(
+                name: "Apache 2.0",
+                url: URL(string: "https://www.apache.org/licenses/LICENSE-2.0")!,
+                copyright: "Copyright 2026 Alibaba Cloud"
+            )
+        ),
+        AIModel(
+            id: "qwen3.5-0.8b-q4",
+            displayName: "Qwen 3.5 0.8B",
+            description: "Playground tiny. Fastest downloads, lightest footprint.",
+            modelType: .text,
+            baseURL: URL(string: "https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/6ab461498e2023f6e3c1baea90a8f0fe38ab64d0/Qwen3.5-0.8B-Q4_K_M.gguf")!,
+            mmprojURL: nil,
+            baseFileSizeBytes: 532_517_120,
+            mmprojFileSizeBytes: nil,
+            baseSHA256: "bd258782e35f7f458f8aced1adc053e6e92e89bc735ba3be89d38a06121dc517",
+            mmprojSHA256: nil,
+            quantization: "Q4_K_M",
+            config: .curatedText4K,
+            license: LicenseInfo(
+                name: "Apache 2.0",
+                url: URL(string: "https://www.apache.org/licenses/LICENSE-2.0")!,
+                copyright: "Copyright 2026 Alibaba Cloud"
+            )
+        ),
+        AIModel(
+            id: "bonsai-8b-q1",
+            displayName: "Bonsai 8B",
+            description: "Brains-per-GB flagship. End-to-end 1-bit, 1.15 GB on disk.",
+            modelType: .text,
+            baseURL: URL(string: "https://huggingface.co/prism-ml/Bonsai-8B-gguf/resolve/48516770dd04643643e9f9019a2a349cf26c5dbd/Bonsai-8B-Q1_0.gguf")!,
+            mmprojURL: nil,
+            baseFileSizeBytes: 1_158_654_496,
+            mmprojFileSizeBytes: nil,
+            baseSHA256: "284a335aa3fb2ced3b1b01fcb40b08aa783e3b70832767f0dd2e3fdfa134bd54",
+            mmprojSHA256: nil,
+            quantization: "Q1_0",
+            config: .curatedText4K,
+            license: LicenseInfo(
+                name: "Apache 2.0",
+                url: URL(string: "https://www.apache.org/licenses/LICENSE-2.0")!,
+                copyright: "Copyright 2026 Prism ML"
+            )
+        ),
+        AIModel(
+            id: "bonsai-4b-q1",
+            displayName: "Bonsai 4B",
+            description: "Light density 1-bit. Sub-gigabyte, full-precision-class answers.",
+            modelType: .text,
+            baseURL: URL(string: "https://huggingface.co/prism-ml/Bonsai-4B-gguf/resolve/78f2c2bacd0904ffaba24b4873ed975e5818354a/Bonsai-4B-Q1_0.gguf")!,
+            mmprojURL: nil,
+            baseFileSizeBytes: 572_270_624,
+            mmprojFileSizeBytes: nil,
+            baseSHA256: "4524b3f997f0f06444e568d1f26e2efd69effa3218c7ad3047432fb171e42168",
+            mmprojSHA256: nil,
+            quantization: "Q1_0",
+            config: .curatedText4K,
+            license: LicenseInfo(
+                name: "Apache 2.0",
+                url: URL(string: "https://www.apache.org/licenses/LICENSE-2.0")!,
+                copyright: "Copyright 2026 Prism ML"
+            )
+        ),
+    ]
+
     // MARK: - Registry Access
 
     /// All available models for the current phase.
@@ -406,7 +528,7 @@ enum ModelRegistry {
             gemma4_e4b_text,
             gemma4_e4b,
             // Reference: smolVLM_500M, qwen25VL_3B,
-        ]
+        ] + lineupText
     }
 
     /// Calibration identities are deliberately absent from normal catalog UI and Release builds.
