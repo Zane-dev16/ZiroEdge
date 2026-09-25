@@ -1,6 +1,6 @@
 # ZiroEdge
 
-Privacy-first on-device iOS assistant. It runs llama.cpp models fully offline, so no data leaves the phone. Conversations persist in Core Data across restarts.
+ZiroEdge is an iOS app that runs AI on your phone. Pull any GGUF repo from Hugging Face, download the model, and run offline. No internet, no problem. Conversations persist in Core Data across restarts.
 
 ## Setup
 
