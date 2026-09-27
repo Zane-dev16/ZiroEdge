@@ -537,21 +537,6 @@ extension InferenceService {
 
     // MARK: - Vision seam (delegates to VisionEstimation; no ViewModel import)
 
-    /// Shared sibling-split budget both attach-time and send-time gating use.
-    /// Thin caller over `LlamaEngine.adjustedVisionPromptTokens` (single owner
-    /// for budget math); kept so existing call sites/tests compile unchanged.
-    /// Pure (sync, no engine) for hermetic tests.
-    static func adjustedVisionPromptTokens(
-        promptTokens: Int,
-        contextLength: Int,
-        maxTokens: Int,
-        imageCount: Int
-    ) -> Int {
-        LlamaEngine.adjustedVisionPromptTokens(
-            promptTokens: promptTokens, contextLength: contextLength,
-            maxTokens: maxTokens, imageCount: imageCount)
-    }
-
     /// Send-time vision gate: re-gates every image against the current history.
     /// Throws `LlamaError.contextWindowExceeded` instead of reaching eval unless
     /// every decodable image fits as-is. Pure (sync, no engine) for hermetic tests.

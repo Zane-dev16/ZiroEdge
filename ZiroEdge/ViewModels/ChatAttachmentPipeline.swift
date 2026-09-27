@@ -25,10 +25,6 @@ struct VisionDownscaleOffer: Equatable {
 extension ChatViewModel {
     // MARK: - Image Attachment
 
-    /// Maximum image dimension (width or height) in pixels. Delegates to
-    /// VisionEstimation (single pixel-ceiling owner); kept so existing
-    /// call sites/tests compile unchanged.
-    nonisolated static let maxImageDimension: CGFloat = CGFloat(VisionEstimation.imageCeilingPixels)
     /// Maximum raw image data size before forced downsample (10 MB).
     private nonisolated static let maxImageBytes = 10 * 1024 * 1024
 
@@ -59,7 +55,7 @@ extension ChatViewModel {
     /// history or a tiny result surfaces a two-option choice (smaller
     /// version / cancel) instead of risking a decode abort.
     func addImage(_ data: Data) async {
-        if let dims = Self.pixelDimensions(of: data) {
+        if let dims = VisionEstimation.pixelDimensions(of: data) {
             let budget = visionBudgetParams()
             switch LlamaEngine.admit(
                 imageWidth: dims.width, imageHeight: dims.height,
@@ -136,14 +132,14 @@ extension ChatViewModel {
     /// Nonisolated async functions execute on the cooperative thread pool, never on
     /// the main thread, so full-resolution bitmaps are never materialized for the UI.
     nonisolated static func prepareAttachment(_ data: Data) async -> AttachmentPipelineOutput {
-        await prepareAttachmentCore(data, maxPixelSize: Int(Self.maxImageDimension))
+        await prepareAttachmentCore(data, maxPixelSize: VisionEstimation.imageCeilingPixels)
     }
 
     /// Budgeted overload: the token budget only shrinks below the absolute
-    /// ceiling — `maxImageDimension` stays. Pass-through and legacy fallback
+    /// ceiling — `VisionEstimation.imageCeilingPixels` stays. Pass-through and legacy fallback
     /// semantics are unchanged.
     nonisolated static func prepareAttachment(_ data: Data, visionBudget: (width: Int, height: Int)) async -> AttachmentPipelineOutput {
-        let ceiling = min(Int(Self.maxImageDimension), max(visionBudget.width, visionBudget.height))
+        let ceiling = min(VisionEstimation.imageCeilingPixels, max(visionBudget.width, visionBudget.height))
         return await prepareAttachmentCore(data, maxPixelSize: ceiling)
     }
 
@@ -151,7 +147,7 @@ extension ChatViewModel {
         let startedOnMainThread = isExecutingOnMainThread
 
         // Read pixel bounds without decoding the bitmap.
-        let dimensions = Self.pixelDimensions(of: data)
+        let dimensions = VisionEstimation.pixelDimensions(of: data)
         let exceedsPixelBudget = dimensions.map {
             $0.width > maxPixelSize || $0.height > maxPixelSize
         } ?? false
@@ -188,13 +184,6 @@ extension ChatViewModel {
         ]
         guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
         return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
-    }
-
-    /// Read pixel width/height from image metadata without decoding the bitmap.
-    /// Thin delegate to VisionEstimation (single bounds-reader owner); kept so
-    /// existing call sites/tests compile unchanged.
-    nonisolated static func pixelDimensions(of data: Data) -> (width: Int, height: Int)? {
-        VisionEstimation.pixelDimensions(of: data)
     }
 
     /// Encode a CGImage as JPEG entirely in CoreGraphics (no UIKit round-trip).

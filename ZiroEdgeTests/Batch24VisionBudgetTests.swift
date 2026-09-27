@@ -339,7 +339,7 @@ final class Batch24VisionBudgetTests: XCTestCase {
 
         XCTAssertNil(viewModel.visionDownscaleOffer)
         XCTAssertEqual(viewModel.pendingImages.count, 1)
-        let dims = ChatViewModel.pixelDimensions(of: try XCTUnwrap(viewModel.pendingImages.first))
+        let dims = VisionEstimation.pixelDimensions(of: try XCTUnwrap(viewModel.pendingImages.first))
         XCTAssertLessThanOrEqual(max(dims?.width ?? 0, dims?.height ?? 0), LlamaEngine.visionSafeMaxPixels)
     }
 
@@ -404,7 +404,7 @@ final class Batch24VisionBudgetTests: XCTestCase {
 
         XCTAssertEqual(viewModel.pendingImages.count, 1)
         XCTAssertNil(viewModel.visionWarning)
-        let dims = ChatViewModel.pixelDimensions(of: try XCTUnwrap(viewModel.pendingImages.first))
+        let dims = VisionEstimation.pixelDimensions(of: try XCTUnwrap(viewModel.pendingImages.first))
         XCTAssertLessThanOrEqual(max(dims?.width ?? 0, dims?.height ?? 0), LlamaEngine.visionSafeMaxPixels)
     }
 }

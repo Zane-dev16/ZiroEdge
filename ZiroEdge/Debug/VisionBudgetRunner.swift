@@ -207,7 +207,7 @@ enum VisionBudgetRunner {
         let (vm, _, _) = try await prepareFreshE2BChat(
             services: services, title: "Threshold \(size)px \(mode)")
         let image = try makeJPEG(width: size, height: size, quality: 0.8)
-        let dims = ChatViewModel.pixelDimensions(of: image)
+        let dims = VisionEstimation.pixelDimensions(of: image)
         guard dims?.width == size, dims?.height == size else {
             let got = dims.map { "\($0.width)x\($0.height)" } ?? "nil"
             throw BudgetFailure(reason: "threshold-image-dims got=\(got) want=\(size)x\(size)")
@@ -429,7 +429,7 @@ enum VisionBudgetRunner {
 
     private static func assessAttached(vm: ChatViewModel) -> [String: String] {
         guard let data = vm.pendingImages.first,
-              let dims = ChatViewModel.pixelDimensions(of: data) else {
+              let dims = VisionEstimation.pixelDimensions(of: data) else {
             return ["attachedDims": "unknown", "attachedBytes": String(vm.pendingImages.first?.count ?? 0)]
         }
         return ["attachedDims": "\(dims.width)x\(dims.height)", "attachedBytes": String(data.count)]

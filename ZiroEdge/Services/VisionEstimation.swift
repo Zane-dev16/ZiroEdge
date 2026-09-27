@@ -13,9 +13,8 @@ import ImageIO
 /// Estimation inputs for the `LlamaEngine.admit` seam. Pure and stateless,
 /// so actors and view models can call it from anywhere.
 enum VisionEstimation {
-    /// Absolute pixel ceiling for attached images (long edge). Single source;
-    /// ChatViewModel.maxImageDimension and the send-time undecodable fallback
-    /// both delegate here.
+    /// Absolute pixel ceiling for attached images (long edge). Single source for
+    /// attach-time downscale and the send-time undecodable fallback.
     static let imageCeilingPixels = 1024
 
     /// ~4 characters per token, the standard heuristic for LLM input.

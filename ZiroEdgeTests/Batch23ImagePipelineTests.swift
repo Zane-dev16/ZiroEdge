@@ -2,7 +2,7 @@
 // BATCH-23: attachment image pipeline (ImageIO downsample off the main thread)
 //
 // Verifies that attaching photos:
-//  - downsamples oversized images to ≤ maxImageDimension on the long edge,
+//  - downsamples oversized images to ≤ imageCeilingPixels on the long edge,
 //  - produces valid JPEG output,
 //  - never decodes/resizes on the main thread,
 //  - preserves legacy validation semantics (pass-through, warnings, drops).
@@ -68,7 +68,7 @@ final class Batch23ImagePipelineTests: XCTestCase {
 
     // MARK: - Downsample Pipeline
 
-    /// A large 4000×3000 image must come out at most maxImageDimension on the long
+    /// A large 4000×3000 image must come out at most imageCeilingPixels on the long
     /// edge, aspect ratio preserved, as valid JPEG.
     func testLargeImageDownsamplesToMaxDimension() async throws {
         let input = try makeSolidImageData(width: 4000, height: 3000)
@@ -83,7 +83,7 @@ final class Batch23ImagePipelineTests: XCTestCase {
         try assertJPEG(jpeg, "Output should be valid JPEG")
 
         let dims = try XCTUnwrap(pixelDimensions(of: jpeg), "Output must decode")
-        let maxSide = Int(ChatViewModel.maxImageDimension)
+        let maxSide = VisionEstimation.imageCeilingPixels
         XCTAssertLessThanOrEqual(max(dims.width, dims.height), maxSide)
         // 4000×3000 → 1024×768 (aspect preserved).
         XCTAssertEqual(dims.width, 1024)
@@ -177,7 +177,7 @@ final class Batch23ImagePipelineTests: XCTestCase {
         XCTAssertEqual(viewModel.pendingImages.count, 1)
         XCTAssertNil(viewModel.visionWarning)
         let dims = try XCTUnwrap(pixelDimensions(of: viewModel.pendingImages[0]))
-        XCTAssertLessThanOrEqual(max(dims.width, dims.height), Int(ChatViewModel.maxImageDimension))
+        XCTAssertLessThanOrEqual(max(dims.width, dims.height), VisionEstimation.imageCeilingPixels)
         try assertJPEG(viewModel.pendingImages[0], "Attached bytes should be JPEG")
     }
 }
