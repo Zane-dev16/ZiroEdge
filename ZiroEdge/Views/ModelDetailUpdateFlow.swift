@@ -154,10 +154,7 @@ struct UpdateFlowSheet: View {
                     }
                 ),
                 capabilityEstimate: {
-                    coordinator.capabilityEstimate(
-                        for: $0,
-                        candidates: review.baseArtifacts
-                    )
+                    coordinator.capabilityEstimate(for: $0, in: review)
                 }
             )
         }

@@ -338,12 +338,16 @@ final class ImportedModelUpdateCoordinator: ObservableObject {
         )
     }
 
-    func capabilityEstimate(for artifact: HFArtifact, candidates: [HFArtifact]) -> VariantCapabilityEstimate {
-        VariantCapabilityEstimate(
+    func capabilityEstimate(for artifact: HFArtifact, in review: HFRepositoryReview) -> VariantCapabilityEstimate {
+        // Same pair-resolved projector as ImportViewModel.capabilityEstimate so
+        // the picker card counts the vision adapter at full weight.
+        let projector = pairResolver.bestPair(for: artifact, in: review)?.projector
+        return VariantCapabilityEstimate(
             artifact: artifact,
-            candidates: candidates,
+            candidates: review.baseArtifacts,
             physicalRAM: physicalRAM(),
-            contextLength: artifact.metadata.contextLength ?? 2048
+            contextLength: artifact.metadata.contextLength ?? 2048,
+            projector: projector
         )
     }
 
