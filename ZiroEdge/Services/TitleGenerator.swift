@@ -8,21 +8,11 @@
 import Foundation
 import os
 
-// MARK: - Title Generator Protocol
-
-/// Protocol for title generation. Enables testability.
-protocol TitleGeneratorProtocol: Sendable {
-    func generateTitle(
-        userMessage: String,
-        assistantResponse: String
-    ) async -> String
-}
-
 // MARK: - Title Generator
 
 /// Generates short (3-6 word) conversation titles using the loaded LLM.
 /// Runs greedily (temperature 0.0) for deterministic output.
-actor TitleGenerator: TitleGeneratorProtocol {
+actor TitleGenerator {
 
     private let logger = Logger(subsystem: "com.zanish-labs.ziroedge", category: "title-gen")
     private let inferenceService: any InferenceServiceProtocol
@@ -63,7 +53,7 @@ actor TitleGenerator: TitleGeneratorProtocol {
     ) async -> String {
         guard await inferenceService.isModelLoaded else {
             logger.warning("Model not loaded, using fallback title")
-            return fallbackTitle(from: userMessage)
+            return Self.fallbackTitle(from: userMessage)
         }
 
         do {
@@ -89,7 +79,7 @@ actor TitleGenerator: TitleGeneratorProtocol {
 
             if title.isEmpty || title.count < 2 {
                 logger.warning("LLM returned empty or too-short title, using fallback")
-                return fallbackTitle(from: userMessage)
+                return Self.fallbackTitle(from: userMessage)
             }
 
             logger.info("Generated title: \(title, privacy: .public)")
@@ -97,7 +87,7 @@ actor TitleGenerator: TitleGeneratorProtocol {
 
         } catch {
             logger.error("Title generation failed: \(error.localizedDescription, privacy: .public)")
-            return fallbackTitle(from: userMessage)
+            return Self.fallbackTitle(from: userMessage)
         }
     }
 
@@ -116,10 +106,7 @@ actor TitleGenerator: TitleGeneratorProtocol {
             title = String(title.dropFirst().dropLast())
         }
 
-        // Collapse multiple spaces.
-        while title.contains("  ") {
-            title = title.replacingOccurrences(of: "  ", with: " ")
-        }
+        title = title.split(separator: " ", omittingEmptySubsequences: true).joined(separator: " ")
 
         // Truncate if unreasonably long (LLM might ignore the instruction).
         if title.count > 60 {
@@ -147,10 +134,5 @@ actor TitleGenerator: TitleGeneratorProtocol {
             return String(prefix[..<lastSpace]) + "…"
         }
         return prefix + "…"
-    }
-
-    /// Instance method wrapper for the static fallback (for protocol conformance).
-    private func fallbackTitle(from userMessage: String) -> String {
-        Self.fallbackTitle(from: userMessage)
     }
 }
