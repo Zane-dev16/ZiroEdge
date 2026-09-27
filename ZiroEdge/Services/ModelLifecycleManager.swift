@@ -449,7 +449,7 @@ final class ModelLifecycleManager: ObservableObject {
         override: Bool, consent: Bool,
         reclaimable: UInt64, priorActive: AIModel?
     ) {
-        let credit = MemoryBudgeter.reclaimableCreditDetails(for: priorActive)
+        let credit = ModelAdmission.reclaimableCreditDetails(for: priorActive)
         let priorID = priorActive?.id ?? "nil"
         let creditEvidence = credit.evidenceStatus ?? "nil"
         let consentFlag = consent ? 1 : 0
@@ -457,7 +457,7 @@ final class ModelLifecycleManager: ObservableObject {
         logger.info("Load gate \(phase, privacy: .public) model=\(model.id, privacy: .public) consent=\(consentFlag, privacy: .public) override=\(overrideFlag, privacy: .public)")
         logger.info("Load gate reclaim=\(reclaimable, privacy: .public) prior=\(priorID, privacy: .public) evidence=\(creditEvidence, privacy: .public)")
         print("[SWITCH-PROOF-GATE] phase=\(phase) model=\(model.id) consent=\(consentFlag) override=\(overrideFlag) " +
-            "reclaimable=\(reclaimable) prior=\(priorID) evidence=\(creditEvidence) profile=\(MemoryProfileRegistry.profile(for: model)?.id ?? "nil")")
+            "reclaimable=\(reclaimable) prior=\(priorID) evidence=\(creditEvidence) profile=\(ModelAdmission.profile(for: model)?.id ?? "nil")")
     }
 
     /// Refusal cause log (Fix verify a+b): distinguishes consent-missing
@@ -472,7 +472,7 @@ final class ModelLifecycleManager: ObservableObject {
         } else if decision.reason == .insufficientProcessHeadroom,
                   (decision.reclaimableBytes ?? 0) == 0,
                   let prior = priorActive {
-            let credit = MemoryBudgeter.reclaimableCreditDetails(for: prior)
+            let credit = ModelAdmission.reclaimableCreditDetails(for: prior)
             let creditProfile = credit.profileID ?? "nil"
             let creditEvidence = credit.evidenceStatus ?? "nil"
             logger.fault("Load refused zero-credit phase=\(phase, privacy: .public) model=\(model.id, privacy: .public) prior=\(prior.id, privacy: .public)")
@@ -523,31 +523,6 @@ final class ModelLifecycleManager: ObservableObject {
 // type_body_length; same-file extension retains private access).
 @MainActor
 extension ModelLifecycleManager {
-    /// Narrow-miss attempt rule (switch-parity fix): pre-teardown projected
-    /// estimates are conservative on both sides — reclaimable is min()'d
-    /// against a single device-measured sample while required carries 100MB
-    /// rounding plus the 750MB reserve — so a miss inside
-    /// `transientDipSettleWindowBytes` is estimate noise, not proof of OOM.
-    /// When a resident prior exists, proceed to teardown and let the
-    /// authoritative post-teardown gates (fresh resample + pre-mmap +
-    /// post-load reserve) measure reality, with prior-restore as the safety
-    /// net. Wide misses still refuse pre-teardown preserving the resident.
-    /// Fresh loads (no prior) never proceed: nothing would be evicted, so
-    /// teardown could not change the verdict.
-    private static func shouldAttemptTeardownOnNarrowMiss(
-        decision: MemoryLoadDecision, priorActive: AIModel?
-    ) -> Bool {
-        guard priorActive != nil,
-              decision.reason == .insufficientProcessHeadroom,
-              let required = decision.requiredBytes,
-              let projected = decision.projectedAvailableBytes,
-              required > projected,
-              required - projected <= MemoryBudgeter.transientDipSettleWindowBytes else {
-            return false
-        }
-        return true
-    }
-
     private func preflightAndAdmit(
         _ model: AIModel,
         loadEpoch: UInt64,
@@ -570,7 +545,7 @@ extension ModelLifecycleManager {
             let msg = "The downloaded model files are missing or failed integrity verification. Repair the download and try again."
             return (nil, refuseLoadPreservingResident(kind: .unavailableArtifact, message: msg, priorActive: priorActive, priorState: priorState, modelID: model.id))
         }
-        guard let profile = MemoryProfileRegistry.profile(for: model) else {
+        guard let profile = ModelAdmission.profile(for: model) else {
             logger.error("Load refused no runtime profile \(model.id, privacy: .public)")
             let msg = model.runtimeEligibilityExplanation
             let refused = refuseLoadPreservingResident(kind: .runtimeProfileUnavailable, message: msg, priorActive: priorActive, priorState: priorState, modelID: model.id)
@@ -583,13 +558,12 @@ extension ModelLifecycleManager {
                 + "Open the model details and explicitly reset its safety history before trying again."
             return (nil, refuseLoadPreservingResident(kind: .safetyDisabled, message: msg, priorActive: priorActive, priorState: priorState, modelID: model.id))
         }
-        let override = MemoryDiagnosticRecorder.shared.controlledWorkloadEnabled && model.id == MemoryDiagnosticRecorder.targetModelID
-        let consent = model.runtimeEligibility == .experimental && ExperimentalModelConsent.isGranted(for: model)
+        let (override, consent, allow) = ModelAdmission.calibrationGate(for: model)
         // Pre-teardown sample WHILE priorActive is still resident: credit its
         // reclaimable footprint so a B-alone-fits switch is not refused as
         // if A+B had to coexist. .unloadCurrentFirst proceeds to teardown;
         // only a projected miss refuses with the resident preserved.
-        let reclaimable = MemoryBudgeter.reclaimableBytes(for: priorActive)
+        let reclaimable = ModelAdmission.reclaimableBytes(for: priorActive)
         // Fix verify (a)(b): log the full consent gate + reclaimable cause
         // so a profileUnvalidated (consent missing, required=nil) never
         // masquerades as a headroom shortfall, and a zero-credit
@@ -599,12 +573,12 @@ extension ModelLifecycleManager {
             override: override, consent: consent,
             reclaimable: reclaimable, priorActive: priorActive
         )
-        var decision = await memoryBudgeter.decision(for: model, allowUnvalidatedCalibration: override || consent, reclaimableBytes: reclaimable)
+        var decision = await memoryBudgeter.decision(for: model, allowUnvalidatedCalibration: allow, reclaimableBytes: reclaimable)
         // Fix verify (c): one settle + resample on a narrow headroom miss
         // (transient jetsam dip). Large shortfalls skip the delay.
         if let settled = await settleResampleForTransientDip(
             model, loadEpoch: loadEpoch, priorActive: priorActive,
-            allow: override || consent, reclaimable: reclaimable,
+            allow: allow, reclaimable: reclaimable,
             first: decision, phase: "preflight"
         ) {
             if Task.isCancelled {
@@ -630,7 +604,7 @@ extension ModelLifecycleManager {
             print("[SWITCH-PROOF-PROCEEDS] phase=preflight model=\(model.id) \(decision.logSummary)")
             return (profile, nil)
         }
-        if Self.shouldAttemptTeardownOnNarrowMiss(decision: decision, priorActive: priorActive),
+        if ModelAdmission.shouldAttemptTeardownOnNarrowMiss(decision: decision, priorActive: priorActive),
            let required = decision.requiredBytes,
            let projected = decision.projectedAvailableBytes {
             let shortfall = required - projected
@@ -715,8 +689,7 @@ extension ModelLifecycleManager {
         // P1-1 fresh resample immediately pre-mmap: the preflight decision is
         // stale after teardown sleep. Recompute consent/override identically,
         // refuse closed with fault logs; never reuse the old decision.
-        let freshOverride = MemoryDiagnosticRecorder.shared.controlledWorkloadEnabled && model.id == MemoryDiagnosticRecorder.targetModelID
-        let freshConsent = model.runtimeEligibility == .experimental && ExperimentalModelConsent.isGranted(for: model)
+        let (freshOverride, freshConsent, freshAllow) = ModelAdmission.calibrationGate(for: model)
         // Fix verify (a): same consent gate log as preflight so the
         // pre-mmap resample's allow flag is observable (post-teardown,
         // reclaimable 0 by construction).
@@ -725,7 +698,7 @@ extension ModelLifecycleManager {
             override: freshOverride, consent: freshConsent,
             reclaimable: 0, priorActive: nil
         )
-        var freshDecision = await memoryBudgeter.decision(for: model, allowUnvalidatedCalibration: freshOverride || freshConsent)
+        var freshDecision = await memoryBudgeter.decision(for: model, allowUnvalidatedCalibration: freshAllow)
         // Iterate fix: same settle-once as preflight/pre-teardown. The
         // pre-mmap sample lands after the teardown recovery sleep while
         // jetsam pressure is still settling — a narrow miss here previously
@@ -734,7 +707,7 @@ extension ModelLifecycleManager {
         // window is unchanged (no evidence to extend). Logger only.
         if let settled = await settleResampleForTransientDip(
             model, loadEpoch: loadEpoch, priorActive: nil,
-            allow: freshOverride || freshConsent, reclaimable: 0,
+            allow: freshAllow, reclaimable: 0,
             first: freshDecision, phase: "pre-mmap"
         ) {
             if Task.isCancelled {
@@ -815,22 +788,21 @@ extension ModelLifecycleManager {
         priorActive: AIModel?,
         priorState: ModelState
     ) async -> ModelLoadResult? {
-        let override = MemoryDiagnosticRecorder.shared.controlledWorkloadEnabled && model.id == MemoryDiagnosticRecorder.targetModelID
-        let consent = model.runtimeEligibility == .experimental && ExperimentalModelConsent.isGranted(for: model)
+        let (override, consent, allow) = ModelAdmission.calibrationGate(for: model)
         // Same reclaimable credit as preflight: a projected pass proceeds to
         // teardown instead of refusing with the resident preserved.
-        let reclaimable = MemoryBudgeter.reclaimableBytes(for: priorActive)
+        let reclaimable = ModelAdmission.reclaimableBytes(for: priorActive)
         Self.logConsentGate(
             logger, phase: "pre-teardown", model: model,
             override: override, consent: consent,
             reclaimable: reclaimable, priorActive: priorActive
         )
-        var fresh = await memoryBudgeter.decision(for: model, allowUnvalidatedCalibration: override || consent, reclaimableBytes: reclaimable)
+        var fresh = await memoryBudgeter.decision(for: model, allowUnvalidatedCalibration: allow, reclaimableBytes: reclaimable)
         // Fix verify (c): settle-once on a narrow headroom miss before
         // refusing with the resident preserved.
         if let settled = await settleResampleForTransientDip(
             model, loadEpoch: loadEpoch, priorActive: priorActive,
-            allow: override || consent, reclaimable: reclaimable,
+            allow: allow, reclaimable: reclaimable,
             first: fresh, phase: "pre-teardown"
         ) {
             if Task.isCancelled {
@@ -856,7 +828,7 @@ extension ModelLifecycleManager {
             print("[SWITCH-PROOF-PROCEEDS] phase=pre-teardown model=\(model.id) \(fresh.logSummary)")
             return nil
         }
-        if Self.shouldAttemptTeardownOnNarrowMiss(decision: fresh, priorActive: priorActive),
+        if ModelAdmission.shouldAttemptTeardownOnNarrowMiss(decision: fresh, priorActive: priorActive),
            let required = fresh.requiredBytes,
            let projected = fresh.projectedAvailableBytes {
             let shortfall = required - projected
