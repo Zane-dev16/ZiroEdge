@@ -80,3 +80,10 @@ docs/release-evidence/
 
 # Generated App Store screenshots (produced by capture scripts, don't commit)
 ziroedge-docs/app-store-screenshots/
+Shots/
+
+# Xcode device/index state accidentally created in-repo (regenerates, don't commit)
+.dd-device/
+
+# Agent planning notes (local-only, never publish)
+docs/issues/
