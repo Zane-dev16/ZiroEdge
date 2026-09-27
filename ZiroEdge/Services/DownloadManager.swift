@@ -320,16 +320,6 @@ extension DownloadManager {
     func formattedAvailableSpace() -> String {
         StorageByteFormatter.string(fromByteCount: availableDiskSpace)
     }
-    /// Hash-free storage estimate for the tap fast-path: same byte math at
-    /// `.presence` depth (exists + size) so the synchronous storage gate
-    /// never blocks the main thread. The async verification re-checks with
-    /// authoritative byte counts before starting any transfer.
-    private func quickRequiredDownloadBytes(
-        for model: AIModel,
-        includeOptionalProjector: Bool = true
-    ) -> Int64 {
-        requiredDownloadBytes(for: model, includeOptionalProjector: includeOptionalProjector, depth: .presence)
-    }
 
     /// Merge a hash-free disk probe with live transfer states so the tap
     /// fast-path never clobbers downloading/verifying UI with stale disk truth.
@@ -407,12 +397,12 @@ extension DownloadManager {
             : currentStatus.isReady
         guard !requestedCapabilityReady, !currentStatus.isDownloading else { return }
         ModelManagerService.ensureModelsDirectory()
-        if !ModelManagerService.isBaseDownloaded(model) {
+        if !ModelManagerService.isArtifactVerified(model, artifact: .base, depth: .full) {
             startArtifactDownload(model: model, artifact: .base)
         }
         if model.requiresMMProj,
            (!model.allowsTextOnlyCapability || includeOptionalProjector),
-           !ModelManagerService.isMMProjDownloaded(model) {
+           !ModelManagerService.isArtifactVerified(model, artifact: .mmproj, depth: .full) {
             startArtifactDownload(model: model, artifact: .mmproj)
         }
     }
@@ -451,7 +441,7 @@ extension DownloadManager {
         // multi-GB artifact never hashes on the main thread. The async phase
         // re-checks with authoritative bytes (a same-size SHA mismatch looks
         // installed to this probe but needs full bytes).
-        let quickRequired = quickRequiredDownloadBytes(for: model, includeOptionalProjector: includeOptionalProjector)
+        let quickRequired = requiredDownloadBytes(for: model, includeOptionalProjector: includeOptionalProjector, depth: .presence)
         let available = availableDiskSpace
         if quickRequired >= Int64.max || available < quickRequired {
             let formattedRequired = StorageByteFormatter.string(fromByteCount: quickRequired)
@@ -493,7 +483,7 @@ extension DownloadManager {
         // Matches the launch-defer pattern (seedStatusesFromDiskQuick): instant
         // UI, authoritative truth arrives async and corrects any optimistic
         // `.downloaded` (hash mismatch surfaces as repair there).
-        let quick = Self.quickDiskStatus(for: model)
+        let quick = Self.diskStatus(for: model, depth: .quick)
         downloadStatuses[model.id] = quickStatusMergingActiveTasks(for: model, quick: quick)
         // Dedupe double-tap: the first verification owns the decision.
         guard pendingStartVerifications.insert(model.id).inserted else { return }
@@ -515,8 +505,8 @@ extension DownloadManager {
                 // Share the mtime+size digest cache with the status above, so
                 // these are cache hits — not second hashes — while still
                 // applying quarantine side effects for corrupt artifacts.
-                let baseDownloaded = ModelManagerService.isBaseDownloaded(model)
-                let mmprojDownloaded = ModelManagerService.isMMProjDownloaded(model)
+                let baseDownloaded = ModelManagerService.isArtifactVerified(model, artifact: .base, depth: .full)
+                let mmprojDownloaded = ModelManagerService.isArtifactVerified(model, artifact: .mmproj, depth: .full)
                 func remaining(expected: Int64, staging: URL, installed: Bool) -> Int64 {
                     guard !installed else { return 0 }
                     let staged = ((try? FileManager.default.attributesOfItem(atPath: staging.path)[.size]) as? NSNumber)?.int64Value ?? 0

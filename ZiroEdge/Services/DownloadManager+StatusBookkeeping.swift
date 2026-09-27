@@ -25,7 +25,7 @@ extension DownloadManager {
         for affectedModel in affectedModels {
             downloadStatuses[affectedModel.id] = quickStatusMergingActiveTasks(
                 for: affectedModel,
-                quick: Self.quickDiskStatus(for: affectedModel)
+                quick: Self.diskStatus(for: affectedModel, depth: .quick)
             )
         }
         logger.info("Status update seeded quick for \(model.id, privacy: .public)")
@@ -106,7 +106,7 @@ extension DownloadManager {
         if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
             return authoritativeDiskStatus(for: model)
         }
-        let quick = Self.quickDiskStatus(for: model)
+        let quick = Self.diskStatus(for: model, depth: .quick)
         let merged = quickStatusMergingActiveTasks(for: model, quick: quick)
         downloadStatuses[model.id] = merged
         logger.info("Status cache miss seeded quick for \(model.id, privacy: .public)")
@@ -145,7 +145,7 @@ extension DownloadManager {
     /// `refreshStatusesFromDisk` after first frame.
     func seedStatusesFromDiskQuick() {
         for model in ModelRegistry.libraryModels {
-            downloadStatuses[model.id] = Self.quickDiskStatus(for: model)
+            downloadStatuses[model.id] = Self.diskStatus(for: model, depth: .quick)
         }
     }
 

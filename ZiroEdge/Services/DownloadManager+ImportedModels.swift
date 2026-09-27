@@ -9,57 +9,25 @@ extension DownloadManager {
         Self.diskStatus(for: model)
     }
 
-    /// Sendable full-verification status (exists + size + header + SHA-256).
-    /// Static so the post-first-frame refresh can compute it off-main without
+    /// Sendable disk status at the caller's verification depth (exists + size +
+    /// header + SHA-256 at `.full`, hash-free at `.quick`/`.presence`). Static
+    /// so the post-first-frame refresh can compute it off-main without
     /// touching MainActor-isolated state; the caller publishes the result.
-    nonisolated static func diskStatus(for model: AIModel) -> ModelDownloadStatus {
-        switch ModelManagerService.availability(for: model) {
-        case .ready:
-            return ModelDownloadStatus(
-                modelID: model.id,
-                baseState: .downloaded,
-                mmprojState: model.requiresMMProj ? .downloaded : nil,
-                baseExpectedBytes: model.baseFileSizeBytes,
-                mmprojExpectedBytes: model.mmprojFileSizeBytes,
-                allowsTextOnly: model.allowsTextOnlyCapability
-            )
-        case .unavailable:
-            return ModelDownloadStatus(
-                modelID: model.id,
-                baseState: .notDownloaded,
-                mmprojState: model.requiresMMProj ? .notDownloaded : nil,
-                baseExpectedBytes: model.baseFileSizeBytes,
-                mmprojExpectedBytes: model.mmprojFileSizeBytes,
-                allowsTextOnly: model.allowsTextOnlyCapability
-            )
-        case .repairNeeded:
-            guard model.requiresMMProj else {
-                return ModelDownloadStatus(
-                    modelID: model.id,
-                    baseState: .notDownloaded,
-                    mmprojState: nil,
-                    baseExpectedBytes: model.baseFileSizeBytes
-                )
-            }
-            let hasBase = ModelManagerService.isBaseDownloaded(model)
-            let hasProjector = ModelManagerService.isMMProjDownloaded(model)
-            return ModelDownloadStatus(
-                modelID: model.id,
-                baseState: hasBase && !hasProjector ? .downloaded : .notDownloaded,
-                mmprojState: hasProjector ? .downloaded : .notDownloaded,
-                baseExpectedBytes: model.baseFileSizeBytes,
-                mmprojExpectedBytes: model.mmprojFileSizeBytes,
-                allowsTextOnly: model.allowsTextOnlyCapability
-            )
+    /// The launch seed passes `.quick` so seeding never hashes; the deferred
+    /// refresh replaces those with `.full` values shortly after first frame.
+    nonisolated static func diskStatus(
+        for model: AIModel,
+        depth: ArtifactVerificationDepth = .full
+    ) -> ModelDownloadStatus {
+        let availability: ModelAvailability = switch depth {
+        case .full:
+            ModelManagerService.availability(for: model)
+        case .presence, .quick:
+            // No presence-tier availability sweep exists; the hash-free quick
+            // sweep is the cheapest availability signal at or below `.quick`.
+            ModelManagerService.quickAvailability(for: model)
         }
-    }
-
-    /// Sendable hash-free status for the launch seed. Same shape as
-    /// `diskStatus(for:)` but driven by `quickAvailability` + presence probes
-    /// so seeding never hashes. The deferred refresh replaces these with
-    /// verified values shortly after first frame.
-    nonisolated static func quickDiskStatus(for model: AIModel) -> ModelDownloadStatus {
-        switch ModelManagerService.quickAvailability(for: model) {
+        switch availability {
         case .ready:
             return ModelDownloadStatus(
                 modelID: model.id,
@@ -87,8 +55,12 @@ extension DownloadManager {
                     baseExpectedBytes: model.baseFileSizeBytes
                 )
             }
-            let hasBase = ModelManagerService.isArtifactPresent(model, artifact: .base)
-            let hasProjector = ModelManagerService.isArtifactPresent(model, artifact: .mmproj)
+            // Per-artifact states use the same depth as the sweep: full
+            // verification at `.full`, hash-free quick check below it
+            // (matches `quickAvailability`, never quarantines).
+            let probe: ArtifactVerificationDepth = depth == .full ? .full : .quick
+            let hasBase = ModelManagerService.isArtifactVerified(model, artifact: .base, depth: probe)
+            let hasProjector = ModelManagerService.isArtifactVerified(model, artifact: .mmproj, depth: probe)
             return ModelDownloadStatus(
                 modelID: model.id,
                 baseState: hasBase && !hasProjector ? .downloaded : .notDownloaded,

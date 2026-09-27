@@ -74,7 +74,12 @@ enum ModelManagerService {
     ) -> Bool {
         switch depth {
         case .presence:
-            return isArtifactPresent(model, artifact: artifact)
+            let (path, expectedBytes) = artifactLocation(for: model, artifact: artifact)
+            guard let expectedBytes else { return false }
+            guard let size = (try? FileManager.default.attributesOfItem(atPath: path.path)[.size] as? NSNumber)?.int64Value else {
+                return false
+            }
+            return size == expectedBytes
         case .quick:
             let (path, expectedBytes) = artifactLocation(for: model, artifact: artifact)
             guard let expectedBytes else { return false }
@@ -225,7 +230,7 @@ enum ModelManagerService {
 
     static func isVisionReady(_ model: AIModel) -> Bool {
         guard isFullyDownloaded(model) else { return false }
-        return model.modelType != .vision || isMMProjDownloaded(model)
+        return model.modelType != .vision || isArtifactVerified(model, artifact: .mmproj, depth: .full)
     }
 
     static func advertisesVisionCapability(_ model: AIModel) -> Bool {
@@ -416,11 +421,13 @@ extension ModelManagerService {
             return .unavailable
         }
         var issues: [ArtifactIssue] = []
-        func checkQuick(_ path: URL, expectedBytes: Int64, artifact: ArtifactType) {
-            // Single hash-free tier: exists + size + GGUF structure.
-            // Outcome detail stays here (per-issue taxonomy); the pass/fail
-            // itself matches `isArtifactVerified(_, _, depth: .quick)`.
-            guard FileManager.default.fileExists(atPath: path.path),
+        func checkQuick(_ model: AIModel, artifact: ArtifactType) {
+            // Pass/fail delegates to the single artifact-truth entry point;
+            // only the failure taxonomy (which issue) lives here.
+            if isArtifactVerified(model, artifact: artifact, depth: .quick) { return }
+            let (path, expectedBytes) = artifactLocation(for: model, artifact: artifact)
+            guard let expectedBytes,
+                  FileManager.default.fileExists(atPath: path.path),
                   let size = (try? FileManager.default.attributesOfItem(atPath: path.path)[.size] as? NSNumber)?.int64Value else {
                 issues.append(.missing(artifact: artifact))
                 return
@@ -433,31 +440,17 @@ extension ModelManagerService {
                 issues.append(.missingGGUFHeader)
                 return
             }
+            // Race: failed verification but passed taxonomy on re-read.
+            issues.append(.unknown("artifact changed during verification"))
         }
-        checkQuick(baseModelPath(for: model), expectedBytes: model.baseFileSizeBytes, artifact: .base)
+        checkQuick(model, artifact: .base)
         if model.requiresMMProj {
-            checkQuick(
-                mmprojModelPath(for: model),
-                expectedBytes: model.mmprojFileSizeBytes ?? 0,
-                artifact: .mmproj
-            )
+            checkQuick(model, artifact: .mmproj)
         }
         if issues.isEmpty {
             return .ready
         }
         return .repairNeeded(issues: issues)
-    }
-
-    /// Hash-free presence probe (exists + byte size). Used by the startup
-    /// seed for per-artifact states; never quarantines, never hashes.
-    /// Fixed-depth wrapper over `isArtifactVerified(_, _, depth: .presence)`.
-    static func isArtifactPresent(_ model: AIModel, artifact: ArtifactType) -> Bool {
-        let (path, expectedBytes) = artifactLocation(for: model, artifact: artifact)
-        guard let expectedBytes else { return false }
-        guard let size = (try? FileManager.default.attributesOfItem(atPath: path.path)[.size] as? NSNumber)?.int64Value else {
-            return false
-        }
-        return size == expectedBytes
     }
 }
 
