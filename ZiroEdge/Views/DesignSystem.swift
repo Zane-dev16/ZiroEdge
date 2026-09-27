@@ -21,8 +21,8 @@
 // Contrast rigor: every foreground/background pairing below was verified
 // with the WCAG relative-luminance formula against BOTH appearances. The
 // floors are 4.5:1 for text and 3:1 for icons/large text (repo a11y
-// standard); no pairing in this file falls below 4.5:1. The computed table
-// lives in docs/DESIGN-SPEC.md §6.
+// standard); no pairing in this file falls below 4.5:1. Re-prove with
+// Scripts/verify-design-tokens.py, which reads the shipped values.
 
 import SwiftUI
 
@@ -418,7 +418,7 @@ enum ZiroTone: CaseIterable {
     }
 
     /// Pre-composited tinted fill; every `tint` clears 4.5:1 on it in both
-    /// modes (ratios in docs/DESIGN-SPEC.md §6).
+    /// modes (re-proven by Scripts/verify-design-tokens.py).
     var container: Color {
         switch self {
         case .accent: ZiroTheme.accentContainer

@@ -3,11 +3,11 @@
 
 This is the guard rail for the design system. `DesignSystem.swift` and the
 asset catalog are the single source of truth; this script reads them and
-re-proves every foreground/background pairing the spec promises, in BOTH
+re-proves every shipped foreground/background pairing, in BOTH
 appearances. It never invents values — it checks what is actually shipped.
 
     python3 app/Scripts/verify-design-tokens.py           # check, exit 1 on failure
-    python3 app/Scripts/verify-design-tokens.py --table   # emit the markdown table for DESIGN-SPEC.md §4
+    python3 app/Scripts/verify-design-tokens.py --table   # emit the markdown contrast table
 
 Floors (repo a11y standard): 4.5:1 for text, 3.0:1 for icons / large text.
 """
@@ -286,7 +286,7 @@ def main() -> int:
     parser.add_argument(
         "--table",
         action="store_true",
-        help="print the markdown table for DESIGN-SPEC.md §4",
+        help="print the markdown contrast table",
     )
     args = parser.parse_args()
 
