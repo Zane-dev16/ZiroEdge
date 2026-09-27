@@ -248,7 +248,6 @@ final class ImportTransferLifecycleTests: XCTestCase {
 
     @MainActor
     func testContentRangeMustMatchExactly() {
-        let manager = managerForTransferDecision()
         let url = URL(string: "https://huggingface.co/acme/model/resolve/revision/model.gguf")!
         let accepted = HTTPURLResponse(
             url: url, statusCode: 206, httpVersion: nil,
@@ -262,9 +261,9 @@ final class ImportTransferLifecycleTests: XCTestCase {
             url: url, statusCode: 200, httpVersion: nil,
             headerFields: ["Content-Range": "bytes 0-99/200"]
         )!
-        XCTAssertTrue(manager.isValidChunkResponse(accepted, start: 0, end: 99, total: 200))
-        XCTAssertFalse(manager.isValidChunkResponse(rejected, start: 0, end: 99, total: 200))
-        XCTAssertFalse(manager.isValidChunkResponse(wrongStatus, start: 0, end: 99, total: 200))
+        XCTAssertTrue(ChunkedTransport.isValidChunkResponse(accepted, start: 0, end: 99, total: 200))
+        XCTAssertFalse(ChunkedTransport.isValidChunkResponse(rejected, start: 0, end: 99, total: 200))
+        XCTAssertFalse(ChunkedTransport.isValidChunkResponse(wrongStatus, start: 0, end: 99, total: 200))
     }
 
     @MainActor

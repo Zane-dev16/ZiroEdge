@@ -92,23 +92,6 @@ extension DownloadManager {
             chunkedDownload(task: task, key: key)
         }
     }
-    func contentRange(
-        _ response: HTTPURLResponse,
-        matchesStart start: Int64,
-        end: Int64,
-        total: Int64
-    ) -> Bool {
-        ChunkedTransport.contentRange(response, matchesStart: start, end: end, total: total)
-    }
-    func isValidChunkResponse(
-        _ response: HTTPURLResponse,
-        start: Int64,
-        end: Int64,
-        total: Int64
-    ) -> Bool {
-        ChunkedTransport.isValidChunkResponse(response, start: start, end: end, total: total)
-    }
-
     func retryChunk(task: DownloadTask, key: String, reason: String) {
         guard activeTasks[key] === task, !task.isPaused, !task.isCancelled else { return }
         closeChunkFile(for: task)

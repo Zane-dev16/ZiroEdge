@@ -32,7 +32,7 @@ extension DownloadManager: URLSessionDownloadDelegate, URLSessionDataDelegate {
             }
             let start = task.currentChunkOffset
             let end = task.currentChunkEnd
-            guard isValidChunkResponse(
+            guard ChunkedTransport.isValidChunkResponse(
                 response,
                 start: start,
                 end: end,
