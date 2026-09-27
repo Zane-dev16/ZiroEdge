@@ -102,7 +102,8 @@ enum OfflineAvailabilityGuard {
         for model: AIModel,
         issues: [ArtifactIssue]
     ) -> (OfflineModelReadiness, String) {
-        if model.allowsTextOnlyCapability, issues == [.missing(artifact: .mmproj)] {
+        // Base-only exception owned by ModelManagerService; this maps onto it.
+        if ModelManagerService.isTextOnlyFallback(issues: issues, for: model) {
             return (
                 .ready(textOnly: true),
                 "[offline-guard] \(model.id): verified — ready for offline use (text-only)"
@@ -132,12 +133,13 @@ enum OfflineAvailabilityGuard {
             let availability = ModelManagerService.availability(for: model)
             switch availability {
             case .ready:
-                let textOnly = model.allowsTextOnlyCapability
-                    && model.requiresMMProj
-                    && !(ModelManagerService.isArtifactVerified(model, artifact: .mmproj, depth: .full))
-                models[model.id] = .ready(textOnly: textOnly)
+                // Pair verified complete by the sweep above, so never
+                // text-only: the base-only fallback maps in `repairReadiness`
+                // via `ModelManagerService.isTextOnlyFallback`. Deliberately
+                // no re-verification here (the old probe was a duplicate SHA-256 pass).
+                models[model.id] = .ready(textOnly: false)
                 diagnostics.append(
-                    "[offline-guard] \(model.id): verified — ready for offline use\(textOnly ? " (text-only)" : "")"
+                    "[offline-guard] \(model.id): verified — ready for offline use"
                 )
             case .repairNeeded(let issues):
                 let (readiness, diagnostic) = repairReadiness(for: model, issues: issues)

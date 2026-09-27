@@ -55,12 +55,13 @@ extension DownloadManager {
                     baseExpectedBytes: model.baseFileSizeBytes
                 )
             }
-            // Per-artifact states use the same depth as the sweep: full
-            // verification at `.full`, hash-free quick check below it
-            // (matches `quickAvailability`, never quarantines).
+            // Per-artifact verdicts come from the single depth-parameterized
+            // module: full verification at `.full`, hash-free quick check
+            // below it (matches `quickAvailability`, never quarantines).
             let probe: ArtifactVerificationDepth = depth == .full ? .full : .quick
-            let hasBase = ModelManagerService.isArtifactVerified(model, artifact: .base, depth: probe)
-            let hasProjector = ModelManagerService.isArtifactVerified(model, artifact: .mmproj, depth: probe)
+            let verdicts = ModelManagerService.artifactVerdicts(for: model, depth: probe)
+            let hasBase = verdicts.baseVerified
+            let hasProjector = verdicts.projectorVerified ?? false
             return ModelDownloadStatus(
                 modelID: model.id,
                 baseState: hasBase && !hasProjector ? .downloaded : .notDownloaded,

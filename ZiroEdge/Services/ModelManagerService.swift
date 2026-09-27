@@ -81,9 +81,7 @@ enum ModelManagerService {
             }
             return size == expectedBytes
         case .quick:
-            let (path, expectedBytes) = artifactLocation(for: model, artifact: artifact)
-            guard let expectedBytes else { return false }
-            return passesQuickCheck(path: path, expectedBytes: expectedBytes)
+            return quickIssue(for: model, artifact: artifact) == nil
         case .full:
             return isArtifactDownloaded(model, artifact: artifact)
         }
@@ -108,13 +106,17 @@ enum ModelManagerService {
     }
 
     /// Hash-free check shared by `.quick` verification and `quickAvailability`:
-    /// byte size plus GGUF structure, never a digest pass.
-    private static func passesQuickCheck(path: URL, expectedBytes: Int64) -> Bool {
-        guard let size = (try? FileManager.default.attributesOfItem(atPath: path.path)[.size] as? NSNumber)?.int64Value else {
-            return false
+    /// byte size plus GGUF structure, never a digest pass. Single stat +
+    /// single header probe yields both verdict and taxonomy, so callers never
+    /// re-read the file to reclassify a failure.
+    private static func quickIssue(for model: AIModel, artifact: ArtifactType) -> ArtifactIssue? {
+        let (path, expectedBytes) = artifactLocation(for: model, artifact: artifact)
+        guard let expectedBytes,
+              let size = (try? FileManager.default.attributesOfItem(atPath: path.path)[.size] as? NSNumber)?.int64Value else {
+            return .missing(artifact: artifact)
         }
-        guard size == expectedBytes else { return false }
-        return verifyGGUFHeader(fileURL: path)
+        guard size == expectedBytes else { return .sizeMismatch }
+        return verifyGGUFHeader(fileURL: path) ? nil : .missingGGUFHeader
     }
 
     private static func isArtifactDownloaded(_ model: AIModel, artifact: ArtifactType) -> Bool {
@@ -422,26 +424,11 @@ extension ModelManagerService {
         }
         var issues: [ArtifactIssue] = []
         func checkQuick(_ model: AIModel, artifact: ArtifactType) {
-            // Pass/fail delegates to the single artifact-truth entry point;
-            // only the failure taxonomy (which issue) lives here.
-            if isArtifactVerified(model, artifact: artifact, depth: .quick) { return }
-            let (path, expectedBytes) = artifactLocation(for: model, artifact: artifact)
-            guard let expectedBytes,
-                  FileManager.default.fileExists(atPath: path.path),
-                  let size = (try? FileManager.default.attributesOfItem(atPath: path.path)[.size] as? NSNumber)?.int64Value else {
-                issues.append(.missing(artifact: artifact))
-                return
+            // Single pass: the artifact-truth verdict already carries the
+            // failure taxonomy, so no second stat/header probe is needed.
+            if let issue = quickIssue(for: model, artifact: artifact) {
+                issues.append(issue)
             }
-            guard size == expectedBytes else {
-                issues.append(.sizeMismatch)
-                return
-            }
-            guard verifyGGUFHeader(fileURL: path) else {
-                issues.append(.missingGGUFHeader)
-                return
-            }
-            // Race: failed verification but passed taxonomy on re-read.
-            issues.append(.unknown("artifact changed during verification"))
         }
         checkQuick(model, artifact: .base)
         if model.requiresMMProj {
@@ -451,6 +438,43 @@ extension ModelManagerService {
             return .ready
         }
         return .repairNeeded(issues: issues)
+    }
+
+    /// Single locality for the allowsTextOnly base-only exception (E2B).
+    /// A verified base without its projector is a legitimate text-only
+    /// runtime — never repair-needed. All availability taxonomies
+    /// (`ModelAvailability` repair mapping, `ModelDownloadStatus.isReady`,
+    /// `OfflineModelReadiness`) map from here instead of re-encoding the rule.
+    static func isTextReady(
+        baseVerified: Bool,
+        projectorVerified: Bool?,
+        allowsTextOnly: Bool
+    ) -> Bool {
+        guard baseVerified else { return false }
+        guard let projectorVerified else { return true }
+        return projectorVerified || allowsTextOnly
+    }
+
+    /// Depth-parameterized per-artifact verdicts behind the rule above.
+    /// Sweep callers use this; callers with already-known states use
+    /// `isTextReady` directly. Nil projector = text-only model.
+    static func artifactVerdicts(
+        for model: AIModel,
+        depth: ArtifactVerificationDepth
+    ) -> (baseVerified: Bool, projectorVerified: Bool?) {
+        let baseVerified = isArtifactVerified(model, artifact: .base, depth: depth)
+        let projectorVerified: Bool? = model.requiresMMProj
+            ? isArtifactVerified(model, artifact: .mmproj, depth: depth)
+            : nil
+        return (baseVerified, projectorVerified)
+    }
+
+    /// Repair-branch mapping: a lone missing projector on an allowsTextOnly
+    /// model is text-only ready, not repair-needed. Any other issue set stays
+    /// repair-needed. Centralizes the `issues == [.missing(mmproj)]` check so
+    /// `OfflineAvailabilityGuard.repairReadiness` doesn't own a copy.
+    static func isTextOnlyFallback(issues: [ArtifactIssue], for model: AIModel) -> Bool {
+        model.allowsTextOnlyCapability && issues == [.missing(artifact: .mmproj)]
     }
 }
 

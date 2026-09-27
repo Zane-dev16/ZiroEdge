@@ -169,9 +169,12 @@ struct ModelDownloadStatus: Sendable, Hashable {
     /// every other vision pair needs its projector too. Vision readiness always
     /// requires both — see `isVisionReady` / `isPairComplete`.
     var isReady: Bool {
-        guard baseState.isDownloaded else { return false }
-        guard let mmproj = mmprojState else { return true }
-        return allowsTextOnly || mmproj.isDownloaded
+        // Base-only exception owned by ModelManagerService; this maps stored states onto it.
+        ModelManagerService.isTextReady(
+            baseVerified: baseState.isDownloaded,
+            projectorVerified: mmprojState?.isDownloaded,
+            allowsTextOnly: allowsTextOnly
+        )
     }
 
     var isVisionReady: Bool {
