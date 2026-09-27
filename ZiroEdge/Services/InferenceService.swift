@@ -6,6 +6,7 @@
 // Wraps the local swift-llama-cpp package (LlamaEngine).
 
 import Foundation
+import ImageIO
 import SwiftLlama
 import os
 
@@ -535,7 +536,22 @@ extension InferenceService {
         )
     }
 
+    // MARK: - Vision seam (internal: no ViewModel import)
+    private static let visionImageCeilingPixels = 1024 // mirrors ChatViewModel.maxImageDimension
+    private static func visionEstimatedTokens(characterCount: Int) -> Int {
+        characterCount > 0 ? max(1, characterCount / 4) : 0
+    }
+    private static func visionPixelDimensions(of data: Data) -> (width: Int, height: Int)? {
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil),
+              let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any],
+              let width = props[kCGImagePropertyPixelWidth] as? Int,
+              let height = props[kCGImagePropertyPixelHeight] as? Int else { return nil }
+        return (width, height)
+    }
+
     /// Shared sibling-split budget both attach-time and send-time gating use.
+    /// Thin caller over `LlamaEngine.adjustedVisionPromptTokens` (single owner
+    /// for budget math); kept so existing call sites/tests compile unchanged.
     /// Pure (sync, no engine) for hermetic tests.
     static func adjustedVisionPromptTokens(
         promptTokens: Int,
@@ -543,11 +559,9 @@ extension InferenceService {
         maxTokens: Int,
         imageCount: Int
     ) -> Int {
-        let count = max(1, imageCount)
-        let reserve = max(1, maxTokens)
-        let available = contextLength - promptTokens - reserve - 1 - LlamaEngine.visionTokenMargin - 3
-        let perImage = (available - 3 * count) / count
-        return contextLength - reserve - 1 - LlamaEngine.visionTokenMargin - 3 - perImage
+        LlamaEngine.adjustedVisionPromptTokens(
+            promptTokens: promptTokens, contextLength: contextLength,
+            maxTokens: maxTokens, imageCount: imageCount)
     }
 
     /// Send-time vision gate: re-gates every image against the current history.
@@ -562,19 +576,19 @@ extension InferenceService {
         maxTokens: Int,
         probeBypass: Bool = false
     ) throws {
-        let promptTokens = ChatViewModel.estimatedTokens(
+        // Internal vision seam: token math + pixel dims live here so the
+        // service never reaches into ChatViewModel (wrong layer).
+        let promptTokens = Self.visionEstimatedTokens(
             characterCount: messages.reduce(0) { $0 + $1.content.count }
         )
         let imageCount = max(1, images.count)
-        let adjustedPromptTokens = Self.adjustedVisionPromptTokens(promptTokens: promptTokens,
-            contextLength: contextLength, maxTokens: maxTokens, imageCount: imageCount)
-        let ceiling = Int(ChatViewModel.maxImageDimension)
+        let ceiling = Self.visionImageCeilingPixels
         for image in images {
-            guard let dims = ChatViewModel.pixelDimensions(of: image) else {
+            guard let dims = Self.visionPixelDimensions(of: image) else {
                 // Undecodable bytes: assume the attach ceiling (legacy); only a refusal throws.
-                let gate = LlamaEngine.visionGate(
+                let gate = LlamaEngine.admit(
                     imageWidth: ceiling, imageHeight: ceiling,
-                    promptTokens: adjustedPromptTokens,
+                    promptTokens: promptTokens, imageCount: imageCount,
                     contextLength: contextLength, maxTokens: maxTokens
                 )
                 if case .refused = gate {
@@ -582,9 +596,9 @@ extension InferenceService {
                 }
                 continue
             }
-            let gate = LlamaEngine.visionGate(
+            let gate = LlamaEngine.admit(
                 imageWidth: dims.width, imageHeight: dims.height,
-                promptTokens: adjustedPromptTokens,
+                promptTokens: promptTokens, imageCount: imageCount,
                 contextLength: contextLength, maxTokens: maxTokens
             )
             if gate == .fits { continue }
@@ -723,11 +737,7 @@ extension InferenceService {
         }
     }
 
-    /// One fresh snapshot immediately before entering inference. The load-time
-    /// check cannot protect a model whose headroom fell while it was idle.
-    /// Dip retry waits up to 500ms for settled headroom (unified sampler)
-    /// instead of resampling back-to-back (~µs apart), which re-reads the
-    /// same depressed value for any dip outlasting one syscall.
+    /// Fresh pre-inference headroom sample; settles up to 500ms on dip.
     private func enforcePreInferenceReserve() async throws {
         let available = await settleBudgeter.appMemoryHeadroom()
         if available >= MemoryProfile.productionReserveBytes { return }
@@ -743,12 +753,8 @@ extension InferenceService {
         logger.info("Pre-inference retry recovered available=\(settled, privacy: .public)")
     }
 
-    /// P1-1 fresh headroom sample immediately pre-mmap/context init. The
-    /// caller's budget decision may be stale after teardown sleep, so this gate
-    /// never reuses it: it derives the floor from the profile and samples now,
-    /// settling up to 500ms on breach (unified sampler). No validated floor
-    /// (unvalidated without consent) defers to the caller's admission refusal —
-    /// this gate only enforces a known floor. IDs public; no digests here.
+    /// Fresh pre-mmap headroom sample from the profile floor (never reuses
+    /// the caller's possibly-stale budget decision); settles up to 500ms.
     private func enforcePreLoadReserve(for model: AIModel, profile: MemoryProfile) async throws {
         let required = (try? profile.requiredProcessHeadroomBytes())
             ?? (try? profile.experimentalRequiredProcessHeadroomBytes())
@@ -794,12 +800,8 @@ extension InferenceService {
     }
 
 #if DEBUG
-    /// Hermetic chat reply for `--uitesting-hermetic-model`.
-    /// Streams a few chunks with a small inter-chunk delay (~2s total) instead of
-    /// yielding everything at once: the UI tests that exercise the streaming
-    /// stop affordance need an observable `isStreaming` window, and an
-    /// instant-complete stream makes the stop button race-exist for only a few
-    /// milliseconds (testChatStreamingStop flip-flopped on snapshot timing).
+    /// Hermetic chat reply: chunked with delay (~2s) so streaming-stop tests
+    /// observe an `isStreaming` window instead of an instant-complete stream.
     private static func hermeticResponse() -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let chunks = ["The", " color", " blue", " is", " a", " calm", " deep", " hue."]

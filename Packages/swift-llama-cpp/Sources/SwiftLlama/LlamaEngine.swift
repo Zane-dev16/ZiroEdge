@@ -744,6 +744,31 @@ private extension LlamaEngine {
         return .downscaledTo(width: safe.width, height: safe.height)
     }
 
+    /// Single admission decision (sibling-split + gate) shared by attach-
+    /// time and send-time callers. `promptTokens` is raw history; `imageCount`
+    /// includes the candidate. Pure for tests.
+    public nonisolated static func admit(
+        imageWidth: Int, imageHeight: Int, promptTokens: Int, imageCount: Int,
+        contextLength: Int, maxTokens: Int, margin: Int = visionTokenMargin
+    ) -> VisionGateResult {
+        let adjusted = adjustedVisionPromptTokens(
+            promptTokens: promptTokens, contextLength: contextLength,
+            maxTokens: maxTokens, imageCount: imageCount)
+        return visionGate(
+            imageWidth: imageWidth, imageHeight: imageHeight, promptTokens: adjusted,
+            contextLength: contextLength, maxTokens: maxTokens, margin: margin)
+    }
+
+    /// Sibling-split budget: single owner for budget math (margin and marker
+    /// tokens live here with the gate). Pure for tests.
+    public nonisolated static func adjustedVisionPromptTokens(promptTokens: Int, contextLength: Int, maxTokens: Int, imageCount: Int) -> Int {
+        let count = max(1, imageCount)
+        let reserve = max(1, maxTokens)
+        let available = contextLength - promptTokens - reserve - 1 - visionTokenMargin - 3
+        let perImage = (available - 3 * count) / count
+        return contextLength - reserve - 1 - visionTokenMargin - 3 - perImage
+    }
+
     /// Aspect-preserved fit of valid dims to the safe long edge. Never
     /// upscales; shared by the gate and the refused-path choice offer so the
     /// "smaller version" copy cannot diverge from gate math.

@@ -59,9 +59,9 @@ extension ChatViewModel {
     func addImage(_ data: Data) async {
         if let dims = Self.pixelDimensions(of: data) {
             let budget = visionBudgetParams()
-            switch LlamaEngine.visionGate(
+            switch LlamaEngine.admit(
                 imageWidth: dims.width, imageHeight: dims.height,
-                promptTokens: budget.promptTokens,
+                promptTokens: budget.promptTokens, imageCount: budget.imageCount,
                 contextLength: budget.contextLength, maxTokens: budget.maxTokens
             ) {
             case .fits:
@@ -116,21 +116,15 @@ extension ChatViewModel {
 
     /// Budget params for the next attach: transcript tokens via the Batch4
     /// helper, vision ctx/maxTokens from the selected model (vision presets:
-    /// ctx 4096, default maxTokens 2048). Sibling split shares one helper
-    /// with send-time gating (`InferenceService.adjustedVisionPromptTokens`).
-    private func visionBudgetParams() -> (promptTokens: Int, contextLength: Int, maxTokens: Int) {
+    /// ctx 4096, default maxTokens 2048). Raw history + image count; the
+    /// `LlamaEngine.admit` single decision applies the sibling split.
+    private func visionBudgetParams() -> (promptTokens: Int, contextLength: Int, maxTokens: Int, imageCount: Int) {
         let transcriptChars = messages.reduce(0) { $0 + $1.content.count }
             + inputText.count + (activeConversationSystemPrompt?.count ?? 0)
         let promptTokens = Self.estimatedTokens(characterCount: transcriptChars)
         let contextLength = selectedModel?.config.contextLength ?? 4096
         let maxTokens = selectedModel?.config.defaultSampling.maxTokens ?? SamplingConfig.default.maxTokens
-        let adjustedPromptTokens = InferenceService.adjustedVisionPromptTokens(
-            promptTokens: promptTokens,
-            contextLength: contextLength,
-            maxTokens: maxTokens,
-            imageCount: pendingImages.count + 1
-        )
-        return (adjustedPromptTokens, contextLength, maxTokens)
+        return (promptTokens, contextLength, maxTokens, pendingImages.count + 1)
     }
 
     /// Decode, validate, and downsample attachment data using ImageIO.
