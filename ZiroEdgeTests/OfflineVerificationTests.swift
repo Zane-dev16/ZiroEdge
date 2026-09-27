@@ -249,9 +249,9 @@ final class OfflineModelLoadingTests: XCTestCase {
         defer { ModelManagerService.deleteModel(model) }
         try TestModelFixtures.install(data, for: model)
 
-        XCTAssertTrue(ModelManagerService.isBaseDownloaded(model))
+        XCTAssertTrue(ModelManagerService.isArtifactVerified(model, artifact: .base, depth: .full))
         try FileManager.default.removeItem(at: ModelManagerService.baseModelPath(for: model))
-        XCTAssertFalse(ModelManagerService.isBaseDownloaded(model))
+        XCTAssertFalse(ModelManagerService.isArtifactVerified(model, artifact: .base, depth: .full))
     }
 
     func testMissingIntegrityMetadataFailsClosed() {
@@ -678,7 +678,7 @@ final class NetworkIsolationTests: XCTestCase {
         // These should all work without network.
         let _ = ModelManagerService.modelsDirectory
         let _ = ModelManagerService.baseModelPath(for: model)
-        let _ = ModelManagerService.isBaseDownloaded(model)
+        let _ = ModelManagerService.isArtifactVerified(model, artifact: .base, depth: .full)
         let _ = ModelManagerService.isFullyDownloaded(model)
         let _ = ModelManagerService.diskUsage(for: model)
         let _ = ModelManagerService.formattedDiskUsage(for: model)
@@ -875,7 +875,7 @@ final class OfflineFlowIntegrationTests: XCTestCase {
         let model = TestModelFixtures.text(data: data)
         defer { ModelManagerService.deleteModel(model) }
         try TestModelFixtures.install(data, for: model)
-        XCTAssertTrue(ModelManagerService.isBaseDownloaded(model))
+        XCTAssertTrue(ModelManagerService.isArtifactVerified(model, artifact: .base, depth: .full))
         XCTAssertTrue(ModelManagerService.isFullyDownloaded(model))
         XCTAssertTrue(ModelManagerService.baseModelPath(for: model).isFileURL)
     }

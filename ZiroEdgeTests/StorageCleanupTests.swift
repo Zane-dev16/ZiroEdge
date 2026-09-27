@@ -408,7 +408,7 @@ final class StorageCleanupTests: XCTestCase {
         try TestModelFixtures.install(data, for: model)
         defer { ModelManagerService.deleteModel(model) }
 
-        XCTAssertTrue(ModelManagerService.isBaseDownloaded(model))
+        XCTAssertTrue(ModelManagerService.isArtifactVerified(model, artifact: .base, depth: .full))
 
         // Simulate a download failure due to space — but we can't easily
         // trigger real OOS. Instead verify that the installed artifact

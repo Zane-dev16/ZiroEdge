@@ -115,15 +115,11 @@ final class ImportViewModel: ObservableObject {
     }
 
     var storagePreflight: ImportStoragePreflight {
-        let reusableBase = selectedBase.map { artifact in
-            ModelRegistry.libraryModels.contains {
-                $0.baseSHA256 == artifact.sha256 && ModelManagerService.isBaseDownloaded($0)
-            }
+        let reusableBase = selectedBase.map {
+            ModelManagerService.hasReusableLibraryArtifact(matching: $0.sha256, artifact: .base)
         } ?? false
-        let reusableProjector = selectedProjector.map { artifact in
-            ModelRegistry.libraryModels.contains {
-                $0.mmprojSHA256 == artifact.sha256 && ModelManagerService.isMMProjDownloaded($0)
-            }
+        let reusableProjector = selectedProjector.map {
+            ModelManagerService.hasReusableLibraryArtifact(matching: $0.sha256, artifact: .mmproj)
         } ?? false
         let required = SaturatedArithmetic.add(
             reusableBase ? 0 : (selectedBase?.size ?? 0),
@@ -327,13 +323,9 @@ final class ImportedModelUpdateCoordinator: ObservableObject {
     }
 
     func storagePreflight(base: HFArtifact, projector: HFArtifact?) -> ImportStoragePreflight {
-        let reusableBase = ModelRegistry.libraryModels.contains {
-            $0.baseSHA256 == base.sha256 && ModelManagerService.isBaseDownloaded($0)
-        }
-        let reusableProjector = projector.map { artifact in
-            ModelRegistry.libraryModels.contains {
-                $0.mmprojSHA256 == artifact.sha256 && ModelManagerService.isMMProjDownloaded($0)
-            }
+        let reusableBase = ModelManagerService.hasReusableLibraryArtifact(matching: base.sha256, artifact: .base)
+        let reusableProjector = projector.map {
+            ModelManagerService.hasReusableLibraryArtifact(matching: $0.sha256, artifact: .mmproj)
         } ?? false
         let required = SaturatedArithmetic.add(
             reusableBase ? 0 : base.size,
@@ -391,13 +383,9 @@ final class ImportedModelUpdateCoordinator: ObservableObject {
         )
         // Reuse already-installed artifacts that match by SHA-256 so we never
         // download what is already verified.
-        let reusableBase = ModelRegistry.libraryModels.contains {
-            $0.baseSHA256 == base.sha256 && ModelManagerService.isBaseDownloaded($0)
-        }
-        let reusableProjector = projector.map { proj in
-            ModelRegistry.libraryModels.contains {
-                $0.mmprojSHA256 == proj.sha256 && ModelManagerService.isMMProjDownloaded($0)
-            }
+        let reusableBase = ModelManagerService.hasReusableLibraryArtifact(matching: base.sha256, artifact: .base)
+        let reusableProjector = projector.map {
+            ModelManagerService.hasReusableLibraryArtifact(matching: $0.sha256, artifact: .mmproj)
         } ?? false
         if !reusableBase || (projector != nil && !reusableProjector) {
             guard storagePreflight(base: base, projector: projector).canProceed else {
@@ -456,8 +444,8 @@ final class ImportedModelUpdateCoordinator: ObservableObject {
     func promoteIfVerified(modelID: String) async throws -> AIModel? {
         refreshJournalIfAvailable()
         guard let staged = stagedRecords[modelID] else { return nil }
-        let baseReady = ModelManagerService.isBaseDownloaded(staged.model)
-        let projectorReady = !staged.model.requiresMMProj || ModelManagerService.isMMProjDownloaded(staged.model)
+        let baseReady = ModelManagerService.isArtifactVerified(staged.model, artifact: .base, depth: .full)
+        let projectorReady = !staged.model.requiresMMProj || ModelManagerService.isArtifactVerified(staged.model, artifact: .mmproj, depth: .full)
         guard baseReady, projectorReady else { return nil }
 
         guard let oldRecord = store.record(id: modelID) else {

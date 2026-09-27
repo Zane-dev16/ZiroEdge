@@ -52,7 +52,7 @@ final class ModelAvailabilitySurfaceTests: XCTestCase {
 
         // 3. ModelManagerService.isFullyDownloaded
         XCTAssertTrue(ModelManagerService.isFullyDownloaded(model))
-        XCTAssertTrue(ModelManagerService.isBaseDownloaded(model))
+        XCTAssertTrue(ModelManagerService.isArtifactVerified(model, artifact: .base, depth: .full))
     }
 
     /// A vision model with only a valid base and no projector must NOT be vision-ready
@@ -156,8 +156,8 @@ final class ModelAvailabilitySurfaceTests: XCTestCase {
         }
         XCTAssertTrue(issues.contains { if case ArtifactIssue.sha256Mismatch = $0 { return true }; return false })
 
-        // isBaseDownloaded must return false AND quarantine the artifact
-        XCTAssertFalse(ModelManagerService.isBaseDownloaded(model))
+        // isArtifactVerified(base, .full) must return false AND quarantine the artifact
+        XCTAssertFalse(ModelManagerService.isArtifactVerified(model, artifact: .base, depth: .full))
 
         // The original must be gone after failed validation
         XCTAssertFalse(FileManager.default.fileExists(atPath: destURL.path),

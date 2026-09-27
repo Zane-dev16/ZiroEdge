@@ -109,7 +109,7 @@ final class FreshInstallLegacyUpgradeTests: XCTestCase {
         try TestModelFixtures.install(data, for: model)
 
         // Migration should recognize the artifact without network interaction.
-        XCTAssertTrue(ModelManagerService.isBaseDownloaded(model))
+        XCTAssertTrue(ModelManagerService.isArtifactVerified(model, artifact: .base, depth: .full))
         XCTAssertTrue(ModelManagerService.isFullyDownloaded(model))
     }
 
@@ -379,7 +379,7 @@ final class BackgroundLifecycleQATests: XCTestCase {
         try TestModelFixtures.install(data, for: model)
 
         // Verification is purely local and must not be affected by power state.
-        XCTAssertTrue(ModelManagerService.isBaseDownloaded(model))
+        XCTAssertTrue(ModelManagerService.isArtifactVerified(model, artifact: .base, depth: .full))
         XCTAssertTrue(ModelManagerService.isFullyDownloaded(model))
     }
 }
@@ -649,7 +649,7 @@ final class EvidenceArtifactQATests: XCTestCase {
 
         // Model must NOT report installed because SHA-256 won't match.
         XCTAssertFalse(
-            ModelManagerService.isBaseDownloaded(model),
+            ModelManagerService.isArtifactVerified(model, artifact: .base, depth: .full),
             "Tampered model must not report installed"
         )
     }
@@ -673,7 +673,7 @@ final class EvidenceArtifactQATests: XCTestCase {
         // (It may have been moved to quarantine.)
         if FileManager.default.fileExists(atPath: ModelManagerService.baseModelPath(for: model).path) {
             // If still there, it should be the corrupted version and model should not be installed.
-            XCTAssertFalse(ModelManagerService.isBaseDownloaded(model))
+            XCTAssertFalse(ModelManagerService.isArtifactVerified(model, artifact: .base, depth: .full))
         }
     }
 
@@ -786,7 +786,7 @@ final class EndToEndLifecycleQATests: XCTestCase {
         XCTAssertGreaterThan(space, 0)
 
         // The valid installation must survive.
-        XCTAssertTrue(ModelManagerService.isBaseDownloaded(model))
+        XCTAssertTrue(ModelManagerService.isArtifactVerified(model, artifact: .base, depth: .full))
 
         // Even if we attempt to download again (simulating recovery),
         // the existing valid file must not be touched.

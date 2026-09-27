@@ -102,7 +102,7 @@ final class Batch07VerificationPromotionTests: XCTestCase {
             "durable metadata must be cleared on rejection"
         )
         XCTAssertFalse(FileManager.default.fileExists(atPath: task.destinationURL.path))
-        XCTAssertFalse(ModelManagerService.isBaseDownloaded(model))
+        XCTAssertFalse(ModelManagerService.isArtifactVerified(model, artifact: .base, depth: .full))
         XCTAssertEqual(
             manager.downloadStatuses[model.id]?.baseState,
             .failed(error: .sha256Mismatch),
@@ -151,7 +151,7 @@ final class Batch07VerificationPromotionTests: XCTestCase {
         XCTAssertNil(manager.activeTasks[key])
         XCTAssertTrue(manager.activeTasks.isEmpty)
         XCTAssertFalse(FileManager.default.fileExists(atPath: task.destinationURL.path))
-        XCTAssertFalse(ModelManagerService.isBaseDownloaded(model))
+        XCTAssertFalse(ModelManagerService.isArtifactVerified(model, artifact: .base, depth: .full))
         XCTAssertEqual(
             manager.downloadStatuses[model.id]?.baseState,
             .failed(error: .diskSpaceInsufficient)
@@ -209,7 +209,7 @@ final class Batch07VerificationPromotionTests: XCTestCase {
             "late verification completion must not re-register the cancelled task"
         )
         XCTAssertFalse(FileManager.default.fileExists(atPath: task.destinationURL.path))
-        XCTAssertFalse(ModelManagerService.isBaseDownloaded(model))
+        XCTAssertFalse(ModelManagerService.isArtifactVerified(model, artifact: .base, depth: .full))
         XCTAssertFalse(
             FileManager.default.fileExists(atPath: task.stagingURL.path),
             "cancel with discardStaging must remove staging"

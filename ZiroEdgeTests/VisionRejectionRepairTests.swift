@@ -100,8 +100,8 @@ final class VisionRejectionRepairTests: XCTestCase {
 
         // Install only the projector (valid).
         try projectorData.write(to: ModelManagerService.mmprojModelPath(for: model), options: .atomic)
-        XCTAssertTrue(ModelManagerService.isMMProjDownloaded(model))
-        XCTAssertFalse(ModelManagerService.isBaseDownloaded(model))
+        XCTAssertTrue(ModelManagerService.isArtifactVerified(model, artifact: .mmproj, depth: .full))
+        XCTAssertFalse(ModelManagerService.isArtifactVerified(model, artifact: .base, depth: .full))
         XCTAssertFalse(ModelManagerService.isFullyDownloaded(model))
 
         // Repair should recognize only the base is missing.
@@ -125,8 +125,8 @@ final class VisionRejectionRepairTests: XCTestCase {
 
         // Install only the base (valid).
         try baseData.write(to: ModelManagerService.baseModelPath(for: model), options: .atomic)
-        XCTAssertTrue(ModelManagerService.isBaseDownloaded(model))
-        XCTAssertFalse(ModelManagerService.isMMProjDownloaded(model))
+        XCTAssertTrue(ModelManagerService.isArtifactVerified(model, artifact: .base, depth: .full))
+        XCTAssertFalse(ModelManagerService.isArtifactVerified(model, artifact: .mmproj, depth: .full))
 
         let availability = ModelManagerService.availability(for: model)
         guard case .repairNeeded(let issues) = availability else {
@@ -152,8 +152,8 @@ final class VisionRejectionRepairTests: XCTestCase {
         try projectorData.write(to: ModelManagerService.mmprojModelPath(for: model), options: .atomic)
 
         // Projector should still be verified despite corrupt base.
-        XCTAssertTrue(ModelManagerService.isMMProjDownloaded(model))
-        XCTAssertFalse(ModelManagerService.isBaseDownloaded(model))
+        XCTAssertTrue(ModelManagerService.isArtifactVerified(model, artifact: .mmproj, depth: .full))
+        XCTAssertFalse(ModelManagerService.isArtifactVerified(model, artifact: .base, depth: .full))
 
         let availability = ModelManagerService.availability(for: model)
         guard case .repairNeeded(let issues) = availability else {
@@ -187,8 +187,8 @@ final class VisionRejectionRepairTests: XCTestCase {
         try corruptProjectorData.write(to: ModelManagerService.mmprojModelPath(for: model), options: .atomic)
 
         // Base should still be verified despite corrupt projector.
-        XCTAssertTrue(ModelManagerService.isBaseDownloaded(model))
-        XCTAssertFalse(ModelManagerService.isMMProjDownloaded(model))
+        XCTAssertTrue(ModelManagerService.isArtifactVerified(model, artifact: .base, depth: .full))
+        XCTAssertFalse(ModelManagerService.isArtifactVerified(model, artifact: .mmproj, depth: .full))
         XCTAssertFalse(ModelManagerService.isFullyDownloaded(model))
     }
 
@@ -241,8 +241,8 @@ final class VisionRejectionRepairTests: XCTestCase {
         try badProjector.write(to: ModelManagerService.mmprojModelPath(for: model), options: .atomic)
 
         // Base should still pass independently.
-        XCTAssertTrue(ModelManagerService.isBaseDownloaded(model))
-        XCTAssertFalse(ModelManagerService.isMMProjDownloaded(model))
+        XCTAssertTrue(ModelManagerService.isArtifactVerified(model, artifact: .base, depth: .full))
+        XCTAssertFalse(ModelManagerService.isArtifactVerified(model, artifact: .mmproj, depth: .full))
     }
 
     // MARK: - Storage Rejection Before Transfer

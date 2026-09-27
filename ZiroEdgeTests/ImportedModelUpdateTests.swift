@@ -361,7 +361,7 @@ final class ImportedModelUpdateTests: XCTestCase {
         XCTAssertEqual(promoted.huggingFaceProvenance?.revision, newReview.revision)
         XCTAssertTrue(FileManager.default.fileExists(atPath: artifactURL.path))
         XCTAssertEqual(ModelManagerService.baseModelPath(for: promoted), artifactURL)
-        XCTAssertTrue(ModelManagerService.isBaseDownloaded(promoted))
+        XCTAssertTrue(ModelManagerService.isArtifactVerified(promoted, artifact: .base, depth: .full))
         ModelManagerService.deleteModel(promoted)
     }
 

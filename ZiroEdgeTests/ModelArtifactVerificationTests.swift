@@ -19,8 +19,8 @@ final class ModelArtifactVerificationTests: XCTestCase {
         try authenticationBody.write(to: ModelManagerService.baseModelPath(for: model))
         try authenticationBody.write(to: ModelManagerService.mmprojModelPath(for: model))
         XCTAssertFalse(ModelManagerService.isFullyDownloaded(model))
-        XCTAssertFalse(ModelManagerService.isBaseDownloaded(model))
-        XCTAssertFalse(ModelManagerService.isMMProjDownloaded(model))
+        XCTAssertFalse(ModelManagerService.isArtifactVerified(model, artifact: .base, depth: .full))
+        XCTAssertFalse(ModelManagerService.isArtifactVerified(model, artifact: .mmproj, depth: .full))
         let status = DownloadManager().status(for: model)
         XCTAssertFalse(status.isReady)
         XCTAssertTrue(status.isRepairNeeded)
@@ -54,7 +54,7 @@ final class ModelArtifactVerificationTests: XCTestCase {
         defer { ModelManagerService.deleteModel(model) }
         try validGGUFData(length: 16).write(to: ModelManagerService.baseModelPath(for: model))
 
-        XCTAssertTrue(ModelManagerService.isBaseDownloaded(model))
+        XCTAssertTrue(ModelManagerService.isArtifactVerified(model, artifact: .base, depth: .full))
         XCTAssertFalse(ModelManagerService.isFullyDownloaded(model))
         XCTAssertTrue(DownloadManager().status(for: model).isRepairNeeded)
     }
@@ -64,7 +64,7 @@ final class ModelArtifactVerificationTests: XCTestCase {
         defer { ModelManagerService.deleteModel(model) }
         try validGGUFData(length: 16).write(to: ModelManagerService.mmprojModelPath(for: model))
 
-        XCTAssertTrue(ModelManagerService.isMMProjDownloaded(model))
+        XCTAssertTrue(ModelManagerService.isArtifactVerified(model, artifact: .mmproj, depth: .full))
         XCTAssertFalse(ModelManagerService.isFullyDownloaded(model))
         XCTAssertTrue(DownloadManager().status(for: model).isRepairNeeded)
     }
@@ -74,7 +74,7 @@ final class ModelArtifactVerificationTests: XCTestCase {
         defer { ModelManagerService.deleteModel(model) }
         try validGGUFData(length: 16).write(to: ModelManagerService.baseModelPath(for: model))
 
-        XCTAssertTrue(ModelManagerService.isBaseDownloaded(model))
+        XCTAssertTrue(ModelManagerService.isArtifactVerified(model, artifact: .base, depth: .full))
         XCTAssertTrue(ModelManagerService.isFullyDownloaded(model))
         XCTAssertTrue(DownloadManager().status(for: model).isReady)
     }

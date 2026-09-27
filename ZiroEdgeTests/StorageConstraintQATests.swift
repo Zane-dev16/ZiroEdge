@@ -86,7 +86,7 @@ final class StorageConstraintQATests: XCTestCase {
         try TestModelFixtures.install(data, for: model)
 
         // Verify the installed model is intact.
-        XCTAssertTrue(ModelManagerService.isBaseDownloaded(model))
+        XCTAssertTrue(ModelManagerService.isArtifactVerified(model, artifact: .base, depth: .full))
         XCTAssertTrue(ModelManagerService.isFullyDownloaded(model))
 
         // Simulate a disk space shortage check — should not touch installed files.
@@ -103,7 +103,7 @@ final class StorageConstraintQATests: XCTestCase {
                 "Failed staging must be cleaned"
             )
             // Original installation preserved.
-            XCTAssertTrue(ModelManagerService.isBaseDownloaded(model))
+            XCTAssertTrue(ModelManagerService.isArtifactVerified(model, artifact: .base, depth: .full))
         }
     }
 
@@ -135,7 +135,7 @@ final class StorageConstraintQATests: XCTestCase {
 
         // Multiple storage checks must not degrade a valid installation.
         for _ in 0..<5 {
-            XCTAssertTrue(ModelManagerService.isBaseDownloaded(model))
+            XCTAssertTrue(ModelManagerService.isArtifactVerified(model, artifact: .base, depth: .full))
             XCTAssertTrue(ModelManagerService.isFullyDownloaded(model))
         }
     }

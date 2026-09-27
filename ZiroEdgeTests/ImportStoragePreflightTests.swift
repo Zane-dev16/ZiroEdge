@@ -85,7 +85,7 @@ final class ImportStoragePreflightTests: XCTestCase {
         defer {
             try? FileManager.default.removeItem(at: ModelManagerService.baseModelPath(for: fixture))
         }
-        guard ModelManagerService.isBaseDownloaded(fixture) else {
+        guard ModelManagerService.isArtifactVerified(fixture, artifact: .base, depth: .full) else {
             // Can't test on this run if the fixture didn't validate (e.g., size mismatch).
             return
         }

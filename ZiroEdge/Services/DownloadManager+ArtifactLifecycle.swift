@@ -8,8 +8,7 @@ extension DownloadManager {
     func resumeArtifactDownload(model: AIModel, artifact: ArtifactType) {
         let key = artifactTaskKey(model: model, artifact: artifact)
         guard let task = activeTasks[key] else {
-            if (artifact == .base && !ModelManagerService.isBaseDownloaded(model))
-                || (artifact == .mmproj && !ModelManagerService.isMMProjDownloaded(model)) {
+            if !ModelManagerService.isArtifactVerified(model, artifact: artifact, depth: .full) {
                 startArtifactDownload(model: model, artifact: artifact)
             }
             return

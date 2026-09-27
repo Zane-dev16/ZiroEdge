@@ -266,13 +266,13 @@ extension DownloadManager {
         let mmprojKey = artifactTaskKey(model: model, artifact: .mmproj)
         if activeTasks[baseKey] != nil {
             resumeArtifactDownload(model: model, artifact: .base)
-        } else if !ModelManagerService.isBaseDownloaded(model) {
+        } else if !ModelManagerService.isArtifactVerified(model, artifact: .base, depth: .full) {
             startArtifactDownload(model: model, artifact: .base)
         }
         if model.requiresMMProj {
             if activeTasks[mmprojKey] != nil {
                 resumeArtifactDownload(model: model, artifact: .mmproj)
-            } else if !ModelManagerService.isMMProjDownloaded(model) {
+            } else if !ModelManagerService.isArtifactVerified(model, artifact: .mmproj, depth: .full) {
                 startArtifactDownload(model: model, artifact: .mmproj)
             }
         }
@@ -296,9 +296,9 @@ extension DownloadManager {
         }
 
         // Retry only artifacts that are missing or invalid (verifier truth:
-        // full SHA-256 + GGUF structure via isBaseDownloaded/isMMProjDownloaded).
-        let baseNeedsRetry = !ModelManagerService.isBaseDownloaded(model)
-        let mmprojNeedsRetry = model.requiresMMProj && !ModelManagerService.isMMProjDownloaded(model)
+        // full SHA-256 + GGUF structure via isArtifactVerified(depth: .full)).
+        let baseNeedsRetry = !ModelManagerService.isArtifactVerified(model, artifact: .base, depth: .full)
+        let mmprojNeedsRetry = model.requiresMMProj && !ModelManagerService.isArtifactVerified(model, artifact: .mmproj, depth: .full)
         DownloadDiagnosticRecorder.shared.record(
             event: .healerAction,
             correlationID: DownloadDiagnosticRecorder.freshCorrelationID(),

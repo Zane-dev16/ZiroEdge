@@ -67,13 +67,13 @@ final class SettingsTests: XCTestCase {
         let model = TestModelFixtures.text(data: testData)
         try TestModelFixtures.install(testData, for: model)
 
-        XCTAssertTrue(ModelManagerService.isBaseDownloaded(model), "Model should be downloaded")
+        XCTAssertTrue(ModelManagerService.isArtifactVerified(model, artifact: .base, depth: .full), "Model should be downloaded")
 
         // Delete via ModelManagerService.
         ModelManagerService.deleteModel(model)
 
         // Verify file is removed.
-        XCTAssertFalse(ModelManagerService.isBaseDownloaded(model), "Model should be deleted")
+        XCTAssertFalse(ModelManagerService.isArtifactVerified(model, artifact: .base, depth: .full), "Model should be deleted")
         XCTAssertEqual(ModelManagerService.diskUsage(for: model), 0, "Disk usage should be 0 after deletion")
     }
 
@@ -88,7 +88,7 @@ final class SettingsTests: XCTestCase {
         // Delete via DownloadManager (this is what SettingsView uses).
         downloadManager.deleteModel(model)
 
-        XCTAssertFalse(ModelManagerService.isBaseDownloaded(model), "Model files should be removed")
+        XCTAssertFalse(ModelManagerService.isArtifactVerified(model, artifact: .base, depth: .full), "Model files should be removed")
         XCTAssertFalse(ModelManagerService.isFullyDownloaded(model), "Download status should reflect deletion")
     }
 

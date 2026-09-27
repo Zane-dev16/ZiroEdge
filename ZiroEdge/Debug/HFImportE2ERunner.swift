@@ -138,7 +138,7 @@ enum HFImportE2ERunner {
 
         // ---- Step 5: download (skipped when already installed) -----------------
         let alreadyInstalled = services.downloadManager.status(for: record.model).isReady
-            || ModelManagerService.isBaseDownloaded(record.model)
+            || ModelManagerService.isArtifactVerified(record.model, artifact: .base, depth: .full)
         if alreadyInstalled {
             emit("DOWNLOAD skipped: artifact already installed", step: 5)
         } else {
@@ -192,7 +192,7 @@ enum HFImportE2ERunner {
                                     stepBase: Int) async throws {
         let model = record.model
         let baseStep = stepBase + 1
-        guard ModelManagerService.isBaseDownloaded(model) else {
+        guard ModelManagerService.isArtifactVerified(model, artifact: .base, depth: .full) else {
             throw E2EFailure(step: baseStep, reason: "post-promotion check failed: base artifact not present on disk")
         }
         emit("PROMOTED baseArtifactPresent=true destinationStorageID=\(model.baseArtifactStorageID)", step: baseStep)

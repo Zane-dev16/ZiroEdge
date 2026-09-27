@@ -329,7 +329,7 @@ extension DownloadManagerTests {
             downloadManager.requiredDownloadBytes(for: model),
             Int64(expected.count) + DownloadManager.storageSafetyMarginBytes
         )
-        XCTAssertFalse(ModelManagerService.isBaseDownloaded(model))
+        XCTAssertFalse(ModelManagerService.isArtifactVerified(model, artifact: .base, depth: .full))
     }
 
     func testSameSizeWrongDigestProjectorRequiresFullReplacement() throws {
@@ -345,8 +345,8 @@ extension DownloadManagerTests {
             downloadManager.requiredDownloadBytes(for: model),
             Int64(expectedProjector.count) + DownloadManager.storageSafetyMarginBytes
         )
-        XCTAssertTrue(ModelManagerService.isBaseDownloaded(model))
-        XCTAssertFalse(ModelManagerService.isMMProjDownloaded(model))
+        XCTAssertTrue(ModelManagerService.isArtifactVerified(model, artifact: .base, depth: .full))
+        XCTAssertFalse(ModelManagerService.isArtifactVerified(model, artifact: .mmproj, depth: .full))
     }
 
     func testInsufficientStorageDetection() {
@@ -470,11 +470,11 @@ extension DownloadManagerTests {
         let data = TestModelFixtures.gguf()
         let model = TestModelFixtures.text(data: data)
         try TestModelFixtures.install(data, for: model)
-        XCTAssertTrue(ModelManagerService.isBaseDownloaded(model))
+        XCTAssertTrue(ModelManagerService.isArtifactVerified(model, artifact: .base, depth: .full))
 
         downloadManager.deleteModel(model)
 
-        XCTAssertFalse(ModelManagerService.isBaseDownloaded(model))
+        XCTAssertFalse(ModelManagerService.isArtifactVerified(model, artifact: .base, depth: .full))
         XCTAssertFalse(downloadManager.status(for: model).isReady)
     }
 

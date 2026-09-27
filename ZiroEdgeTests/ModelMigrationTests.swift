@@ -94,7 +94,7 @@ final class ModelMigrationTests: XCTestCase {
         let result = ModelMigrationService.migrateIfNeeded(models: [model])
 
         XCTAssertEqual(result, .migrated(entryCount: 2))
-        XCTAssertTrue(ModelManagerService.isBaseDownloaded(model))
+        XCTAssertTrue(ModelManagerService.isArtifactVerified(model, artifact: .base, depth: .full))
         XCTAssertFalse(ModelManagerService.isFullyDownloaded(model))
         guard case .repairNeeded(let issues) = ModelManagerService.availability(for: model) else {
             return XCTFail("A mixed-validity pair must remain repairable")

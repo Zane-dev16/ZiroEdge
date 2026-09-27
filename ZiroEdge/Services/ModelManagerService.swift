@@ -50,23 +50,21 @@ enum ModelManagerService {
         return modelsDirectory.appendingPathComponent("\(model.id)-mmproj.gguf")
     }
 
-    /// Whether the base artifact passes the complete catalog contract.
-    /// Download planning must use the digest too: header and size alone cannot
-    /// distinguish a repairable same-size corruption from an installed model.
-    static func isBaseDownloaded(_ model: AIModel) -> Bool {
-        isArtifactVerified(model, artifact: .base, depth: .full)
-    }
-
-    /// Whether the projector passes the complete catalog contract.
-    /// Always returns true for text-only models.
-    static func isMMProjDownloaded(_ model: AIModel) -> Bool {
-        guard model.requiresMMProj else { return true }
-        return isArtifactVerified(model, artifact: .mmproj, depth: .full)
+    /// Single reusable-artifact probe for import planning: SHA-256 match plus
+    /// verified download in one library scan. Import call sites use this per
+    /// selected artifact instead of re-encoding the match + verify rule.
+    static func hasReusableLibraryArtifact(matching sha256: String, artifact: ArtifactType) -> Bool {
+        ModelRegistry.libraryModels.contains {
+            switch artifact {
+            case .base: $0.baseSHA256 == sha256 && isArtifactVerified($0, artifact: .base, depth: .full)
+            case .mmproj: $0.mmprojSHA256 == sha256 && isArtifactVerified($0, artifact: .mmproj, depth: .full)
+            }
+        }
     }
 
     /// Single artifact-truth entry point. All "is downloaded" questions route
-    /// here; the legacy helpers below are thin wrappers at a fixed depth so
-    /// existing callers keep compiling while new code picks a depth directly.
+    /// here with an explicit depth; the fixed-depth wrappers were retired so
+    /// no mirrored helper can drift from this switch.
     static func isArtifactVerified(
         _ model: AIModel,
         artifact: ArtifactType,
@@ -424,11 +422,11 @@ extension ModelManagerService {
         }
         var issues: [ArtifactIssue] = []
         func checkQuick(_ model: AIModel, artifact: ArtifactType) {
-            // Single pass: the artifact-truth verdict already carries the
-            // failure taxonomy, so no second stat/header probe is needed.
-            if let issue = quickIssue(for: model, artifact: artifact) {
-                issues.append(issue)
-            }
+            // Verdict delegates to artifact-truth; the shared hash-free probe
+            // only classifies a failure artifact-truth already reported.
+            guard !isArtifactVerified(model, artifact: artifact, depth: .quick),
+                  let issue = quickIssue(for: model, artifact: artifact) else { return }
+            issues.append(issue)
         }
         checkQuick(model, artifact: .base)
         if model.requiresMMProj {

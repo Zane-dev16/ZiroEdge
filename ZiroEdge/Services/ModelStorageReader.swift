@@ -12,12 +12,6 @@ import Foundation
 /// requirements so the caseless `ModelManagerService` namespace conforms
 /// without instantiation.
 protocol ModelStorageReader {
-    /// Whether the base artifact is present and passes full validation.
-    static func isBaseDownloaded(_ model: AIModel) -> Bool
-
-    /// Whether the projector artifact is present and passes full validation.
-    static func isMMProjDownloaded(_ model: AIModel) -> Bool
-
     /// Whether every required artifact is downloaded and validated.
     static func isFullyDownloaded(_ model: AIModel) -> Bool
 
