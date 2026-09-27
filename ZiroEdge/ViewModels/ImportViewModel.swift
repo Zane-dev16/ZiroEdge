@@ -444,9 +444,9 @@ final class ImportedModelUpdateCoordinator: ObservableObject {
     func promoteIfVerified(modelID: String) async throws -> AIModel? {
         refreshJournalIfAvailable()
         guard let staged = stagedRecords[modelID] else { return nil }
-        let baseReady = ModelManagerService.isArtifactVerified(staged.model, artifact: .base, depth: .full)
-        let projectorReady = !staged.model.requiresMMProj || ModelManagerService.isArtifactVerified(staged.model, artifact: .mmproj, depth: .full)
-        guard baseReady, projectorReady else { return nil }
+        let verdicts = ModelManagerService.artifactVerdicts(for: staged.model, depth: .full)
+        // Promotion needs the full pair; no text-only fallback (allowsTextOnly: false).
+        guard ModelManagerService.isTextReady(baseVerified: verdicts.baseVerified, projectorVerified: verdicts.projectorVerified, allowsTextOnly: false) else { return nil }
 
         guard let oldRecord = store.record(id: modelID) else {
             throw ImportedModelStoreError.recordNotFound(modelID)
