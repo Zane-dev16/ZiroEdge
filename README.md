@@ -20,7 +20,7 @@ xcodebuild -scheme ZiroEdge -destination 'generic/platform=iOS' build
 
 Requires Xcode 15.0+, iOS 18.0+, Swift 5.9+.
 
-Docs: [download spec](docs/download-spec.md), [download architecture](docs/download-architecture.md), [download testing](docs/download-testing.md), [memory profiles](docs/memory-profiles.md), [release gates](docs/release-gates.md).
+Docs: [download spec](docs/download-spec.md), [download architecture](docs/download-architecture.md), [download testing](docs/download-testing.md), [memory profiles](docs/memory-profiles.md), [release gates](docs/release-gates.md), [design spec](docs/DESIGN-SPEC.md).
 
 ## License
 

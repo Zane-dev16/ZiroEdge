@@ -2,6 +2,10 @@
 
 Runtime memory admission is independent of GGUF and projector download sizes. Artifact sizes are used only for download, integrity, and storage UI.
 
+## GPU tiering
+
+Runtime is auto-tiered: full Metal GPU offload on 8GB+ devices, CPU-only below (`ModelConfiguration.autoGpuLayers()`). Each tier is a separate runtime shape with independent evidence — an uncalibrated Metal shape fails closed to CPU instead of refusing a load CPU could serve.
+
 ## Production policy
 
 A profile is production-eligible only after its exact text or vision runtime shape completes physical acceptance. Unknown, partial, and unvalidated profiles fail closed.
