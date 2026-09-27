@@ -80,11 +80,6 @@ struct PersistenceFailure: Error, LocalizedError, Sendable, Equatable, Codable {
         PersistenceFailure(category: .notFound, operation: operation, domain: "ZiroEdge.Persistence", code: 404)
     }
 
-    static func saveFailed(operation ignoredDescription: String) -> PersistenceFailure {
-        _ = ignoredDescription
-        return PersistenceFailure(category: .saveFailed, operation: .save, domain: "ZiroEdge.Persistence", code: 1)
-    }
-
     static let recoveryBufferFull = PersistenceFailure(
         category: .recoveryBufferFull,
         operation: .save,
