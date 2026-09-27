@@ -25,8 +25,10 @@ struct VisionDownscaleOffer: Equatable {
 extension ChatViewModel {
     // MARK: - Image Attachment
 
-    /// Maximum image dimension (width or height) in pixels.
-    nonisolated static let maxImageDimension: CGFloat = 1024
+    /// Maximum image dimension (width or height) in pixels. Delegates to
+    /// VisionEstimation (single pixel-ceiling owner); kept so existing
+    /// call sites/tests compile unchanged.
+    nonisolated static let maxImageDimension: CGFloat = CGFloat(VisionEstimation.imageCeilingPixels)
     /// Maximum raw image data size before forced downsample (10 MB).
     private nonisolated static let maxImageBytes = 10 * 1024 * 1024
 
@@ -118,13 +120,15 @@ extension ChatViewModel {
     /// helper, vision ctx/maxTokens from the selected model (vision presets:
     /// ctx 4096, default maxTokens 2048). Raw history + image count; the
     /// `LlamaEngine.admit` single decision applies the sibling split.
-    private func visionBudgetParams() -> (promptTokens: Int, contextLength: Int, maxTokens: Int, imageCount: Int) {
+    private func visionBudgetParams() -> VisionEstimation.Budget {
         let transcriptChars = messages.reduce(0) { $0 + $1.content.count }
             + inputText.count + (activeConversationSystemPrompt?.count ?? 0)
-        let promptTokens = Self.estimatedTokens(characterCount: transcriptChars)
+        let promptTokens = VisionEstimation.estimatedTokens(characterCount: transcriptChars)
         let contextLength = selectedModel?.config.contextLength ?? 4096
         let maxTokens = selectedModel?.config.defaultSampling.maxTokens ?? SamplingConfig.default.maxTokens
-        return (promptTokens, contextLength, maxTokens, pendingImages.count + 1)
+        return VisionEstimation.Budget(
+            promptTokens: promptTokens, contextLength: contextLength,
+            maxTokens: maxTokens, imageCount: pendingImages.count + 1)
     }
 
     /// Decode, validate, and downsample attachment data using ImageIO.
@@ -187,13 +191,10 @@ extension ChatViewModel {
     }
 
     /// Read pixel width/height from image metadata without decoding the bitmap.
-    /// Internal for the send-time budget gate (no new decoder there).
+    /// Thin delegate to VisionEstimation (single bounds-reader owner); kept so
+    /// existing call sites/tests compile unchanged.
     nonisolated static func pixelDimensions(of data: Data) -> (width: Int, height: Int)? {
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
-              let width = properties[kCGImagePropertyPixelWidth] as? Int,
-              let height = properties[kCGImagePropertyPixelHeight] as? Int else { return nil }
-        return (width, height)
+        VisionEstimation.pixelDimensions(of: data)
     }
 
     /// Encode a CGImage as JPEG entirely in CoreGraphics (no UIKit round-trip).

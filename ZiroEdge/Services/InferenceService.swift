@@ -6,7 +6,6 @@
 // Wraps the local swift-llama-cpp package (LlamaEngine).
 
 import Foundation
-import ImageIO
 import SwiftLlama
 import os
 
@@ -536,18 +535,7 @@ extension InferenceService {
         )
     }
 
-    // MARK: - Vision seam (internal: no ViewModel import)
-    private static let visionImageCeilingPixels = 1024 // mirrors ChatViewModel.maxImageDimension
-    private static func visionEstimatedTokens(characterCount: Int) -> Int {
-        characterCount > 0 ? max(1, characterCount / 4) : 0
-    }
-    private static func visionPixelDimensions(of data: Data) -> (width: Int, height: Int)? {
-        guard let src = CGImageSourceCreateWithData(data as CFData, nil),
-              let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any],
-              let width = props[kCGImagePropertyPixelWidth] as? Int,
-              let height = props[kCGImagePropertyPixelHeight] as? Int else { return nil }
-        return (width, height)
-    }
+    // MARK: - Vision seam (delegates to VisionEstimation; no ViewModel import)
 
     /// Shared sibling-split budget both attach-time and send-time gating use.
     /// Thin caller over `LlamaEngine.adjustedVisionPromptTokens` (single owner
@@ -576,15 +564,15 @@ extension InferenceService {
         maxTokens: Int,
         probeBypass: Bool = false
     ) throws {
-        // Internal vision seam: token math + pixel dims live here so the
-        // service never reaches into ChatViewModel (wrong layer).
-        let promptTokens = Self.visionEstimatedTokens(
+        // Estimation inputs live in VisionEstimation (single owner behind the
+        // admit seam) so the service never reaches into ChatViewModel.
+        let promptTokens = VisionEstimation.estimatedTokens(
             characterCount: messages.reduce(0) { $0 + $1.content.count }
         )
         let imageCount = max(1, images.count)
-        let ceiling = Self.visionImageCeilingPixels
+        let ceiling = VisionEstimation.imageCeilingPixels
         for image in images {
-            guard let dims = Self.visionPixelDimensions(of: image) else {
+            guard let dims = VisionEstimation.pixelDimensions(of: image) else {
                 // Undecodable bytes: assume the attach ceiling (legacy); only a refusal throws.
                 let gate = LlamaEngine.admit(
                     imageWidth: ceiling, imageHeight: ceiling,
