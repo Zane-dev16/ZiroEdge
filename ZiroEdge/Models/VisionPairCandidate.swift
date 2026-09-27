@@ -11,7 +11,7 @@ import Foundation
 
 /// Deterministic confidence level for a vision (base + projector) pair.
 /// Scored from repository metadata only — no network round-trips needed.
-enum VisionPairConfidence: String, Codable, Sendable, Comparable {
+enum VisionPairConfidence: String, Codable, Sendable, CaseIterable, Comparable {
     /// Same architecture, matching quantization tier (e.g. Q4_K_M base + Q8_0 projector for Gemma).
     case high
 
@@ -23,15 +23,7 @@ enum VisionPairConfidence: String, Codable, Sendable, Comparable {
     case low
 
     static func < (lhs: VisionPairConfidence, rhs: VisionPairConfidence) -> Bool {
-        order(lhs) < order(rhs)
-    }
-
-    private static func order(_ c: VisionPairConfidence) -> Int {
-        switch c {
-        case .high: 0
-        case .medium: 1
-        case .low: 2
-        }
+        allCases.firstIndex(of: lhs)! < allCases.firstIndex(of: rhs)!
     }
 
     var label: String {
