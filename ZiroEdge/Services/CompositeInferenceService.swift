@@ -109,11 +109,10 @@ actor CompositeInferenceService: InferenceServiceProtocol {
     private let llama: InferenceService
     private let apple: FoundationModelsProvider
 
-    /// Explicit selection; nil means "resolve at call time".
-    private var override: InferenceEngine?
-
+    /// Single truth: EngineStore.lastEngine. No in-memory override — a
+    /// second copy diverges whenever anyone writes the store directly.
     var selectedEngine: InferenceEngine {
-        override ?? EngineStore.lastEngine
+        EngineStore.lastEngine
     }
 
     init(llama: InferenceService, apple: FoundationModelsProvider) {
@@ -121,10 +120,11 @@ actor CompositeInferenceService: InferenceServiceProtocol {
         self.apple = apple
     }
 
-    func selectEngine(_ engine: InferenceEngine) {
-        override = engine
-        EngineStore.lastEngine = engine
+    @discardableResult
+    func selectEngine(_ engine: InferenceEngine) -> Bool {
+        guard EngineStore.select(engine) else { return false }
         logger.info("Engine selected: \(engine.rawValue, privacy: .public)")
+        return true
     }
 
     /// Active provider for the current selection, falling back to llama

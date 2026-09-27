@@ -15,7 +15,9 @@ extension ChatViewModel {
     var selectedEngine: InferenceEngine {
         get { EngineStore.lastEngine }
         set {
-            EngineStore.lastEngine = newValue
+            // Route through EngineStore.select so availability gating lives
+            // in the single routing module, not in this delegate.
+            EngineStore.select(newValue)
             refreshModelLoadPhase()
         }
     }
