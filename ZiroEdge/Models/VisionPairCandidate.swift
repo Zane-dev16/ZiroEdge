@@ -80,18 +80,4 @@ struct VisionPairCandidate: Identifiable, Hashable, Sendable {
             "Only architecture compatibility was verified. The projector may not be designed for this base model. Import is allowed but unsupported."
         }
     }
-
-    /// Whether the projector is required for this architecture family.
-    /// Some architectures (e.g. Gemma) require a CLIP projector for vision;
-    /// others (e.g. LLaVA-style) embed the projector.
-    var projectorArchitectureNote: String? {
-        let arch = base.architecture.lowercased()
-        if arch.contains("gemma") {
-            return "Gemma vision models require a CLIP projector (mmproj). Without it, vision inference is not possible."
-        }
-        if arch.contains("qwen") && arch.contains("vl") {
-            return "Qwen2.5-VL requires an mmproj for vision. The base GGUF alone provides text-only inference."
-        }
-        return nil
-    }
 }
