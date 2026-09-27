@@ -535,19 +535,26 @@ extension InferenceService {
         )
     }
 
-    /// Send-time vision gate: re-gates every image against the current
-    /// history (chars/4 via the Batch4 helper, no new estimator). Sibling
-    /// images split first, same as attach. Throws
-    /// `LlamaError.contextWindowExceeded` instead of reaching eval unless
-    /// every decodable image fits as-is — attach already downscaled anything
-    /// over-safe, so an over-threshold image here bypassed attach and must
-    /// never reach eval. Pure (sync, no engine) for hermetic tests.
-    /// - Parameter probeBypass: DEBUG-only threshold-probe bypass
-    ///   (`--vision-probe-bypass`): over-safe-but-downscalable images pass
-    ///   through to the engine `visionPrefixFits` preflight (where n_pos /
-    ///   peak / console logging happens) instead of refusing. History-too-
-    ///   heavy and invalid dims still refuse. Honored in DEBUG only; release
-    ///   always refuses regardless of the flag.
+    /// Shared sibling-split budget both attach-time and send-time gating use.
+    /// Pure (sync, no engine) for hermetic tests.
+    static func adjustedVisionPromptTokens(
+        promptTokens: Int,
+        contextLength: Int,
+        maxTokens: Int,
+        imageCount: Int
+    ) -> Int {
+        let count = max(1, imageCount)
+        let reserve = max(1, maxTokens)
+        let available = contextLength - promptTokens - reserve - 1 - LlamaEngine.visionTokenMargin - 3
+        let perImage = (available - 3 * count) / count
+        return contextLength - reserve - 1 - LlamaEngine.visionTokenMargin - 3 - perImage
+    }
+
+    /// Send-time vision gate: re-gates every image against the current history.
+    /// Throws `LlamaError.contextWindowExceeded` instead of reaching eval unless
+    /// every decodable image fits as-is. Pure (sync, no engine) for hermetic tests.
+    /// - Parameter probeBypass: DEBUG-only `--vision-probe-bypass`: over-safe-but-
+    ///   downscalable images pass to the engine preflight instead of refusing.
     static func throwIfVisionExceedsBudget(
         messages: [(role: String, content: String)],
         images: [Data],
@@ -559,16 +566,12 @@ extension InferenceService {
             characterCount: messages.reduce(0) { $0 + $1.content.count }
         )
         let imageCount = max(1, images.count)
-        let reserve = max(1, maxTokens)
-        let available = contextLength - promptTokens - reserve - 1 - LlamaEngine.visionTokenMargin - 3
-        let perImage = (available - 3 * imageCount) / imageCount
-        let adjustedPromptTokens = contextLength - reserve - 1 - LlamaEngine.visionTokenMargin - 3 - perImage
+        let adjustedPromptTokens = Self.adjustedVisionPromptTokens(promptTokens: promptTokens,
+            contextLength: contextLength, maxTokens: maxTokens, imageCount: imageCount)
         let ceiling = Int(ChatViewModel.maxImageDimension)
         for image in images {
             guard let dims = ChatViewModel.pixelDimensions(of: image) else {
-                // Undecodable bytes cannot be measured; assume the attach
-                // ceiling (legacy). Only a refusal throws here — the engine
-                // preflight stays the backstop for these.
+                // Undecodable bytes: assume the attach ceiling (legacy); only a refusal throws.
                 let gate = LlamaEngine.visionGate(
                     imageWidth: ceiling, imageHeight: ceiling,
                     promptTokens: adjustedPromptTokens,
@@ -586,9 +589,7 @@ extension InferenceService {
             )
             if gate == .fits { continue }
 #if DEBUG
-            // Threshold probe: over-safe-but-downscalable images reach the
-            // engine preflight (n_pos/peak/console logging) instead of
-            // refusing. History-too-heavy / invalid dims still throw.
+            // Threshold probe: over-safe-but-downscalable images reach the engine preflight.
             if probeBypass, case .downscaledTo = gate { continue }
 #endif
             throw LlamaError.contextWindowExceeded

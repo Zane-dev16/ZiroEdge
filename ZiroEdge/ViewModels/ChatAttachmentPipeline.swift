@@ -116,20 +116,20 @@ extension ChatViewModel {
 
     /// Budget params for the next attach: transcript tokens via the Batch4
     /// helper, vision ctx/maxTokens from the selected model (vision presets:
-    /// ctx 4096, default maxTokens 2048). Sibling images split first:
-    /// perImage = (available - 3*N) / N, folded back into promptTokens so the
-    /// one-image function budgets exactly this image's share (N == 1 is identity).
+    /// ctx 4096, default maxTokens 2048). Sibling split shares one helper
+    /// with send-time gating (`InferenceService.adjustedVisionPromptTokens`).
     private func visionBudgetParams() -> (promptTokens: Int, contextLength: Int, maxTokens: Int) {
         let transcriptChars = messages.reduce(0) { $0 + $1.content.count }
             + inputText.count + (activeConversationSystemPrompt?.count ?? 0)
         let promptTokens = Self.estimatedTokens(characterCount: transcriptChars)
         let contextLength = selectedModel?.config.contextLength ?? 4096
         let maxTokens = selectedModel?.config.defaultSampling.maxTokens ?? SamplingConfig.default.maxTokens
-        let imageCount = pendingImages.count + 1
-        let reserve = max(1, maxTokens)
-        let available = contextLength - promptTokens - reserve - 1 - LlamaEngine.visionTokenMargin - 3
-        let perImage = (available - 3 * imageCount) / imageCount
-        let adjustedPromptTokens = contextLength - reserve - 1 - LlamaEngine.visionTokenMargin - 3 - perImage
+        let adjustedPromptTokens = InferenceService.adjustedVisionPromptTokens(
+            promptTokens: promptTokens,
+            contextLength: contextLength,
+            maxTokens: maxTokens,
+            imageCount: pendingImages.count + 1
+        )
         return (adjustedPromptTokens, contextLength, maxTokens)
     }
 
@@ -252,10 +252,9 @@ extension ChatViewModel {
 
 /// Composer chrome state, housed with the attachment pipeline (the composer's
 /// other input state) to keep ChatViewModel.swift within the file-length
-/// gate. Owns the shell-driven keyboard-resign token (P2-6) and the
-/// per-conversation draft park/persist/restore cycle (P2-8). Reaches the
-/// main file's stored draft/input state through internal (not private)
-/// members; behavior is pinned hermetically in P2BatchTests.
+/// gate. Owns the shell-driven keyboard-resign token (P2-6); the
+/// per-conversation draft park/persist/restore cycle (P2-8) is owned by
+/// ChatSessionCoordinator and reached through thin wrappers below. Behavior is pinned hermetically in P2BatchTests.
 extension ChatViewModel {
     /// Request the composer to resign keyboard/focus (P2-6). `reason` is a
     /// stable short tag (`openSidebar`, `selectConversation`,
@@ -304,8 +303,8 @@ extension ChatViewModel {
     /// Background entry point (P2-8): park the live text, then flush the
     /// store so an OS kill still recovers every per-conversation draft.
     func noteBackgroundTransition() {
-        parkInputTextIntoMemory()
-        persistDraftsToDefaults()
+        sessionCoordinator.park(input: inputText, activeID: activeConversationID)
+        sessionCoordinator.persist()
     }
 
     /// Foreground entry point (P2-8): re-hydrate the memory store from
@@ -313,37 +312,25 @@ extension ChatViewModel {
     /// current context's draft into an *empty* composer. Never clobbers live
     /// typing. Idempotent: repeated foreground kicks converge.
     func noteForegroundTransition() {
-        restoreDraftsFromDefaults()
+        sessionCoordinator.restore()
         guard inputText.isEmpty else { return }
-        if let id = activeConversationID {
-            if let parked = draftStore[id], !parked.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                inputText = parked
-            }
-        } else if !draftForNewChat.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            inputText = draftForNewChat
+        if let text = sessionCoordinator.draftForRestoring(activeID: activeConversationID) {
+            inputText = text
         }
     }
 
     /// Test seam (P2-8): parked text for a conversation, nil when none/blank.
     func parkedDraft(for conversationID: UUID) -> String? {
-        guard let parked = draftStore[conversationID],
-              !parked.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-        return parked
+        sessionCoordinator.parkedText(for: conversationID)
     }
 
     /// Test seam (P2-8): parked unsaved-draft text (empty when none).
-    var parkedNewChatDraft: String { draftForNewChat }
+    var parkedNewChatDraft: String { sessionCoordinator.newChatDraft }
 
-    /// Shared park implementation (internal: used by the conversation
-    /// switches in the main file): persisted conversations keep their UUID
-    /// key; the unsaved draft (nil ID) lands in the new-chat slot instead of
-    /// being dropped.
+    /// Shared park (internal: used by the conversation switches in the main
+    /// file). Delegates to ChatSessionCoordinator, the single draft owner.
     func parkInputTextIntoMemory() {
-        if let id = activeConversationID {
-            draftStore[id] = inputText
-        } else {
-            draftForNewChat = inputText
-        }
+        sessionCoordinator.park(input: inputText, activeID: activeConversationID)
     }
 
     /// Flush non-blank drafts to UserDefaults (P2-8; internal: also flushed
@@ -351,25 +338,7 @@ extension ChatViewModel {
     /// key so empty composers never linger in storage. Logs counts only —
     /// draft content is user text and never logged.
     func persistDraftsToDefaults() {
-        let defaults = UserDefaults.standard
-        let nonBlank = draftStore.filter {
-            !$0.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        }
-        if nonBlank.isEmpty {
-            defaults.removeObject(forKey: DefaultsKeys.draftsByConversation)
-        } else {
-            defaults.set(
-                Dictionary(uniqueKeysWithValues: nonBlank.map { ($0.key.uuidString, $0.value) }),
-                forKey: DefaultsKeys.draftsByConversation
-            )
-        }
-        if draftForNewChat.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            defaults.removeObject(forKey: DefaultsKeys.newChatDraft)
-        } else {
-            defaults.set(draftForNewChat, forKey: DefaultsKeys.newChatDraft)
-        }
-        let hasNewChat = draftForNewChat.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0 : 1
-        logger.info("Drafts persisted conversations=\(nonBlank.count, privacy: .public) newChat=\(hasNewChat, privacy: .public)")
+        sessionCoordinator.persist()
     }
 
     /// Merge persisted drafts into memory (P2-8; internal: also hydrated at
@@ -377,26 +346,6 @@ extension ChatViewModel {
     /// (fresher) state always wins within a session, while a fresh launch
     /// hydrates everything the previous run flushed.
     func restoreDraftsFromDefaults() {
-        let defaults = UserDefaults.standard
-        var restored = 0
-        if let stored = defaults.dictionary(forKey: DefaultsKeys.draftsByConversation) {
-            for (key, value) in stored {
-                guard let id = UUID(uuidString: key),
-                      let text = value as? String,
-                      !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                      draftStore[id] == nil else { continue }
-                draftStore[id] = text
-                restored += 1
-            }
-        }
-        if draftForNewChat.isEmpty,
-           let newChat = defaults.string(forKey: DefaultsKeys.newChatDraft),
-           !newChat.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            draftForNewChat = newChat
-            restored += 1
-        }
-        if restored > 0 {
-            logger.info("Drafts restored count=\(restored, privacy: .public)")
-        }
+        sessionCoordinator.restore()
     }
 }

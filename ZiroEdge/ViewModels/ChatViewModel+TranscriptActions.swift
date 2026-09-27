@@ -101,9 +101,7 @@ extension ChatViewModel {
         let history = Array(messages[...lastUserIndex])
         streamingText = ""; errorMessage = nil; visionWarning = nil
         resetStreamingBuffer()
-        let generationID = UUID()
-        activeGenerationID = generationID
-        streamedConversationID = conversationID
+        let generationID = sessionCoordinator.claim(conversationID: conversationID)
         await startStreaming(
             generationID: generationID,
             conversationID: conversationID, history: history, images: images,
@@ -270,7 +268,7 @@ extension ChatViewModel {
     /// Reset the token count (called on new conversation or model switch).
     func resetTokenCount() {
         tokenCount = 0
-        streamedCharacterCount = 0
+        sessionCoordinator.streamedCharacterCount = 0
     }
 
     // MARK: - Message Actions
@@ -279,22 +277,16 @@ extension ChatViewModel {
         UIPasteboard.general.string = message.content
     }
 
-    // MARK: - BATCH-04 Buffered Streaming Helpers
-
-    private func currentTimeMs() -> UInt64 {
-        UInt64(Date().timeIntervalSince1970 * 1000)
-    }
+    // MARK: - BATCH-04 Buffered Streaming Helpers (state owned by ChatSessionCoordinator)
 
     func flushStreamingChunks() {
-        guard !streamingChunks.isEmpty else { return }
-        let chunk = streamingChunks.joined()
-        streamingChunks.removeAll(keepingCapacity: true)
+        let tail = sessionCoordinator.drain()
+        guard !tail.isEmpty else { return }
         if streamingText.isEmpty {
-            streamingText = chunk
+            streamingText = tail
         } else {
-            streamingText.append(chunk)
+            streamingText.append(tail)
         }
-        lastStreamingFlushMs = currentTimeMs()
     }
 
     /// ~4 characters per generated token is the standard heuristic for LLM output.
@@ -304,32 +296,22 @@ extension ChatViewModel {
     }
 
     func appendStreamingToken(_ token: String, generationID: UUID) {
-        guard activeGenerationID == generationID else { return }
-        streamingChunks.append(token)
-        streamedCharacterCount += token.count
-        tokenCount = Self.estimatedTokens(characterCount: streamedCharacterCount)
-        let now = currentTimeMs()
-        let elapsed = now - lastStreamingFlushMs
-        let shouldFlush = streamingChunks.count >= streamingChunkThreshold || elapsed >= streamingFlushIntervalMs
-        if shouldFlush {
-            streamingFlushTask?.cancel()
+        guard sessionCoordinator.owns(generationID) else { return }
+        sessionCoordinator.appendToken(token)
+        tokenCount = Self.estimatedTokens(characterCount: sessionCoordinator.streamedCharacterCount)
+        if sessionCoordinator.shouldFlushNow() {
+            sessionCoordinator.cancelPendingFlush()
             flushStreamingChunks()
         } else {
-            streamingFlushTask?.cancel()
-            streamingFlushTask = Task { @MainActor [weak self] in
-                try? await Task.sleep(nanoseconds: 80_000_000)
-                guard let self, self.activeGenerationID == generationID else { return }
+            sessionCoordinator.scheduleDelayedFlush { [weak self, generationID] in
+                guard let self, self.sessionCoordinator.owns(generationID) else { return }
                 self.flushStreamingChunks()
             }
         }
     }
 
     func resetStreamingBuffer() {
-        streamingFlushTask?.cancel()
-        streamingFlushTask = nil
-        streamingChunks.removeAll(keepingCapacity: true)
-        lastStreamingFlushMs = currentTimeMs()
-        streamedCharacterCount = 0
+        sessionCoordinator.resetBuffer()
     }
 }
 
@@ -339,12 +321,15 @@ extension ChatViewModel {
     /// Shared completion/reset of a generation slot; both success and error
     /// closures funnel through this.
     func finishGeneration(_ generationID: UUID, reason: StreamEndReason) {
-        streamingFlushTask?.cancel()
-        flushStreamingChunks()
-        activeGenerationID = nil
+        let tail = sessionCoordinator.finish(generationID, reason: reason)
+        if !tail.isEmpty {
+            if streamingText.isEmpty {
+                streamingText = tail
+            } else {
+                streamingText.append(tail)
+            }
+        }
         isStreaming = false
-        streamedConversationID = nil
-        lastStreamEndReason = reason
     }
 
     /// Post-stream reload gate (P3 item 9 synthesis): reload only when the

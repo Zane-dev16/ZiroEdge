@@ -3,8 +3,9 @@
 //
 // Engine selection (llama GGUF vs Apple Intelligence) for ChatViewModel.
 // Lives here — not in ChatViewModel.swift — because that file sits at its
-// length gates. State persists via EngineStore (UserDefaults); the router
-// resolves from the same store, so no direct router access is needed.
+// length gates. Thin delegate: routing, availability gating, and launch
+// resolution all live in EngineStore (CompositeInferenceService.swift);
+// nothing here re-implements them.
 
 import Foundation
 
@@ -21,16 +22,14 @@ extension ChatViewModel {
 
     /// True when the FM engine is selected and actually ready.
     var isAppleEngineActive: Bool {
-        selectedEngine == .appleIntelligence && AppleIntelligenceAvailability.isReady
+        EngineStore.isAppleActive
     }
 
     /// Switch engines. Selecting FM when unavailable is a no-op returning false.
     @discardableResult
     func selectEngine(_ engine: InferenceEngine) -> Bool {
-        if engine == .appleIntelligence, !AppleIntelligenceAvailability.isReady {
-            return false
-        }
-        selectedEngine = engine
+        guard EngineStore.select(engine) else { return false }
+        refreshModelLoadPhase()
         return true
     }
 
@@ -38,32 +37,18 @@ extension ChatViewModel {
     /// when ready, else llama. Persists the resolution.
     @discardableResult
     func resolveEngineIfNeeded(hasDownloadedGGUF: Bool) -> InferenceEngine {
-#if DEBUG
-        // UI-test hook: force the real FM engine deterministically.
-        if CommandLine.arguments.contains("--uitesting-fm-engine"),
-           AppleIntelligenceAvailability.isReady {
-            EngineStore.lastEngine = .appleIntelligence
-        }
-#endif
-        let fmStatus = AppleIntelligenceAvailability.status()
-        let resolved = EngineStore.resolve(
-            isFMReady: fmStatus.isReady,
-            hasDownloadedGGUF: hasDownloadedGGUF
-        )
-        // print (not Logger): surfaces in `devicectl process launch --console` for device acceptance.
-        print("[ENGINE-RESOLVE] engine=\(resolved.rawValue) fm=\(fmStatus) gguf=\(hasDownloadedGGUF ? 1 : 0)")
-        if resolved != EngineStore.lastEngine {
-            EngineStore.lastEngine = resolved
+        let (resolved, changed) = EngineStore.resolveAndPersist(hasDownloadedGGUF: hasDownloadedGGUF)
+        if changed {
             refreshModelLoadPhase()
         }
         return resolved
     }
 
     /// FM send gate. Nil stops the send; non-nil is the conversation to send into.
-    /// Vision is text-only in v1 — image sends stop with the picker warning.
+    /// Vision policy comes from the engine module — image sends stop with the picker warning.
     func fmSendConversationID(hasImages: Bool) async -> UUID? {
         print("[FM-VAL] draft=\(isDraftConversation ? 1 : 0) active=\(activeConversationID?.uuidString ?? "nil")")
-        if hasImages {
+        if hasImages, !InferenceEngine.appleIntelligence.supportsVision {
             visionWarning = "Vision not supported with Apple Intelligence yet. Switch to a vision model."
             return nil
         }

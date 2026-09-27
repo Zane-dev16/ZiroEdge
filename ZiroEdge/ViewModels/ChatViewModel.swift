@@ -35,20 +35,17 @@ enum ModelLoadPhase: Equatable {
 @MainActor
 final class ChatViewModel: ObservableObject {
 
-    /// Terminal reason for the most recent generation, recorded wherever
-    /// `isStreaming` is set false. `completed` is a natural end; `stopped` is
-    /// user/internal cancellation; `failed` is an error termination (its
-    /// banner announces itself, so the completion cue stays silent).
-    /// `truncated` is a natural end whose prompt was shortened to fit the
-    /// context window (message-drop preflight and/or engine sliding-window).
-    enum StreamEndReason {
-        case completed
-        case stopped
-        case failed
-        case truncated
-    }
+    /// Terminal reason for the most recent generation (owned by
+    /// ChatSessionCoordinator; aliased here for source compatibility).
+    /// Recorded wherever `isStreaming` is set false.
+    typealias StreamEndReason = ChatSessionCoordinator.StreamEndReason
 
     // MARK: - Published State
+
+    /// Deep owner for draft, generation-slot, and streaming-buffer state.
+    /// This ViewModel keeps the @Published SwiftUI surface and delegates
+    /// session transitions to it.
+    let sessionCoordinator = ChatSessionCoordinator()
 
     @Published var messages: [ChatMessagePayload] = []
     @Published var inputText: String = ""
@@ -58,15 +55,20 @@ final class ChatViewModel: ObservableObject {
     /// real switches, so a half-typed message never migrates into the wrong
     /// chat. Memory-only by design (drafts are unsent); attachments are
     /// deliberately NOT restored (cleared together with the parked text).
-    /// Internal (not private): the composer-state extension in
-    /// ChatAttachmentPipeline.swift parks/persists it.
-    var draftStore: [UUID: String] = [:]
+    /// Forwarded: owned by ChatSessionCoordinator (single draft owner).
+    var draftStore: [UUID: String] {
+        get { sessionCoordinator.draftsByConversation }
+        set { sessionCoordinator.draftsByConversation = newValue }
+    }
     /// Parked text for the unsaved draft chat (no conversation row yet, so no
     /// `draftStore` key). Preserved across switches/backgrounding and flushed
     /// to UserDefaults with the rest of the store (P2-8); cleared whenever a
     /// fresh draft is explicitly started or the draft materializes on send.
-    /// Internal (not private): see `draftStore`.
-    var draftForNewChat: String = ""
+    /// Forwarded: owned by ChatSessionCoordinator. See `draftStore`.
+    var draftForNewChat: String {
+        get { sessionCoordinator.newChatDraft }
+        set { sessionCoordinator.newChatDraft = newValue }
+    }
     /// Focus-reset generation (P2-6): bumped via `requestComposerResign` every
     /// time the shell navigates away from the composer (sidebar open,
     /// conversation switch, new draft, route push). ChatView observes it and
@@ -80,20 +82,21 @@ final class ChatViewModel: ObservableObject {
     /// cue (ChatView's onChange(of: isStreaming)): every termination funnels
     /// through the same isStreaming flip, so without a recorded reason a
     /// user-initiated Stop or an error would announce a false "complete".
-    /// Not published — read alongside the isStreaming flip in the view.
-    /// Internal setter: the generation-slot extension in
-    /// ChatViewModel+TranscriptActions.swift writes it via finishGeneration.
-    var lastStreamEndReason: StreamEndReason?
+    /// Forwarded: owned by ChatSessionCoordinator; written via finishGeneration.
+    var lastStreamEndReason: StreamEndReason? {
+        get { sessionCoordinator.lastStreamEndReason }
+        set { sessionCoordinator.lastStreamEndReason = newValue }
+    }
     @Published var errorMessage: String?
     @Published var showError: Bool = false
     @Published var streamingText: String = ""
     @Published var isLoadingConversation = false
     @Published var isStartingConversation = false
-    /// Draft-path single-flight: guards `materializeDraftForSend` against
-    /// re-entry while a first send is suspended creating the conversation
-    /// row (`startNewConversation`'s guard covers only the legacy path).
-    /// Not published — no UI observes draft materialization directly.
-    var isMaterializingDraft = false // internal: engine-selection extension materializes FM drafts
+    /// Forwarded: owned by ChatSessionCoordinator (single-flight slot store).
+    var isMaterializingDraft: Bool {
+        get { sessionCoordinator.isMaterializingDraft }
+        set { sessionCoordinator.isMaterializingDraft = newValue }
+    } // internal: engine-selection extension materializes FM drafts
     @Published var isStartupError = false
     @Published var activeConversationSystemPrompt: String? // internal(set): FM draft path stages prompts
     @Published private(set) var hasPersistenceRecovery = false
@@ -122,7 +125,7 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var recoveryExportURL: URL?
     /// staged transcript file for the share sheet. Rebuilt on each export.
     @Published var transcriptExportURL: URL?
-    @Published private(set) var unavailableConversationModelID: String?
+    @Published var unavailableConversationModelID: String?
 
     /// Observable projection of the model residency bridging ModelLifecycleManager:
     /// drives the chat header pill and composer gating. Written only by the
@@ -161,11 +164,16 @@ final class ChatViewModel: ObservableObject {
     /// Warning message when context window auto-truncates old messages.
     @Published var truncationWarning: String?
 
-    /// Identity of the generation allowed to mutate streaming UI.
-    var activeGenerationID: UUID?
-    /// Conversation the live generation is writing into; lets conversation
-    /// switches detect and cancel a stream that belongs elsewhere.
-    var streamedConversationID: UUID?
+    /// Forwarded: owned by ChatSessionCoordinator (generation slot).
+    var activeGenerationID: UUID? {
+        get { sessionCoordinator.activeGenerationID }
+        set { sessionCoordinator.activeGenerationID = newValue }
+    }
+    /// Forwarded: owned by ChatSessionCoordinator (generation slot).
+    var streamedConversationID: UUID? {
+        get { sessionCoordinator.streamedConversationID }
+        set { sessionCoordinator.streamedConversationID = newValue }
+    }
 
     // MARK: - Model Selection
 
@@ -200,7 +208,9 @@ final class ChatViewModel: ObservableObject {
     let lifecycleManager: ModelLifecycleManager
     /// Read-shared with the send-preflight helper in ChatModelLoading.swift.
     let downloadStatusProvider: any ModelDownloadStatusProvider
-    private let modelProvider: () -> [AIModel]
+    /// Read-shared with the conversation-lifecycle extension in
+    /// ChatSessionCoordinator.swift.
+    let modelProvider: () -> [AIModel]
     let titleGenerator: TitleGenerator
     /// Read-shared with the send-preflight helper in ChatModelLoading.swift.
     let logger = Logger(subsystem: "com.zanish-labs.ziroedge", category: "chat-vm")
@@ -211,27 +221,23 @@ final class ChatViewModel: ObservableObject {
     var activeConversationID: UUID? // internal(set): FM draft path commits identity
     /// The active conversation's title for the nav bar. Nil for unsaved
     /// drafts — the bar reads "New chat" instead of a placeholder.
-    @Published private(set) var activeConversationTitle: String?
-    private var loadGeneration: UInt64 = 0
+    @Published var activeConversationTitle: String?
+    /// Read-shared with the conversation-lifecycle extension in
+    /// ChatSessionCoordinator.swift.
+    var loadGeneration: UInt64 = 0
 
-    // BATCH-04: buffered streaming — avoids O(n) copy per token and debounces Published churn
-    var streamingChunks: [String] = []
-    var streamedCharacterCount = 0
-    var streamingFlushTask: Task<Void, Never>?
-    var lastStreamingFlushMs: UInt64 = 0
-    let streamingFlushIntervalMs: UInt64 = 80
-    let streamingChunkThreshold = 20
+    // Streaming buffer + debounce state live in ChatSessionCoordinator.
 
     // MARK: - UserDefaults Keys
 
     enum DefaultsKeys {
         static let lastUsedModelID = "lastUsedModelID"
         static let defaultSystemPrompt = "defaultSystemPrompt"
-        /// Per-conversation drafts parked for kill-recovery (P2-8):
-        /// `[conversationUUIDString: draftText]`, blanks omitted.
-        static let draftsByConversation = "ZiroEdge.chatDraftsByConversation.v1"
+        /// Per-conversation drafts parked for kill-recovery (P2-8).
+        /// Aliases ChatSessionCoordinator (single source of truth).
+        static let draftsByConversation = ChatSessionCoordinator.draftsByConversationKey
         /// Parked text for the unsaved draft chat (P2-8); absent when blank.
-        static let newChatDraft = "ZiroEdge.chatDraftForNewChat.v1"
+        static let newChatDraft = ChatSessionCoordinator.newChatDraftKey
     }
 
     // MARK: - Initialization
@@ -402,219 +408,8 @@ final class ChatViewModel: ObservableObject {
         showingExperimentalConsent = false
     }
 
-    // MARK: - Draft Conversation
-
-    /// Reset the surface to an unsaved, untitled chat. Cheap and synchronous:
-    /// no persistence row exists until first send. Nominates a display
-    /// candidate for the header pill when nothing is chosen yet.
-    func beginNewDraft() {
-        clearActiveConversation()
-        // A tapped New Conversation is an explicit fresh start (P2-8): drop
-        // any parked unsaved-draft text so a later foreground restore cannot
-        // resurrect it into the empty composer, and flush the removal.
-        draftForNewChat = ""
-        persistDraftsToDefaults()
-        isDraftConversation = true
-        // Starting a fresh draft consumes a prior user-unload intent (Settings
-        // → Unload Model): nominating a display candidate here is a deliberate
-        // step toward loading again.
-        lifecycleManager.consumeUserUnloadIntent()
-        conversationListViewModel?.selectedConversationID = nil
-        if selectedModel == nil, let candidate = preferredAutoLoadCandidate() {
-            selectedModel = candidate
-        }
-        refreshModelLoadPhase()
-        startDeferredModelLoadIfNeeded()
-    }
-
-    /// Create the persistence row backing an in-memory draft at first send.
-    /// Mirrors the failure mapping of `startNewConversation(model:)` exactly.
-    /// Internal: the send-validation extension in ChatModelLoading.swift calls it.
-    func materializeDraftForSend() async -> UUID? {
-        // Single-flight: inputText is only cleared by the caller after this
-        // returns, so a double-tap of Send (or Send + keyboard onSubmit) can
-        // re-enter while the first task is suspended inside
-        // createConversationResult. Without this guard both tasks create a
-        // conversation — duplicate "New Conversation" rows, an orphaned row
-        // holding only the user message — and the second send overwrites
-        // activeGenerationID so the first response is silently discarded.
-        // Mirrors the isStartingConversation guard on the legacy path.
-        guard !isMaterializingDraft else { return nil }
-        isMaterializingDraft = true
-        defer { isMaterializingDraft = false }
-
-        guard let model = selectedModel else {
-            needsModelRedirect = true
-            return nil
-        }
-        // Commit any instructions staged on the draft (instructions editor
-        // before first send); fall back to the global default when untouched.
-        let stagedPrompt = activeConversationSystemPrompt
-        let defaultPrompt = UserDefaults.standard.string(forKey: DefaultsKeys.defaultSystemPrompt)
-        let result = await persistence.createConversationResult(
-            id: UUID(),
-            title: "New Conversation",
-            modelID: model.id,
-            systemPrompt: stagedPrompt ?? defaultPrompt?.nilIfBlank
-        )
-        guard case .success(let id) = result else {
-            if case .failure(let error) = result {
-                errorMessage = "Could not start the conversation. \(error.localizedDescription)"
-                showError = true
-                isStartupError = true
-            }
-            return nil
-        }
-        // Commit identity before returning so streaming/persistence callbacks
-        // attach to this conversation even if the caller suspends immediately.
-        // The unsaved-draft slot is consumed (P2-8): the text being sent now
-        // lives in the message, so a stale slot must never restore over it.
-        isDraftConversation = false
-        draftForNewChat = ""
-        activeConversationID = id
-        activeConversationSystemPrompt = stagedPrompt ?? defaultPrompt?.nilIfBlank
-        await conversationListViewModel?.loadConversations()
-        conversationListViewModel?.selectedConversationID = id
-        return id
-    }
-
-    func loadConversation(_ conversationID: UUID) async {
-        // Switching conversations must not leave a live generation writing into
-        // the wrong transcript or yanking navigation back on completion.
-        // R4: suppress the cancel's trailing reload — this load is the reload,
-        // so a second load of the outgoing ID would double-fetch and race selectModel.
-        if isStreaming, let streamed = streamedConversationID, streamed != conversationID {
-            logger.info("Switch cancel suppressReload streamed=\(streamed.uuidString.prefix(8), privacy: .public) target=\(conversationID.uuidString.prefix(8), privacy: .public)")
-            await cancelStream(suppressReload: true)
-        }
-        let previousConversationID = activeConversationID
-        loadGeneration += 1
-        let myGeneration = loadGeneration
-        isLoadingConversation = true
-        truncationWarning = nil
-
-        async let messagesResult = persistence.fetchMessagesResult(conversationID: conversationID)
-        async let conversationsResult = persistence.fetchConversationsResult(historyEligibleOnly: false)
-        let (messageResult, conversationResult) = await (messagesResult, conversationsResult)
-        guard loadGeneration == myGeneration else { return }
-
-        guard case .success(let fetched) = messageResult,
-              case .success(let conversations) = conversationResult,
-              let conversation = conversations.first(where: { $0.id == conversationID }) else {
-            isLoadingConversation = false
-            errorMessage = [resultFailureText(messageResult), resultFailureText(conversationResult)]
-                .compactMap { $0 }.first ?? "The selected conversation is no longer available."
-            showError = true
-            conversationListViewModel?.selectedConversationID = previousConversationID
-            return
-        }
-
-        // Park the outgoing draft before committing the switch, then restore the
-        // target's parked draft together with the transcript: text moves with its
-        // conversation exactly like attachments do (cleared, never migrated).
-        // Unsaved-draft text parks into the new-chat slot (P2-8) instead of
-        // being dropped.
-        parkInputTextIntoMemory()
-
-        // Commit identity and content together so a failed fetch can never pair the
-        // previous transcript with the newly selected conversation.
-        // Switching conversations must not carry staged attachments forward:
-        // clear pendingImages/visionWarning only on an actual switch. A
-        // same-ID reload (post-stream refresh) preserves images staged
-        // mid-stream for the next message (Batch02 race guard).
-        if previousConversationID != conversationID {
-            pendingImages = []
-            visionWarning = nil
-            visionDownscaleOffer = nil
-        }
-        activeConversationID = conversationID
-        activeConversationTitle = conversation.title
-        isDraftConversation = false
-        inputText = draftStore[conversationID] ?? ""
-        messages = fetched
-        activeConversationSystemPrompt = conversation.systemPrompt
-        tokenCount = min(contextWindowSize, fetched.reduce(0) { $0 + max(1, $1.content.count / 4) })
-        truncationWarning = nil
-        errorMessage = nil
-
-        if conversation.modelID == AppleIntelligenceMarker.modelID {
-            // FM is an engine, not a downloadable artifact: it can never be
-            // "removed". Select it when ready; otherwise surface the
-            // FM-aware unavailable banner (copy handled at the banner).
-            unavailableConversationModelID = nil
-            if selectEngine(.appleIntelligence) {
-                print("[FM-CONV] opened apple-intelligence conversation, FM engine active")
-                needsModelRedirect = false
-            } else {
-                unavailableConversationModelID = conversation.modelID
-                needsModelRedirect = true
-            }
-        } else if let model = modelProvider().first(where: { $0.id == conversation.modelID }) {
-            unavailableConversationModelID = nil
-            if let readyVariant = availableModels.first(where: { $0.id == model.id }) {
-                await selectModel(readyVariant)
-            } else {
-                selectedModel = model
-                needsModelRedirect = true
-            }
-        } else {
-            // Keep the transcript visible, but never silently replace a removed import.
-            unavailableConversationModelID = conversation.modelID
-            selectedModel = nil
-            needsModelRedirect = true
-        }
-        guard loadGeneration == myGeneration else { return }
-        isLoadingConversation = false
-        refreshModelLoadPhase()
-    }
-
-    /// Clear transient transcript state when the selected conversation disappears.
-    func clearActiveConversation() {
-        // Detach any live generation before wiping state so stale callbacks cannot
-        // write into cleared buffers; actor cancel finishes asynchronously.
-        let wasStreaming = isStreaming
-        // Park the outgoing draft (P2-8): persisted conversations keep their
-        // key; unsaved-draft text lands in the new-chat slot.
-        parkInputTextIntoMemory()
-        activeGenerationID = nil
-        streamedConversationID = nil
-        loadGeneration += 1
-        activeConversationID = nil
-        activeConversationTitle = nil
-        messages = []
-        inputText = ""
-        streamingText = ""
-        resetStreamingBuffer()
-        tokenCount = 0
-        streamedCharacterCount = 0
-        isLoadingConversation = false
-        isStartupError = false
-        truncationWarning = nil
-        activeConversationSystemPrompt = nil
-        unavailableConversationModelID = nil
-        // Attachments belong to the conversation being left: without this,
-        // images staged in one chat follow into the next transcript and can be
-        // sent into the wrong conversation. beginNewDraft funnels through here.
-        pendingImages = []
-        visionWarning = nil
-        visionDownscaleOffer = nil
-        // A fresh draft orphans any retained partial response: release the
-        // recovery outright (P1-5) so its banner can never follow onto the
-        // unsaved chat. Switching between persisted conversations keeps the
-        // retained recovery stored but hidden via `shouldShowPersistenceRecovery`.
-        releasePersistenceRecovery()
-        refreshModelLoadPhase()
-        if wasStreaming {
-            // Park the streaming UI synchronously so the fresh draft never shows
-            // a live Stop control or thinking row while the actor cancel is in
-            // flight; stale generation callbacks are already gated on the
-            // generation identity nilled above, and cancelStream re-asserts
-            // this state when the backend teardown lands.
-            isStreaming = false
-            lastStreamEndReason = .stopped
-            Task { await self.cancelStream(suppressReload: true) }
-        }
-    }
+    // Conversation lifecycle (beginNewDraft/materialize/load/clear) lives in
+    // ChatSessionCoordinator.swift, next to the draft/slot state it coordinates.
 
     /// Single-flight startup covering model readiness, persistence creation,
     /// and transcript loading. Loading feedback is published before the first await.
@@ -774,9 +569,7 @@ extension ChatViewModel {
 
         streamingText = ""; errorMessage = nil; visionWarning = nil
         resetStreamingBuffer()
-        let generationID = UUID()
-        activeGenerationID = generationID
-        streamedConversationID = sendConversationID
+        let generationID = sessionCoordinator.claim(conversationID: sendConversationID)
 
 #if DEBUG
         await testHookBetweenAwaits?()
@@ -903,9 +696,8 @@ extension ChatViewModel {
     /// R4: switch/delete paths pass suppressReload to skip the trailing
     /// reload (the switch load — or the doomed-row delete — owns navigation).
     func cancelStream(suppressReload: Bool = false) async {
-        activeGenerationID = nil
-        streamedConversationID = nil
-        streamingFlushTask?.cancel()
+        sessionCoordinator.detachSlot()
+        sessionCoordinator.cancelPendingFlush()
         flushStreamingChunks()
         await sessionActor.cancel()
         lastStreamEndReason = .stopped

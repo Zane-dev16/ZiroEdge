@@ -17,10 +17,23 @@ import os
 enum InferenceEngine: String, Sendable, CaseIterable {
     case llama
     case appleIntelligence
+
+    /// Vision policy lives here, not in callers: FM is text-only in v1,
+    /// so vision always routes to llama regardless of text selection.
+    var supportsVision: Bool {
+        switch self {
+        case .llama: return true
+        case .appleIntelligence: return false
+        }
+    }
 }
 
 /// Persists the last working engine. GGUF model choice keeps living in
 /// `DefaultsKeys.lastUsedModelID` untouched.
+///
+/// Single routing authority: selection, availability gating, and launch
+/// resolution all live here so ChatViewModel's engine extension stays a
+/// thin delegate and the router resolves from the same store.
 enum EngineStore {
     private static let lastEngineKey = "lastUsedInferenceEngine"
 
@@ -35,6 +48,21 @@ enum EngineStore {
         set { UserDefaults.standard.set(newValue.rawValue, forKey: lastEngineKey) }
     }
 
+    /// True when the FM engine is selected and actually ready.
+    static var isAppleActive: Bool {
+        lastEngine == .appleIntelligence && AppleIntelligenceAvailability.isReady
+    }
+
+    /// Switch engines. Selecting FM when unavailable is a no-op returning false.
+    @discardableResult
+    static func select(_ engine: InferenceEngine) -> Bool {
+        if engine == .appleIntelligence, !AppleIntelligenceAvailability.isReady {
+            return false
+        }
+        lastEngine = engine
+        return true
+    }
+
     /// Resolve what should answer now: persisted choice if still viable,
     /// else FM when ready, else llama. Never invents availability.
     static func resolve(isFMReady: Bool, hasDownloadedGGUF: Bool) -> InferenceEngine {
@@ -47,6 +75,31 @@ enum EngineStore {
             if isFMReady { return .appleIntelligence }
             return .llama
         }
+    }
+
+    /// Resolve at appear/launch and persist the outcome. Returns the
+    /// resolved engine plus whether the persisted choice changed.
+    @discardableResult
+    static func resolveAndPersist(hasDownloadedGGUF: Bool) -> (engine: InferenceEngine, changed: Bool) {
+#if DEBUG
+        // UI-test hook: force the real FM engine deterministically.
+        if CommandLine.arguments.contains("--uitesting-fm-engine"),
+           AppleIntelligenceAvailability.isReady {
+            lastEngine = .appleIntelligence
+        }
+#endif
+        let fmStatus = AppleIntelligenceAvailability.status()
+        let resolved = resolve(
+            isFMReady: fmStatus.isReady,
+            hasDownloadedGGUF: hasDownloadedGGUF
+        )
+        // print (not Logger): surfaces in `devicectl process launch --console` for device acceptance.
+        print("[ENGINE-RESOLVE] engine=\(resolved.rawValue) fm=\(fmStatus) gguf=\(hasDownloadedGGUF ? 1 : 0)")
+        let changed = resolved != lastEngine
+        if changed {
+            lastEngine = resolved
+        }
+        return (resolved, changed)
     }
 }
 
@@ -138,8 +191,9 @@ actor CompositeInferenceService: InferenceServiceProtocol {
         systemPrompt: String?,
         sampling: SamplingConfig
     ) async throws -> AsyncThrowingStream<String, Error> {
-        // FM is text-only: vision always goes to llama, even when FM
-        // answers text. Callers already show the vision warning otherwise.
+        // Vision policy (`InferenceEngine.supportsVision`): FM is text-only,
+        // so vision always goes to llama even when FM answers text.
+        // Callers already show the vision warning otherwise.
         return try await llama.streamVisionChat(
             messages: messages, images: images, systemPrompt: systemPrompt, sampling: sampling
         )
