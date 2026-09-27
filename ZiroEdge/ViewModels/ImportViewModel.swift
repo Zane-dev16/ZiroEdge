@@ -115,19 +115,12 @@ final class ImportViewModel: ObservableObject {
     }
 
     var storagePreflight: ImportStoragePreflight {
-        let reusableBase = selectedBase.map {
-            ModelManagerService.hasReusableLibraryArtifact(matching: $0.sha256, artifact: .base)
-        } ?? false
-        let reusableProjector = selectedProjector.map {
-            ModelManagerService.hasReusableLibraryArtifact(matching: $0.sha256, artifact: .mmproj)
-        } ?? false
-        let required = SaturatedArithmetic.add(
-            reusableBase ? 0 : (selectedBase?.size ?? 0),
-            reusableProjector ? 0 : (selectedProjector?.size ?? 0)
-        )
-        return ImportStoragePreflight(
-            requiredBytes: required,
-            safetyMarginBytes: downloadManager.storageSafetyMargin(for: required),
+        makeImportStoragePreflight(
+            baseSize: selectedBase?.size ?? 0,
+            baseSHA256: selectedBase?.sha256,
+            projectorSize: selectedProjector?.size,
+            projectorSHA256: selectedProjector?.sha256,
+            safetyMargin: { downloadManager.storageSafetyMargin(for: $0) },
             availableBytes: downloadManager.availableDiskSpace
         )
     }
@@ -250,6 +243,34 @@ final class ImportViewModel: ObservableObject {
     }
 }
 
+// MARK: - Shared storage preflight
+
+@MainActor
+fileprivate func makeImportStoragePreflight(
+    baseSize: Int64,
+    baseSHA256: String?,
+    projectorSize: Int64?,
+    projectorSHA256: String?,
+    safetyMargin: (Int64) -> Int64,
+    availableBytes: Int64
+) -> ImportStoragePreflight {
+    let reusableBase = baseSHA256.map {
+        ModelManagerService.hasReusableLibraryArtifact(matching: $0, artifact: .base)
+    } ?? false
+    let reusableProjector = projectorSHA256.map {
+        ModelManagerService.hasReusableLibraryArtifact(matching: $0, artifact: .mmproj)
+    } ?? false
+    let required = SaturatedArithmetic.add(
+        reusableBase ? 0 : baseSize,
+        reusableProjector ? 0 : (projectorSize ?? 0)
+    )
+    return ImportStoragePreflight(
+        requiredBytes: required,
+        safetyMarginBytes: safetyMargin(required),
+        availableBytes: availableBytes
+    )
+}
+
 // MARK: - Imported Model Update Coordinator
 
 @MainActor
@@ -323,17 +344,12 @@ final class ImportedModelUpdateCoordinator: ObservableObject {
     }
 
     func storagePreflight(base: HFArtifact, projector: HFArtifact?) -> ImportStoragePreflight {
-        let reusableBase = ModelManagerService.hasReusableLibraryArtifact(matching: base.sha256, artifact: .base)
-        let reusableProjector = projector.map {
-            ModelManagerService.hasReusableLibraryArtifact(matching: $0.sha256, artifact: .mmproj)
-        } ?? false
-        let required = SaturatedArithmetic.add(
-            reusableBase ? 0 : base.size,
-            reusableProjector ? 0 : (projector?.size ?? 0)
-        )
-        return ImportStoragePreflight(
-            requiredBytes: required,
-            safetyMarginBytes: downloadManager.storageSafetyMargin(for: required),
+        makeImportStoragePreflight(
+            baseSize: base.size,
+            baseSHA256: base.sha256,
+            projectorSize: projector?.size,
+            projectorSHA256: projector?.sha256,
+            safetyMargin: { downloadManager.storageSafetyMargin(for: $0) },
             availableBytes: downloadManager.availableDiskSpace
         )
     }
@@ -385,16 +401,10 @@ final class ImportedModelUpdateCoordinator: ObservableObject {
             projector: projector,
             updateTargetModelID: existing.id
         )
-        // Reuse already-installed artifacts that match by SHA-256 so we never
-        // download what is already verified.
-        let reusableBase = ModelManagerService.hasReusableLibraryArtifact(matching: base.sha256, artifact: .base)
-        let reusableProjector = projector.map {
-            ModelManagerService.hasReusableLibraryArtifact(matching: $0.sha256, artifact: .mmproj)
-        } ?? false
-        if !reusableBase || (projector != nil && !reusableProjector) {
-            guard storagePreflight(base: base, projector: projector).canProceed else {
-                throw DownloadError.diskSpaceInsufficient
-            }
+        // storagePreflight zeroes required for reusable artifacts, so one
+        // unconditional call covers both fresh and fully-reused updates.
+        guard storagePreflight(base: base, projector: projector).canProceed else {
+            throw DownloadError.diskSpaceInsufficient
         }
         try updateStore.upsert(record)
         stagedRecords[existing.id] = record
