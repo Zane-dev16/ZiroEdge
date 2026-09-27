@@ -449,7 +449,7 @@ final class ModelLifecycleManager: ObservableObject {
         override: Bool, consent: Bool,
         reclaimable: UInt64, priorActive: AIModel?
     ) {
-        let credit = ModelAdmission.reclaimableCreditDetails(for: priorActive)
+        let credit = MemoryBudgeter.reclaimableCreditDetails(for: priorActive)
         let priorID = priorActive?.id ?? "nil"
         let creditEvidence = credit.evidenceStatus ?? "nil"
         let consentFlag = consent ? 1 : 0
@@ -457,7 +457,7 @@ final class ModelLifecycleManager: ObservableObject {
         logger.info("Load gate \(phase, privacy: .public) model=\(model.id, privacy: .public) consent=\(consentFlag, privacy: .public) override=\(overrideFlag, privacy: .public)")
         logger.info("Load gate reclaim=\(reclaimable, privacy: .public) prior=\(priorID, privacy: .public) evidence=\(creditEvidence, privacy: .public)")
         print("[SWITCH-PROOF-GATE] phase=\(phase) model=\(model.id) consent=\(consentFlag) override=\(overrideFlag) " +
-            "reclaimable=\(reclaimable) prior=\(priorID) evidence=\(creditEvidence) profile=\(ModelAdmission.profile(for: model)?.id ?? "nil")")
+            "reclaimable=\(reclaimable) prior=\(priorID) evidence=\(creditEvidence) profile=\(MemoryProfileRegistry.profile(for: model)?.id ?? "nil")")
     }
 
     /// Refusal cause log (Fix verify a+b): distinguishes consent-missing
@@ -472,7 +472,7 @@ final class ModelLifecycleManager: ObservableObject {
         } else if decision.reason == .insufficientProcessHeadroom,
                   (decision.reclaimableBytes ?? 0) == 0,
                   let prior = priorActive {
-            let credit = ModelAdmission.reclaimableCreditDetails(for: prior)
+            let credit = MemoryBudgeter.reclaimableCreditDetails(for: prior)
             let creditProfile = credit.profileID ?? "nil"
             let creditEvidence = credit.evidenceStatus ?? "nil"
             logger.fault("Load refused zero-credit phase=\(phase, privacy: .public) model=\(model.id, privacy: .public) prior=\(prior.id, privacy: .public)")
@@ -545,7 +545,7 @@ extension ModelLifecycleManager {
             let msg = "The downloaded model files are missing or failed integrity verification. Repair the download and try again."
             return (nil, refuseLoadPreservingResident(kind: .unavailableArtifact, message: msg, priorActive: priorActive, priorState: priorState, modelID: model.id))
         }
-        guard let profile = ModelAdmission.profile(for: model) else {
+        guard let profile = MemoryProfileRegistry.profile(for: model) else {
             logger.error("Load refused no runtime profile \(model.id, privacy: .public)")
             let msg = model.runtimeEligibilityExplanation
             let refused = refuseLoadPreservingResident(kind: .runtimeProfileUnavailable, message: msg, priorActive: priorActive, priorState: priorState, modelID: model.id)
@@ -563,7 +563,7 @@ extension ModelLifecycleManager {
         // reclaimable footprint so a B-alone-fits switch is not refused as
         // if A+B had to coexist. .unloadCurrentFirst proceeds to teardown;
         // only a projected miss refuses with the resident preserved.
-        let reclaimable = ModelAdmission.reclaimableBytes(for: priorActive)
+        let reclaimable = MemoryBudgeter.reclaimableBytes(for: priorActive)
         // Fix verify (a)(b): log the full consent gate + reclaimable cause
         // so a profileUnvalidated (consent missing, required=nil) never
         // masquerades as a headroom shortfall, and a zero-credit
@@ -791,7 +791,7 @@ extension ModelLifecycleManager {
         let (override, consent, allow) = ModelAdmission.calibrationGate(for: model)
         // Same reclaimable credit as preflight: a projected pass proceeds to
         // teardown instead of refusing with the resident preserved.
-        let reclaimable = ModelAdmission.reclaimableBytes(for: priorActive)
+        let reclaimable = MemoryBudgeter.reclaimableBytes(for: priorActive)
         Self.logConsentGate(
             logger, phase: "pre-teardown", model: model,
             override: override, consent: consent,
