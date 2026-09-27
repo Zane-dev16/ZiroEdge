@@ -10,6 +10,20 @@ import Foundation
 import os
 
 
+// MARK: - Artifact verification depth
+
+/// Single artifact-truth interface, parameterized by cost.
+/// - presence: file exists + byte size (hash-free).
+/// - quick: presence + GGUF structure (hash-free).
+/// - full: canonical SHA-256 pass with quarantine side effects.
+/// The deeper tiers imply the shallower ones; callers pick the cheapest
+/// depth their context allows instead of choosing between mirrored helpers.
+enum ArtifactVerificationDepth: Sendable {
+    case presence
+    case quick
+    case full
+}
+
 // MARK: - Model Manager Service (Download + Verify)
 
 /// Handles model file management: download, SHA-256 verification, storage queries.
@@ -40,14 +54,62 @@ enum ModelManagerService {
     /// Download planning must use the digest too: header and size alone cannot
     /// distinguish a repairable same-size corruption from an installed model.
     static func isBaseDownloaded(_ model: AIModel) -> Bool {
-        isArtifactDownloaded(model, artifact: .base)
+        isArtifactVerified(model, artifact: .base, depth: .full)
     }
 
     /// Whether the projector passes the complete catalog contract.
     /// Always returns true for text-only models.
     static func isMMProjDownloaded(_ model: AIModel) -> Bool {
         guard model.requiresMMProj else { return true }
-        return isArtifactDownloaded(model, artifact: .mmproj)
+        return isArtifactVerified(model, artifact: .mmproj, depth: .full)
+    }
+
+    /// Single artifact-truth entry point. All "is downloaded" questions route
+    /// here; the legacy helpers below are thin wrappers at a fixed depth so
+    /// existing callers keep compiling while new code picks a depth directly.
+    static func isArtifactVerified(
+        _ model: AIModel,
+        artifact: ArtifactType,
+        depth: ArtifactVerificationDepth
+    ) -> Bool {
+        switch depth {
+        case .presence:
+            return isArtifactPresent(model, artifact: artifact)
+        case .quick:
+            let (path, expectedBytes) = artifactLocation(for: model, artifact: artifact)
+            guard let expectedBytes else { return false }
+            return passesQuickCheck(path: path, expectedBytes: expectedBytes)
+        case .full:
+            return isArtifactDownloaded(model, artifact: artifact)
+        }
+    }
+
+    /// Installed path + catalog byte count for one artifact. Nil bytes means
+    /// the catalog carries no integrity metadata for it (e.g. mmproj on a
+    /// text-only model).
+    private static func artifactLocation(
+        for model: AIModel,
+        artifact: ArtifactType
+    ) -> (path: URL, expectedBytes: Int64?) {
+        switch artifact {
+        case .base:
+            return (baseModelPath(for: model), model.baseFileSizeBytes)
+        case .mmproj:
+            guard let bytes = model.mmprojFileSizeBytes else {
+                return (mmprojModelPath(for: model), nil)
+            }
+            return (mmprojModelPath(for: model), bytes)
+        }
+    }
+
+    /// Hash-free check shared by `.quick` verification and `quickAvailability`:
+    /// byte size plus GGUF structure, never a digest pass.
+    private static func passesQuickCheck(path: URL, expectedBytes: Int64) -> Bool {
+        guard let size = (try? FileManager.default.attributesOfItem(atPath: path.path)[.size] as? NSNumber)?.int64Value else {
+            return false
+        }
+        guard size == expectedBytes else { return false }
+        return verifyGGUFHeader(fileURL: path)
     }
 
     private static func isArtifactDownloaded(_ model: AIModel, artifact: ArtifactType) -> Bool {
@@ -355,7 +417,11 @@ extension ModelManagerService {
         }
         var issues: [ArtifactIssue] = []
         func checkQuick(_ path: URL, expectedBytes: Int64, artifact: ArtifactType) {
-            guard let size = (try? FileManager.default.attributesOfItem(atPath: path.path)[.size] as? NSNumber)?.int64Value else {
+            // Single hash-free tier: exists + size + GGUF structure.
+            // Outcome detail stays here (per-issue taxonomy); the pass/fail
+            // itself matches `isArtifactVerified(_, _, depth: .quick)`.
+            guard FileManager.default.fileExists(atPath: path.path),
+                  let size = (try? FileManager.default.attributesOfItem(atPath: path.path)[.size] as? NSNumber)?.int64Value else {
                 issues.append(.missing(artifact: artifact))
                 return
             }
@@ -384,18 +450,10 @@ extension ModelManagerService {
 
     /// Hash-free presence probe (exists + byte size). Used by the startup
     /// seed for per-artifact states; never quarantines, never hashes.
+    /// Fixed-depth wrapper over `isArtifactVerified(_, _, depth: .presence)`.
     static func isArtifactPresent(_ model: AIModel, artifact: ArtifactType) -> Bool {
-        let path: URL
-        let expectedBytes: Int64
-        switch artifact {
-        case .base:
-            path = baseModelPath(for: model)
-            expectedBytes = model.baseFileSizeBytes
-        case .mmproj:
-            guard let bytes = model.mmprojFileSizeBytes else { return false }
-            path = mmprojModelPath(for: model)
-            expectedBytes = bytes
-        }
+        let (path, expectedBytes) = artifactLocation(for: model, artifact: artifact)
+        guard let expectedBytes else { return false }
         guard let size = (try? FileManager.default.attributesOfItem(atPath: path.path)[.size] as? NSNumber)?.int64Value else {
             return false
         }

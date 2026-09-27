@@ -133,7 +133,8 @@ enum OfflineAvailabilityGuard {
             switch availability {
             case .ready:
                 let textOnly = model.allowsTextOnlyCapability
-                    && !(ModelManagerService.isMMProjDownloaded(model))
+                    && model.requiresMMProj
+                    && !(ModelManagerService.isArtifactVerified(model, artifact: .mmproj, depth: .full))
                 models[model.id] = .ready(textOnly: textOnly)
                 diagnostics.append(
                     "[offline-guard] \(model.id): verified — ready for offline use\(textOnly ? " (text-only)" : "")"

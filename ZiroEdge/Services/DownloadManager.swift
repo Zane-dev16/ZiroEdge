@@ -277,21 +277,37 @@ extension DownloadManager {
     }
     func requiredDownloadBytes(
         for model: AIModel,
-        includeOptionalProjector: Bool = true
+        includeOptionalProjector: Bool = true,
+        depth: ArtifactVerificationDepth = .full
     ) -> Int64 {
-        func remaining(_ task: DownloadTask, installed: Bool) -> Int64 {
-            guard !installed else { return 0 }
+        requiredBytes(for: model, includeOptionalProjector: includeOptionalProjector) {
+            ModelManagerService.isArtifactVerified($0, artifact: $1, depth: depth)
+        }
+    }
+
+    /// Shared byte math for both verification depths: staged bytes already on
+    /// disk are subtracted from each not-yet-installed artifact, then the
+    /// storage safety margin is added. The only difference between callers is
+    /// the `installed` probe — full SHA-256 for download decisions, hash-free
+    /// presence for the synchronous tap fast-path.
+    private func requiredBytes(
+        for model: AIModel,
+        includeOptionalProjector: Bool,
+        installed: (AIModel, ArtifactType) -> Bool
+    ) -> Int64 {
+        func remaining(_ task: DownloadTask, isInstalled: Bool) -> Int64 {
+            guard !isInstalled else { return 0 }
             let staged = ((try? fileManager.attributesOfItem(atPath: task.stagingURL.path)[.size]) as? NSNumber)?.int64Value ?? 0
             return max(0, task.expectedBytes - min(staged, task.expectedBytes))
         }
         var required = remaining(
             DownloadTask(model: model, artifact: .base),
-            installed: ModelManagerService.isBaseDownloaded(model)
+            isInstalled: installed(model, .base)
         )
         if model.requiresMMProj && (!model.allowsTextOnlyCapability || includeOptionalProjector) {
             let projector = remaining(
                 DownloadTask(model: model, artifact: .mmproj),
-                installed: ModelManagerService.isMMProjDownloaded(model)
+                isInstalled: installed(model, .mmproj)
             )
             let (sum, overflow) = required.addingReportingOverflow(projector)
             if overflow { return .max }
@@ -304,40 +320,15 @@ extension DownloadManager {
     func formattedAvailableSpace() -> String {
         StorageByteFormatter.string(fromByteCount: availableDiskSpace)
     }
-    /// Hash-free storage estimate for the tap fast-path. Mirrors
-    /// `requiredDownloadBytes` but uses `isArtifactPresent` (exists + size)
-    /// instead of full SHA-256 verification so the synchronous storage gate
+    /// Hash-free storage estimate for the tap fast-path: same byte math at
+    /// `.presence` depth (exists + size) so the synchronous storage gate
     /// never blocks the main thread. The async verification re-checks with
     /// authoritative byte counts before starting any transfer.
     private func quickRequiredDownloadBytes(
         for model: AIModel,
         includeOptionalProjector: Bool = true
     ) -> Int64 {
-        func remaining(expectedBytes: Int64, stagingURL: URL, installed: Bool) -> Int64 {
-            guard !installed else { return 0 }
-            let staged = ((try? fileManager.attributesOfItem(atPath: stagingURL.path)[.size]) as? NSNumber)?.int64Value ?? 0
-            return max(0, expectedBytes - min(staged, expectedBytes))
-        }
-        let baseTask = DownloadTask(model: model, artifact: .base)
-        var required = remaining(
-            expectedBytes: baseTask.expectedBytes,
-            stagingURL: baseTask.stagingURL,
-            installed: ModelManagerService.isArtifactPresent(model, artifact: .base)
-        )
-        if model.requiresMMProj && (!model.allowsTextOnlyCapability || includeOptionalProjector) {
-            let projTask = DownloadTask(model: model, artifact: .mmproj)
-            let projector = remaining(
-                expectedBytes: projTask.expectedBytes,
-                stagingURL: projTask.stagingURL,
-                installed: ModelManagerService.isArtifactPresent(model, artifact: .mmproj)
-            )
-            let (sum, overflow) = required.addingReportingOverflow(projector)
-            if overflow { return .max }
-            required = sum
-        }
-        guard required > 0 else { return 0 }
-        let (withMargin, overflow) = required.addingReportingOverflow(storageSafetyMargin(for: required))
-        return overflow ? .max : withMargin
+        requiredDownloadBytes(for: model, includeOptionalProjector: includeOptionalProjector, depth: .presence)
     }
 
     /// Merge a hash-free disk probe with live transfer states so the tap
