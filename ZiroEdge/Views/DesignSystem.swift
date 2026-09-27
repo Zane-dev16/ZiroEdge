@@ -933,9 +933,10 @@ extension View {
 
 // MARK: - Composer / Input Well Treatment
 
-/// The composer's recessed input well: well-elevation fill-only at rest,
-/// accent focus ring. The visible focus ring doubles as the keyboard
-/// focus indicator — never remove it.
+/// The recessed input well: well-elevation fill with a quiet hairline at
+/// rest, a stronger hairline on focus. The visible focus change doubles as
+/// the keyboard focus indicator — never remove it. Focus edges stay
+/// neutral everywhere; accent is reserved for live actions.
 private struct ZiroComposerFieldModifier: ViewModifier {
     var isActive: Bool
 
@@ -949,7 +950,7 @@ private struct ZiroComposerFieldModifier: ViewModifier {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: ZiroTheme.Radius.control, style: .continuous)
-                    .stroke(isActive ? Color.accentColor : .clear, lineWidth: 1.5)
+                    .stroke(isActive ? ZiroTheme.hairlineStrong : ZiroTheme.hairline, lineWidth: isActive ? 1.5 : 1)
             )
             .ziroAnimation(ZiroMotion.press, value: isActive)
     }

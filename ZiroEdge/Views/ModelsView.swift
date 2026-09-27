@@ -3,9 +3,10 @@
 //
 // Models catalog: one page split by a scope filter into
 // "Available" (browse/download) and "Installed" (on this device). Every row
-// is a single card-style entry with a clear download status and one primary
-// action (open the model's detail page, where capability choice and storage
-// checks live). Import wizard and detail concerns are kept off this page.
+// is one quiet line of identity — name, a single meta line, trailing
+// status — and opens the model's detail page, where the description,
+// capability choice, runtime state, and storage checks live. Import wizard
+// and detail concerns are kept off this page.
 
 import SwiftUI
 
@@ -30,9 +31,6 @@ struct ModelsView: View {
     // accessibility sizes, while meeting the 44×44 hit-target minimum at the
     // default size.
     @ScaledMetric(relativeTo: .title3) private var cancelControlSide: CGFloat = 44
-    /// The import row's accent icon square (44×44 min per the spec's import
-    /// entry), scaling with Dynamic Type.
-    @ScaledMetric(relativeTo: .title3) private var importIconSide: CGFloat = 44
 
     init(viewModel: ModelsViewModel, onStartChatting: @escaping (AIModel) -> Void = { _ in }) {
         self.viewModel = viewModel
@@ -47,7 +45,6 @@ struct ModelsView: View {
             scopeSection
             switch scope {
             case .available:
-                if !viewModel.hasInstalledModels { introductionSection }
                 importSection
                 availableSection
             case .installed:
@@ -193,45 +190,21 @@ struct ModelsView: View {
         .accessibilityAddTraits(item == scope ? .isSelected : [])
     }
 
-    private var introductionSection: some View {
-        Section {
-            VStack(alignment: .leading, spacing: ZiroTheme.Spacing.medium) {
-                Label("Runs entirely on your device", systemImage: "lock.shield")
-                    .font(ZiroType.rowTitle)
-                    .foregroundStyle(ZiroTheme.primaryText)
-                Text("Download one model to begin. Larger models can be more capable, while smaller models load faster and use less memory.")
-                    .font(ZiroType.supporting)
-                    .foregroundStyle(ZiroTheme.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(.vertical, ZiroTheme.Spacing.small)
-        }
-    }
+    /// Import entry: one glyph plus the title, no subtitle. What import
+    /// means is explained once, on the wizard's own source screen —
+    /// repeating it under every catalog visit is filler.
 
     private var importSection: some View {
         Section {
             Button { viewModel.showingImporter = true } label: {
                 HStack(spacing: ZiroTheme.Spacing.medium) {
-                    // Import-entry icon in the spec's accent-tinted rounded
-                    // square (44×44 min, Radius.small), scaling with
-                    // Dynamic Type so the glyph never overflows.
                     Image(systemName: "square.and.arrow.down")
                         .font(.title3)
                         .foregroundStyle(ZiroTheme.secondaryText)
-                        .frame(width: importIconSide, height: importIconSide)
-                        .background(
-                            ZiroTheme.wellBackground,
-                            in: RoundedRectangle(cornerRadius: ZiroTheme.Radius.small, style: .continuous)
-                        )
                         .accessibilityHidden(true)
-                    VStack(alignment: .leading, spacing: ZiroTheme.Spacing.micro) {
-                        Text("Import from Hugging Face")
-                            .font(ZiroType.rowTitle)
-                            .foregroundStyle(ZiroTheme.primaryText)
-                        Text("Bring a compatible GGUF model onto this device.")
-                            .font(ZiroType.caption)
-                            .foregroundStyle(ZiroTheme.secondaryText)
-                    }
+                    Text("Import from Hugging Face")
+                        .font(ZiroType.rowTitle)
+                        .foregroundStyle(ZiroTheme.primaryText)
                 }
                 .padding(.vertical, ZiroTheme.Spacing.xSmall)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -244,20 +217,20 @@ struct ModelsView: View {
     private var installedSection: some View {
         Section {
             ForEach(viewModel.curatedModels.filter { viewModel.isDownloaded($0) }) { model in
-                catalogRow(model, subtitle: installedSubtitle(for: model))
+                catalogRow(model)
                     .transition(reduceMotion ? .opacity : .scale(scale: 0.95).combined(with: .opacity))
             }
         } header: {
             Text("On This Device")
         } footer: {
-            Text("Managed model storage: \(viewModel.managedStorageUsage), including installed, in-progress, resumable, and quarantined files.")
+            Text("\(viewModel.managedStorageUsage) used on this device.")
         }
     }
 
     private var importedSection: some View {
         Section("Imported from Hugging Face") {
             ForEach(viewModel.importedModels) { model in
-                catalogRow(model, subtitle: model.description)
+                catalogRow(model)
                     .transition(reduceMotion ? .opacity : .scale(scale: 0.95).combined(with: .opacity))
             }
         }
@@ -267,7 +240,7 @@ struct ModelsView: View {
         let available = viewModel.curatedModels.filter { !viewModel.isDownloaded($0) }
         return Section(viewModel.hasInstalledModels ? "Available to Download" : "Choose a Model") {
             ForEach(available) { model in
-                catalogRow(model, subtitle: model.description)
+                catalogRow(model)
                     .transition(reduceMotion ? .opacity : .scale(scale: 0.95).combined(with: .opacity))
             }
             if available.isEmpty {
@@ -287,33 +260,28 @@ struct ModelsView: View {
         }
     }
 
+    /// Quiet terminal state: one centered line. The import entry sits
+    /// directly above, so restating it here would be filler.
     private var emptyAvailableSection: some View {
-        VStack(spacing: ZiroTheme.Spacing.small) {            Image(systemName: "checkmark.seal.fill")
-                .font(.largeTitle)
-                .foregroundStyle(ZiroTheme.positiveText)
-                .accessibilityHidden(true)
-            Text("All curated models are installed")
-                .font(ZiroType.rowTitle)
-            Text("Import a model from Hugging Face to add more.")
-                .font(ZiroType.supporting)
-                .foregroundStyle(ZiroTheme.secondaryText)
-                .multilineTextAlignment(.center)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, ZiroTheme.Spacing.large)
-        .transition(.opacity)
+        Text("All curated models are installed")
+            .font(ZiroType.supporting)
+            .foregroundStyle(ZiroTheme.secondaryText)
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.vertical, ZiroTheme.Spacing.large)
+            .transition(.opacity)
     }
-
     // MARK: - Rows
 
-    /// One card per model: identity, short subtitle, meta, and a trailing
-    /// status indicator. The row itself is the single primary action — it
-    /// opens the detail page where download decisions are made.
-    private func catalogRow(_ model: AIModel, subtitle: String) -> some View {
+    /// One quiet row per model: name, a single meta line, trailing status.
+    /// The row itself is the single primary action — it opens the detail
+    /// page where the description, capability choice, runtime state, and
+    /// storage checks live.
+    private func catalogRow(_ model: AIModel) -> some View {
         let status = viewModel.status(for: model)
+        let meta = rowMeta(for: model)
         return HStack(spacing: ZiroTheme.Spacing.small) {
             NavigationLink(value: ShellRoute.modelDetail(id: model.id)) {
-                ModelRow(model: model, subtitle: subtitle, status: status)
+                ModelRow(model: model, meta: meta.text, metaWarning: meta.isWarning, status: status)
             }
             if status.isDownloading {
                 Button { viewModel.requestCancelDownload(for: model) } label: {
@@ -331,226 +299,24 @@ struct ModelsView: View {
         }
     }
 
-    private func installedSubtitle(for model: AIModel) -> String {
-        var details = [capabilityLabel(model)]
-        if viewModel.isOfflineVerificationPending {
+    /// The row's single meta line: capability + size. The two transient
+    /// states that need words swap in; repair is carried by the trailing
+    /// indicator, and eligibility/quantization live on the detail page.
+    private func rowMeta(for model: AIModel) -> (text: String, isWarning: Bool) {
+        let status = viewModel.status(for: model)
+        if model.modelType == .vision && !status.isVisionReady && viewModel.isDownloaded(model) {
+            return ("Pair incomplete · \(model.formattedSize)", true)
+        }
+        if viewModel.isDownloaded(model) && viewModel.isOfflineVerificationPending {
             // Empty-report window: the deferred sweep has not landed yet.
             // Loading state only — never an error or false not-downloaded.
-            details.append("Verifying offline availability…")
-        } else if viewModel.isVerifiedForOfflineUse(model) {
-            details.append("Verified for offline use")
-        } else {
-            // Post-sweep and still unverified: the status row already carries
-            // the Repair affordance; keep the subtitle truthful instead of
-            // reusing the pending copy so a real failure never masquerades
-            // as loading.
-            details.append(ArtifactIntegrityPresentation.needsRepairSubtitle)
+            return ("Verifying offline availability…", false)
         }
-        return details.joined(separator: " · ")
+        return ("\(capabilityLabel(model)) · \(model.formattedSize)", false)
     }
-
     private func capabilityLabel(_ model: AIModel) -> String {
         let status = viewModel.status(for: model)
         if model.allowsTextOnlyCapability && !status.isVisionReady { return "Text only" }
         return model.modelType == .vision ? "Text + images" : "Text"
-    }
-}
-
-// MARK: - Model Row
-
-/// Unified catalog card for curated and imported models, in both scopes.
-private struct ModelRow: View {
-    let model: AIModel
-    let subtitle: String
-    let status: ModelDownloadStatus
-
-    // Icon gutter scales with Dynamic Type so the title3 glyph never
-    // overflows the column at accessibility sizes.
-    @ScaledMetric(relativeTo: .title3) private var iconColumnWidth: CGFloat = 30
-
-    var body: some View {
-        HStack(spacing: ZiroTheme.Spacing.medium) {
-            Image(systemName: iconName)
-                .font(.title3)
-                .foregroundStyle(iconTint)
-                .symbolRenderingMode(.hierarchical)
-                // text.bubble is directional — mirror in RTL; eye.circle
-                // is symmetric so the modifier is a no-op for it.
-                .flipsForRightToLeft(true)
-                .frame(width: iconColumnWidth)
-                .accessibilityHidden(true)
-
-            VStack(alignment: .leading, spacing: ZiroTheme.Spacing.xSmall) {
-                HStack(spacing: ZiroTheme.Spacing.small) {
-                    Text(model.displayName)
-                        .font(ZiroType.rowTitle)
-                    capabilityBadge
-                }
-                Text(subtitle)
-                    .font(ZiroType.supporting)
-                    .foregroundStyle(ZiroTheme.secondaryText)
-                    .lineLimit(2)
-                // Single wrapping Text with styled runs: sibling Texts in an
-                // HStack truncate to fragments at accessibility sizes, and the
-                // safety-tinted runtime state must stay legible and spoken.
-                // The size/quantization tail is engineering data — technical
-                // (monospaced) voice per the type scale.
-                (Text(model.runtimeEligibility.label)
-                    .font(.caption)
-                    .foregroundStyle(eligibilityTint) +
-                 Text(" · \(model.formattedSize) · \(model.quantization)")
-                    .font(ZiroType.technical(.caption))
-                    .foregroundStyle(ZiroTheme.tertiaryText))
-            }
-
-            Spacer(minLength: ZiroTheme.Spacing.small)
-            statusIndicator
-        }
-        .padding(.vertical, ZiroTheme.Spacing.xSmall)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(rowAccessibilityLabel)
-    }
-
-    /// Combined row label. Repair-needed rows must not announce the generic
-    /// "available to download" — the visible orange Repair state is the row's
-    /// most important information, so it is spoken plus a pointer to the fix.
-    private var rowAccessibilityLabel: String {
-        var label = "\(model.displayName), \(subtitle), \(model.runtimeEligibility.label), \(model.formattedSize), \(status.statusAccessibilityLabel(for: model))"
-        if status.presentsAsRepairNeeded(for: model) {
-            label += ". Open the model to repair its download."
-        }
-        return label
-    }
-
-    private var iconName: String {
-        // One base symbol per kind (outline), recolored per state — never
-        // separate .fill/.slash assets. Vision-ready vs pair-incomplete
-        // is carried by iconTint + the VISION/PAIR badge, not the glyph.
-        guard model.modelType == .vision else { return "text.bubble" }
-        return "eye.circle"
-    }
-
-    private var iconTint: Color {
-        // Ready states keep the accent voice; an incomplete vision pair
-        // quiets to secondary so the row reads as pending, not active.
-        if model.modelType == .vision && !status.isVisionReady {
-            return ZiroTheme.secondaryText
-        }
-        return ZiroTheme.accent
-    }
-
-    @ViewBuilder
-    private var capabilityBadge: some View {
-        // The one badge system: VISION is a purple data hue, PAIR INCOMPLETE
-        // a warning — both verified token pairs via ZiroBadge.
-        if status.isVisionReady {
-            ZiroBadge(text: "VISION", tone: .purple)
-        } else if model.modelType == .vision {
-            ZiroBadge(text: "PAIR INCOMPLETE", tone: .warning)
-        }
-    }
-
-    private var eligibilityTint: Color {
-        // Semantic status tokens: raw .green/.orange fail 4.5:1 on light
-        // backgrounds for caption-size text.
-        switch model.runtimeEligibility {
-        case .validated: ZiroTheme.positiveText
-        case .experimental: ZiroTheme.warningText
-        case .unavailable: ZiroTheme.secondaryText
-        }
-    }
-
-    /// Ring plus a Dynamic Type-scaling percentage label. The percentage is
-    /// the only visible transfer indicator, so it can't live at a fixed 9pt
-    /// inside the 26pt ring (r4 MEDIUM) — it sits beside the ring at caption2
-    /// and scales with the user's text size. Hidden from a11y: the row's
-    /// combined label already announces the percentage.
-    private func downloadProgressIndicator(_ progress: Double, tint: Color) -> some View {
-        HStack(spacing: ZiroTheme.Spacing.micro) {
-            ZiroProgressRing(progress: progress, tint: tint)
-            Text("\(Int((progress * 100).rounded()))%")
-                .font(.caption2.monospacedDigit())
-                .foregroundStyle(ZiroTheme.secondaryText)
-                .accessibilityHidden(true)
-        }
-    }
-
-    @ViewBuilder
-    private var statusIndicator: some View {
-        switch status.displayState {
-        case .downloading(let progress), .resuming(let progress), .pausing(let progress):
-            downloadProgressIndicator(progress, tint: ZiroTheme.accent)
-        case .paused(let progress):
-            downloadProgressIndicator(progress, tint: ZiroTheme.secondaryText)
-        case .verifying:
-            VStack(spacing: ZiroTheme.Spacing.xSmall) {
-                ProgressView()
-                Text("Verifying")
-                    .font(ZiroType.micro)
-                    .foregroundStyle(ZiroTheme.secondaryText)
-            }
-            .accessibilityHidden(true)
-        case .failed:
-            // Hard failure → the danger token (raw .red fails AA for this size).
-            // Outline-default: sibling trailing states share one size
-            // (.title3) with .fill reserved for the installed state below.
-            Image(systemName: "exclamationmark.circle")
-                .font(.title3)
-                .foregroundStyle(ZiroTheme.dangerText)
-                .accessibilityLabel("Download failed")
-        case .cancelled:
-            Image(systemName: "xmark.circle")
-                .font(.title3)
-                .foregroundStyle(ZiroTheme.secondaryText)
-                .accessibilityLabel("Download cancelled")
-        case .downloaded:
-            // The one .fill on this surface: installed/active state.
-            Image(systemName: "checkmark.circle.fill")
-                .font(.title3)
-                .foregroundStyle(ZiroTheme.positiveText)
-                .accessibilityHidden(true)
-        case .notDownloaded:
-            if status.isRepairNeeded || ModelManagerService.isRepairNeeded(for: model) {
-                Text("Repair")
-                    .font(ZiroType.caption)
-                    .foregroundStyle(ZiroTheme.warningText)
-                    .accessibilityLabel("Repair \(model.displayName)")
-            } else {
-                Image(systemName: "arrow.down.circle")
-                    .font(.title3)
-                    .foregroundStyle(ZiroTheme.accent)
-                    .accessibilityHidden(true)
-            }
-        }
-    }
-}
-
-extension ModelDownloadStatus {
-    /// Whether this status should be presented as repair-needed (files on
-    /// disk failed validation, or a partial pair needs re-download). Shared
-    /// by the row indicator and its accessibility label so the two never
-    /// disagree.
-    func presentsAsRepairNeeded(for model: AIModel) -> Bool {
-        guard case .notDownloaded = displayState else { return false }
-        return isRepairNeeded || ModelManagerService.isRepairNeeded(for: model)
-    }
-
-    /// Spoken status for a catalog row; preserved from the pre-redesign
-    /// catalog so VoiceOver and tests keep hearing the same phrases. The
-    /// `.notDownloaded` case branches on repair state: repair-needed rows
-    /// announce "needs repair" instead of "available to download".
-    func statusAccessibilityLabel(for model: AIModel) -> String {
-        switch displayState {
-        case .downloading(let progress): return "downloading, \(Int(progress * 100)) percent complete"
-        case .pausing(let progress): return "pausing, \(Int(progress * 100)) percent complete"
-        case .paused(let progress): return "paused, \(Int(progress * 100)) percent complete"
-        case .resuming(let progress): return "resuming, \(Int(progress * 100)) percent complete"
-        case .verifying: return "verifying download"
-        case .failed: return "download failed"
-        case .cancelled: return "download cancelled"
-        case .downloaded: return "installed"
-        case .notDownloaded:
-            return presentsAsRepairNeeded(for: model) ? ArtifactIntegrityPresentation.needsRepairSpoken : "available to download"
-        }
     }
 }

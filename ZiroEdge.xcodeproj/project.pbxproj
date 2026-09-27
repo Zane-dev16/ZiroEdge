@@ -133,6 +133,10 @@
 		A151108BE4702C7F1283104A /* LicenseView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1A40DF4E9C684D2C73CBEE7 /* LicenseView.swift */; };
 		A1A235ADC47CCCF1DC5E9F02 /* DeviceLifecycleQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D1F1084D131AE263CD08FA2 /* DeviceLifecycleQATests.swift */; };
 		A4A3B110AAF539993A5E34E2 /* ImportWizardSteps.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EE04F17370FF6B074633C13 /* ImportWizardSteps.swift */; };
+		B1B2C3D4E5F60718293A4001 /* ImportSharedCards.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60718293A4001 /* ImportSharedCards.swift */; };
+		B1B2C3D4E5F60718293A4002 /* ImportWizardChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60718293A4002 /* ImportWizardChrome.swift */; };
+		B1B2C3D4E5F60718293A4003 /* ImportWizardTransfer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60718293A4003 /* ImportWizardTransfer.swift */; };
+		B1B2C3D4E5F60718293A4004 /* ModelCatalogRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60718293A4004 /* ModelCatalogRow.swift */; };
 		A63E207897851000F9975EDD /* DownloadManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 236A2AA96610397D2CDDD6D3 /* DownloadManager.swift */; };
 		A6BFB329093AA285F5DCF43A /* DownloadDiagnosticTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4355AE96D37D59B2FBFDF22A /* DownloadDiagnosticTests.swift */; };
 		A7D75C0B2416EB94A57A5EFE /* SubmissionReadinessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F953201BFB4B0AD8951C7C0 /* SubmissionReadinessTests.swift */; };
@@ -257,6 +261,10 @@
 		2D4D5F9E57ADBB8C89FB27FC /* RAMDiagnosticTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RAMDiagnosticTests.swift; sourceTree = "<group>"; };
 		2DAFA3BF0C277163E15EBC0B /* MetricKitIntake.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetricKitIntake.swift; sourceTree = "<group>"; };
 		2EE04F17370FF6B074633C13 /* ImportWizardSteps.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportWizardSteps.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60718293A4001 /* ImportSharedCards.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportSharedCards.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60718293A4002 /* ImportWizardChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportWizardChrome.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60718293A4003 /* ImportWizardTransfer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportWizardTransfer.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60718293A4004 /* ModelCatalogRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelCatalogRow.swift; sourceTree = "<group>"; };
 		2F19CDC2A27AA8D87C05842D /* PairedArtifactCoordinationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairedArtifactCoordinationTests.swift; sourceTree = "<group>"; };
 		32A1B26312450DA02CEE7FAB /* AIModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIModel.swift; sourceTree = "<group>"; };
 		343BE92C91DF993888B6E321 /* Batch02PendingImagesRaceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Batch02PendingImagesRaceTests.swift; sourceTree = "<group>"; };
@@ -489,6 +497,10 @@
 				26C87FA3FCBB060802BB1281 /* ImportedModelSettingsView.swift */,
 				CCABFA8916018FB9B17A6CA3 /* ImportView.swift */,
 				2EE04F17370FF6B074633C13 /* ImportWizardSteps.swift */,
+				A1B2C3D4E5F60718293A4001 /* ImportSharedCards.swift */,
+				A1B2C3D4E5F60718293A4002 /* ImportWizardChrome.swift */,
+				A1B2C3D4E5F60718293A4003 /* ImportWizardTransfer.swift */,
+				A1B2C3D4E5F60718293A4004 /* ModelCatalogRow.swift */,
 				4A464A7D6F8F1EABE6D0F4ED /* LaunchLoadingView.swift */,
 				E1A40DF4E9C684D2C73CBEE7 /* LicenseView.swift */,
 				055D135A1B4377C36387DB65 /* MessageBubble.swift */,
@@ -1041,6 +1053,10 @@
 				F658EA3D3854307BD6E47797 /* ImportView.swift in Sources */,
 				E68C63A51776D3BBA373B88C /* ImportViewModel.swift in Sources */,
 				A4A3B110AAF539993A5E34E2 /* ImportWizardSteps.swift in Sources */,
+				B1B2C3D4E5F60718293A4001 /* ImportSharedCards.swift in Sources */,
+				B1B2C3D4E5F60718293A4002 /* ImportWizardChrome.swift in Sources */,
+				B1B2C3D4E5F60718293A4003 /* ImportWizardTransfer.swift in Sources */,
+				B1B2C3D4E5F60718293A4004 /* ModelCatalogRow.swift in Sources */,
 				5B5073268AC536EC899DA8A5 /* ImportedModel.swift in Sources */,
 				14E612C7FF75CEB7B56B1D3E /* ImportedModelSettingsView.swift in Sources */,
 				5C30ECFDE6AE8832A9D5A4FF /* InferenceService.swift in Sources */,

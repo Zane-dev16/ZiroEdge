@@ -2,7 +2,7 @@
 // ZiroEdge — Privacy-first local AI assistant
 //
 // Reusable variant picker for multi-quantization GGUF repositories.
-// Each artifact is listed with quantization, architecture, and digest info.
+// Minimal rows (chat voice): filename, size + quality tier, one fit note.
 // The caller must explicitly pick one variant before import can proceed.
 
 import SwiftUI
@@ -25,19 +25,28 @@ struct VariantPickerView: View {
     }
 
     var body: some View {
-        ForEach(candidates) { artifact in
-            VariantRow(
-                artifact: artifact,
-                isSelected: selection?.id == artifact.id,
-                capability: capabilityEstimate(artifact)
-            )
-                .contentShape(Rectangle())
-                .onTapGesture { selection = artifact }
-                // VoiceOver double-tap must select the mandatory GGUF
-                // variant: button traits alone do not fire onTapGesture,
-                // so mirror the tap in an accessibility action.
-                .accessibilityAction { selection = artifact }
+        VStack(spacing: ZiroTheme.Spacing.small) {            ForEach(candidates) { artifact in
+                let isSelected = selection?.id == artifact.id
+                Button { selection = artifact } label: {
+                    VariantRow(
+                        artifact: artifact,
+                        isSelected: isSelected,
+                        capability: capabilityEstimate(artifact)
+                    )
+                }
+                .buttonStyle(ZiroSubtlePressButtonStyle())
+                // One reachable element per variant: VoiceOver announces the
+                // GGUF choice instead of scattering its texts. The visual
+                // checkmark is hidden because .isSelected already speaks it.
+                .accessibilityLabel(variantSpokenLabel(artifact))
+                .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+            }
         }
+    }
+
+    private func variantSpokenLabel(_ artifact: HFArtifact) -> String {
+        let size = StorageByteFormatter.string(fromByteCount: artifact.size)
+        return "\(artifact.filename), \(size)"
     }
 }
 
@@ -52,50 +61,46 @@ struct VariantRow: View {
                 // Artifact identity is engineering data — technical voice.
                 Text(artifact.filename)
                     .font(ZiroType.technical(.subheadline))
+                    .foregroundStyle(ZiroTheme.primaryText)
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .minimumScaleFactor(0.85)
                 HStack(spacing: ZiroTheme.Spacing.small) {
                     QuantizationBadge(label: artifact.quantization)
-                    Text(artifact.architecture)
-                        .font(ZiroType.technical(.caption))
-                        .foregroundStyle(ZiroTheme.tertiaryText)
                     Text(StorageByteFormatter.string(fromByteCount: artifact.size))
                         .font(ZiroType.technical(.caption))
-                        .foregroundStyle(ZiroTheme.tertiaryText)
+                        .foregroundStyle(ZiroTheme.secondaryText)
                 }
                 if let caption = capability?.caption {
                     Text(caption)
                         .font(ZiroType.caption)
-                        .foregroundStyle(ZiroTheme.tertiaryText)
+                        .foregroundStyle(ZiroTheme.secondaryText)
                         // Safety signal — must never truncate the memory-fit
-                        // text on the mandatory-choice step. Matches the
-                        // SourceStep hint pattern: no lineLimit + vertical
-                        // fixedSize so it wraps (incl. AX sizes).
+                        // text on the mandatory-choice step: no lineLimit +
+                        // vertical fixedSize so it wraps (incl. AX sizes).
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                Text("SHA-256 \(artifact.sha256.prefix(12))…")
-                    .font(ZiroType.technical(.caption2))
-                    .foregroundStyle(ZiroTheme.tertiaryText)
-                    .lineLimit(1)
             }
-            Spacer()
-            if isSelected {
-                Image(systemName: "checkmark.circle.fill")
-                    // Selected state reads via the quiet secondary tint —
-                    // the well fill behind the row already marks the choice.
-                    .foregroundStyle(ZiroTheme.secondaryText)
-                    .font(.title3)
-                    .accessibilityHidden(true)
-            }
+            Spacer(minLength: ZiroTheme.Spacing.small)
+            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                // The live choice is the row's single accent, mirroring the
+                // chat send disc (accent only while actionable); unchosen
+                // rows keep a quiet hairline ring.
+                .foregroundStyle(isSelected ? ZiroTheme.accent : ZiroTheme.tertiaryText)
+                .font(.title3)
+                .accessibilityHidden(true)
         }
-        .padding(.vertical, ZiroTheme.Spacing.xSmall)
-        // One reachable element per variant with button + selected traits, so
-        // VoiceOver announces the current GGUF choice for this mandatory
-        // step instead of scattering its texts. The visual checkmark is
-        // hidden because the .isSelected trait already speaks "selected".
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+        .padding(.horizontal, ZiroTheme.Spacing.large)
+        .padding(.vertical, ZiroTheme.Spacing.medium)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: ZiroTheme.Radius.control, style: .continuous)
+                .fill(isSelected ? ZiroTheme.selectedBackground : ZiroTheme.raisedBackground)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: ZiroTheme.Radius.control, style: .continuous)
+                .stroke(isSelected ? Color.accentColor : ZiroTheme.hairline, lineWidth: isSelected ? 1.5 : 1)
+        )
     }
 }
 

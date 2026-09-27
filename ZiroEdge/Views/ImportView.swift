@@ -111,14 +111,11 @@ struct SourceStepView: View {
     /// accent ring (the keyboard focus indicator).
     @FocusState private var repositoryFieldFocused: Bool
 
-    /// Source-choice icon squares: 44x44 min, scaling with Dynamic Type.
-    @ScaledMetric(relativeTo: .title3) private var sourceIconSide: CGFloat = 44
-
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: ZiroTheme.Spacing.large) {
-                sourceChoice
-                inputCard
+                intro
+                inputSection
                 if case .failed(let message) = viewModel.phase {
                     // r4 MEDIUM: inspection failure was visual-only; announce
                     // it when the card mounts (Retry button already carries a
@@ -144,19 +141,9 @@ struct SourceStepView: View {
             }
         }
         .importWizardStepHeader(.source)
-        .importWizardBottomBar {
-            ImportWizardContinueButton(
-                title: "Inspect Repository",
-                systemImage: "magnifyingglass",
-                isEnabled: canInspect,
-                // While inspecting, the input card's "Resolving…" spinner is
-                // the gate explanation — a static "enter a repository"
-                // caption (also spoken as the disabled button's hint) would
-                // state the wrong reason.
-                hint: viewModel.phase == .inspecting ? nil : "Enter a repository to inspect.",
-                action: { Task { await viewModel.inspect() } }
-            )
-        }
+        // No bottom bar: this step's action sits directly under the field,
+        // next to the input it acts on (the chat-send pattern) — not
+        // stranded in a far bar.
     }
 
     private var trimmedInput: String {
@@ -169,101 +156,95 @@ struct SourceStepView: View {
         !trimmedInput.isEmpty && viewModel.phase != .inspecting
     }
 
-    private var sourceChoice: some View {
-        VStack(alignment: .leading, spacing: ZiroTheme.Spacing.medium) {
-            ZiroCard {
-                HStack(spacing: ZiroTheme.Spacing.medium) {
-                    // Source icon in the spec's accent-tinted rounded square.
-                    Image(systemName: "globe")
-                        .font(.title2)
-                        .foregroundStyle(ZiroTheme.secondaryText)
-                        .frame(width: sourceIconSide, height: sourceIconSide)
-                        .background(
-                            ZiroTheme.wellBackground,
-                            in: RoundedRectangle(cornerRadius: ZiroTheme.Radius.small, style: .continuous)
-                        )
-                        .accessibilityHidden(true)
-                    VStack(alignment: .leading, spacing: ZiroTheme.Spacing.micro) {
-                        Text("Hugging Face Repository")
-                            .font(ZiroType.rowTitle)
-                        Text("Public GGUF repositories, pinned to an immutable revision.")
-                            .font(ZiroType.caption)
-                            .foregroundStyle(ZiroTheme.secondaryText)
-                    }
-                    Spacer()
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(ZiroTheme.secondaryText)
-                        .accessibilityLabel("Selected")
-                }
-                .accessibilityElement(children: .combine)
-            }
-            // Local GGUF File import hidden for 1.0: no pipeline exists yet.
-            // Do not ship a dimmed dead card (App Review 2.1 risk). Re-add when
-            // file-picker import is wired.
+    /// Chat-empty-state voice: one line of what this step does, nothing
+    /// else. There is no source to choose (Hugging Face is the only live
+    /// source; local-file import stays hidden until its pipeline exists),
+    /// so the old selection card was chrome around a single option.
+    private var intro: some View {
+        VStack(alignment: .leading, spacing: ZiroTheme.Spacing.xSmall) {
+            Text("Import from Hugging Face")
+                .font(ZiroType.title)
+                .foregroundStyle(ZiroTheme.primaryText)
+            Text("Paste a public GGUF repository. It is pinned to an immutable revision before anything downloads.")
+                .font(ZiroType.supporting)
+                .foregroundStyle(ZiroTheme.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
-    private var inputCard: some View {
-        ZiroCard {
-            VStack(alignment: .leading, spacing: ZiroTheme.Spacing.medium) {
-                Text("Repository")
-                    .font(ZiroType.supporting)
+    /// Search-field row (icon + field in one bordered well, so it reads as
+    /// an input at rest) with the Inspect action directly beneath it — the
+    /// button acts on this field, so it lives next to it.
+    private var inputSection: some View {
+        VStack(alignment: .leading, spacing: ZiroTheme.Spacing.medium) {
+            HStack(spacing: ZiroTheme.Spacing.small) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(ZiroTheme.tertiaryText)
+                    .accessibilityHidden(true)
                 TextField("owner/repository or URL", text: $viewModel.repositoryInput)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .keyboardType(.URL)
                     .submitLabel(.go)
                     .focused($repositoryFieldFocused)
-                    // Design-system input well: recessed fill-only at
-                    // rest, accent focus ring while typing (the keyboard
-                    // focus indicator).
-                    .ziroComposerField(isActive: repositoryFieldFocused)
                     .onSubmit {
                         if canInspect { Task { await viewModel.inspect() } }
                     }
-                if viewModel.phase == .inspecting {
-                    HStack(spacing: ZiroTheme.Spacing.small) {
-                        ProgressView()
-                        Text("Resolving an immutable revision…")
-                            .font(ZiroType.footnote)
-                            .foregroundStyle(ZiroTheme.secondaryText)
-                    }
-                }
             }
+            // Design-system input well: bordered at rest, stronger edge on
+            // focus (the keyboard focus indicator) — never the accent ring.
+            .ziroComposerField(isActive: repositoryFieldFocused)
+            if viewModel.phase == .inspecting {
+                HStack(spacing: ZiroTheme.Spacing.small) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Pinning revision…")
+                        .font(ZiroType.footnote)
+                        .foregroundStyle(ZiroTheme.secondaryText)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Pinning revision")
+            }
+            ImportWizardContinueButton(
+                title: "Inspect Repository",
+                systemImage: "magnifyingglass",
+                isEnabled: canInspect,
+                // While inspecting, the spinner above is the gate
+                // explanation — a static "enter a repository" caption
+                // (also spoken as the disabled button's hint) would state
+                // the wrong reason.
+                hint: viewModel.phase == .inspecting ? nil : "Enter a repository to inspect.",
+                action: { Task { await viewModel.inspect() } }
+            )
         }
     }
 
     private func failureCard(_ message: String) -> some View {
-        ZiroCard {
-            VStack(alignment: .leading, spacing: ZiroTheme.Spacing.small) {
-                Label("Import Rejected", systemImage: "exclamationmark.triangle.fill")
-                    .font(ZiroType.supporting)
-                    // Hard rejection → the danger token (warning reads as
-                    // recoverable; per spec this card is danger).
-                    .foregroundStyle(ZiroTheme.dangerText)
-                Text(message)
-                    .font(ZiroType.footnote)
-                    .foregroundStyle(ZiroTheme.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
-                Button {
-                    Task { await viewModel.retryInspection() }
-                } label: {
-                    Label("Retry Inspection", systemImage: "arrow.clockwise")
-                }
-                .buttonStyle(ZiroSecondaryButtonStyle())
+        ZiroStatusBanner(
+            icon: "exclamationmark.triangle.fill",
+            title: "Import rejected",
+            message: message,
+            tone: .danger
+        ) {
+            Button {
+                Task { await viewModel.retryInspection() }
+            } label: {
+                Label("Retry Inspection", systemImage: "arrow.clockwise")
             }
         }
         .accessibilityElement(children: .contain)
     }
 
+    /// One quiet footnote, not a section: only inspection and the chosen
+    /// download ever leave the device.
     private var privacyNotice: some View {
-        VStack(alignment: .leading, spacing: ZiroTheme.Spacing.xSmall) {
-            ZiroSectionHeader(title: "Privacy", systemImage: "lock.shield")
-            Text("Only repository inspection and selected artifact downloads contact Hugging Face. Prompts, images, conversations, and inference stay on this device.")
-                .font(ZiroType.footnote)
-                .foregroundStyle(ZiroTheme.secondaryText)
-                .fixedSize(horizontal: false, vertical: true)
-        }
+        Label(
+            "Only inspection and the chosen download contact Hugging Face. Chats stay on this device.",
+            systemImage: "lock.shield"
+        )
+        .font(ZiroType.footnote)
+        .foregroundStyle(ZiroTheme.secondaryText)
+        .fixedSize(horizontal: false, vertical: true)
     }
 }
 
@@ -300,26 +281,30 @@ struct ArtifactStepView: View {
     }
 
     private func artifactForm(review: HFRepositoryReview) -> some View {
-        Form {
-            // Pinned provenance values are engineering identifiers — technical voice.
-            Section("Pinned Source") {
-                LabeledContent("Repository") {
+        ScrollView {
+            VStack(alignment: .leading, spacing: ZiroTheme.Spacing.large) {
+                // Pinned provenance in one quiet line; the revision digest
+                // is verification detail, not a choice input.
+                VStack(alignment: .leading, spacing: ZiroTheme.Spacing.xSmall) {
+                    Text("Pinned Source")
+                        .font(ZiroType.caption)
+                        .textCase(.uppercase)
+                        .tracking(0.8)
+                        .foregroundStyle(ZiroTheme.secondaryText)
+                        .accessibilityAddTraits(.isHeader)
                     Text(review.repositoryID)
                         .font(ZiroType.technical(.footnote))
-                }
-                LabeledContent("Revision") {
-                    Text(String(review.revision.prefix(12)))
-                        .font(ZiroType.technical(.footnote))
-                }
-                LabeledContent("License") {
+                        .foregroundStyle(ZiroTheme.primaryText)
                     Link(review.licenseName, destination: review.licenseURL)
+                        .font(ZiroType.footnote)
                 }
-            }
-
-            Section("Choose GGUF Artifact") {
                 if viewModel.baseCandidates.isEmpty {
                     EmptyVariantView(repositoryID: review.repositoryID)
                 } else {
+                    Text("Choose one file. Smaller downloads faster; larger can be more capable.")
+                        .font(ZiroType.supporting)
+                        .foregroundStyle(ZiroTheme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
                     VariantPickerView(
                         candidates: viewModel.baseCandidates,
                         selection: Binding(
@@ -334,10 +319,11 @@ struct ArtifactStepView: View {
                     )
                 }
             }
+            .padding(.horizontal, ZiroTheme.Spacing.xLarge)
+            .padding(.vertical, ZiroTheme.Spacing.large)
+            .frame(maxWidth: ZiroMeasure.standard)
+            .frame(maxWidth: .infinity)
         }
-        // Warm paper canvas with raised card rows (design spec §3.1).
-        .scrollContentBackground(.hidden)
         .background(ZiroTheme.pageBackground.ignoresSafeArea())
-        .listRowBackground(ZiroTheme.raisedBackground)
     }
 }

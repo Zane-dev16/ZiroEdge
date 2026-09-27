@@ -37,8 +37,6 @@ private struct BannerAnnouncementModifier: ViewModifier {
 // focused on layout and interaction wiring: banner/retry rows and composer
 // status hints.
 
-import SwiftUI
-
 // MARK: - ChatView Chrome (banners + composer status)
 
 extension ChatView {
@@ -78,16 +76,14 @@ extension ChatView {
             ZiroStatusBanner(
                 icon: "questionmark.folder.fill",
                 title: isFMConversation ? "Apple Intelligence unavailable" : "Model unavailable",
-                message: isFMConversation && !fmMessage.isEmpty ? fmMessage
-                    : "This conversation used \(missingID), which was removed. Explicitly choose another installed model to continue.",
+                message: missingModelMessage(isFM: isFMConversation, fmMessage: fmMessage, missingID: missingID),
                 tone: .warning
             ) {
                 Button("Choose Model") { navigateToRoute(.models) }
             }
             .accessibilityIdentifier("unavailableConversationModelBanner")
             .announcingOnAppear(
-                isFMConversation ? "Apple Intelligence unavailable. Choose another installed model to continue."
-                    : "Model unavailable. This conversation used \(missingID), which was removed. Choose another installed model to continue."
+                missingModelSpokenMessage(isFM: isFMConversation, missingID: missingID)
             )
         }
 
@@ -116,6 +112,20 @@ extension ChatView {
         }
     }
 
+    /// Unavailable-model banner copy, split out so the banner site stays
+    /// within the line length. FM copy explains the engine state; curated
+    /// copy names the removed model.
+    private func missingModelMessage(isFM: Bool, fmMessage: String, missingID: String) -> String {
+        if isFM && !fmMessage.isEmpty { return fmMessage }
+        return "This conversation used \(missingID), which was removed. "
+            + "Explicitly choose another installed model to continue."
+    }
+
+    private func missingModelSpokenMessage(isFM: Bool, missingID: String) -> String {
+        if isFM { return "Apple Intelligence unavailable. Choose another installed model to continue." }
+        return "Model unavailable. This conversation used \(missingID), which was removed. "
+            + "Choose another installed model to continue."
+    }
     /// Inline retry surface for model-load failures and evictions — no alert
     /// dump (master plan §B.3); automatic loads recover here without modals.
     /// Eviction copy/IDs project `ModelEvictionPresentation` (shared with the
@@ -218,7 +228,6 @@ extension ChatView {
         .announcingOnAppear(message)
     }
 
-
     // MARK: Composer
 
     /// True once the selected model is loaded and accepting work.
@@ -241,7 +250,7 @@ extension ChatView {
     /// The well uses `ZiroTheme.Radius.composer` (23) — a softer, larger round
     /// than the `control` radius the other text fields use — and carries a 1pt
     /// `hairline` at rest so it is visible against the near-black page without
-    /// a shadow; focus swaps that hairline for the accent ring, which doubles
+    /// a shadow; focus steps that hairline up to `hairlineStrong`, which doubles
     /// as the keyboard focus indicator and must never be removed. The message
     /// field stays enabled while the model loads (disabled only while a
     /// conversation loads or while no model exists at all) so drafts are never
@@ -297,7 +306,7 @@ extension ChatView {
             .overlay(
                 RoundedRectangle(cornerRadius: ZiroTheme.Radius.composer, style: .continuous)
                     .stroke(
-                        isInputFocused ? Color.accentColor : ZiroTheme.hairline,
+                        isInputFocused ? ZiroTheme.hairlineStrong : ZiroTheme.hairline,
                         lineWidth: isInputFocused ? 1.5 : 1
                     )
             )
