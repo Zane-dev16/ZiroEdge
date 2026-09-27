@@ -20,12 +20,7 @@ enum InferenceEngine: String, Sendable, CaseIterable {
 
     /// Vision policy lives here, not in callers: FM is text-only in v1,
     /// so vision always routes to llama regardless of text selection.
-    var supportsVision: Bool {
-        switch self {
-        case .llama: return true
-        case .appleIntelligence: return false
-        }
-    }
+    var supportsVision: Bool { self == .llama }
 }
 
 /// Persists the last working engine. GGUF model choice keeps living in
