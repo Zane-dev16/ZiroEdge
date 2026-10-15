@@ -1,6 +1,6 @@
 # ZiroEdge
 
-ZiroEdge is an iOS app that runs AI on your phone. Pull any GGUF repo from Hugging Face, download the model, and run offline. No internet, no problem. Conversations persist in Core Data across restarts.
+ZiroEdge runs AI right on your iPhone. You pick any model you like from Hugging Face, download it, then you can turn on airplane mode and keep chatting, even about photos.
 
 ## Setup
 
