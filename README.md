@@ -1,6 +1,6 @@
 # ZiroEdge
 
-ZiroEdge runs AI right on your iPhone. You pick any model you like from Hugging Face, download it, then you can turn on airplane mode and keep chatting, even about photos.
+ZiroEdge runs AI right on your iPhone. You pick any model you like from Hugging Face and download it. Even on airplane mode, it keeps chatting, even about photos.
 
 ## Setup
 
