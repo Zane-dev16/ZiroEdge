@@ -297,27 +297,30 @@ final class ChatViewModel: ObservableObject {
 
     /// All models that are fully downloaded and available for use.
     var availableModels: [AIModel] {
-        modelProvider().compactMap { model in
+        var available: [AIModel] = []
+        for model in modelProvider() {
             switch model.runtimeEligibility {
-            case .validated:
+            case .validated, .estimated:
                 break
             case .experimental:
                 // Imported models must be discoverable in the picker before
                 // first-use consent. Existing curated experimental behavior is
                 // unchanged: those profiles remain hidden until enabled.
                 guard model.isImported || ExperimentalModelConsent.isGranted(for: model) else {
-                    return nil
+                    continue
                 }
             case .unavailable:
-                return nil
+                continue
             }
             let status = downloadStatusProvider.status(for: model)
-            guard status.isReady else { return nil }
+            guard status.isReady else { continue }
             if model.allowsTextOnlyCapability && !status.isVisionReady {
-                return model.textOnlyRuntimeVariant
+                available.append(model.textOnlyRuntimeVariant)
+            } else {
+                available.append(model)
             }
-            return model
         }
+        return available
     }
 
     /// Select a model and persist the choice. Loads it if not already loaded.
@@ -415,7 +418,7 @@ final class ChatViewModel: ObservableObject {
     /// and transcript loading. Loading feedback is published before the first await.
     func startNewConversation(model: AIModel) async -> UUID? {
         func failStartup(_ model: AIModel) -> UUID? {
-            errorMessage = "\(model.displayName) could not be loaded. Repair it or choose another model, then retry."
+            errorMessage = ModelLoadCopy.genericFailure(modelName: model.displayName)
             showError = true
             isStartupError = true
             return nil

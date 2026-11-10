@@ -18,7 +18,7 @@ final class OfflineAvailabilityGuardTests: XCTestCase {
     override func tearDown() {
         for model in ModelRegistry.allModels {
             ModelManagerService.deleteModel(model)
-            ModelManagerService.clearRepairNeeded(for: model)
+            ModelManagerService.clearDamaged(for: model)
         }
         super.tearDown()
     }
@@ -64,7 +64,7 @@ final class OfflineAvailabilityGuardTests: XCTestCase {
             XCTFail("Report missing test model")
             return
         }
-        if case .repairNeeded(let issues) = readiness {
+        if case .damaged(let issues) = readiness {
             XCTAssertFalse(issues.isEmpty, "Should have at least one issue")
             XCTAssertTrue(
                 issues.contains(.missingGGUFHeader),
@@ -143,8 +143,8 @@ final class OfflineAvailabilityGuardTests: XCTestCase {
         try TestModelFixtures.install(bytes, for: model)
 
         let report = OfflineAvailabilityGuard.sweep(extraModels: [model])
-        // The fixture model is ready, so it should NOT be in repairNeededModelIDs.
-        XCTAssertFalse(report.repairNeededModelIDs.contains(model.id))
+        // The fixture model is ready, so it should NOT be in damagedModelIDs.
+        XCTAssertFalse(report.damagedModelIDs.contains(model.id))
         // And it should be ready in the models dict.
         if case .ready = report.models[model.id] {
             // Expected
@@ -377,7 +377,7 @@ final class OfflineAvailabilityGuardTests: XCTestCase {
         )
         let unverifiedReport = OfflineAvailabilityReport(
             timestamp: Date(),
-            models: [model.id: .unavailable],
+            models: [model.id: .notDownloaded],
             diagnostics: []
         )
         let unverifiedViewModel = ModelsViewModel(
@@ -422,13 +422,13 @@ final class OfflineAvailabilityGuardTests: XCTestCase {
 
     func testReportRepairNeededModelIDsAreNonEmptyWhenIssuesExist() {
         let report = OfflineAvailabilityGuard.sweep()
-        // Without any files, repairNeededModelIDs should be empty
+        // Without any files, damagedModelIDs should be empty
         // (models are unavailable, not repair-needed).
-        for id in report.repairNeededModelIDs {
-            if case .repairNeeded = report.models[id] {
+        for id in report.damagedModelIDs {
+            if case .damaged = report.models[id] {
                 // Expected — already validated by the filter.
             } else {
-                XCTFail("\(id) in repairNeededModelIDs but not repairNeeded in models")
+                XCTFail("\(id) in damagedModelIDs but not repairNeeded in models")
             }
         }
     }

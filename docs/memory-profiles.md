@@ -8,7 +8,31 @@ Runtime is auto-tiered: full Metal GPU offload on 8GB+ devices, CPU-only below (
 
 ## Production policy
 
-A profile is production-eligible only after its exact text or vision runtime shape completes physical acceptance. Unknown, partial, and unvalidated profiles fail closed.
+A load is admitted when the runtime has a number to compare against the device's free memory. Where that number comes from decides the tier:
+
+| Tier | Number comes from | Consent | Result |
+| --- | --- | --- | --- |
+| `validated` | Measured full workload on a retained device | No | Strict policy (below) |
+| `experimental` | Measured load delta only | Yes, per shape | Conservative floor |
+| `estimated` | Conservative static estimate from the catalog row | No | Conservative floor |
+| `unavailable` | Nothing | — | Refused |
+
+`unavailable` is not a state a shipped model may reach. `ModelCatalogValidator.catalogFailureReason` refuses a catalog containing such a row, and `ModelAvailabilityTaxonomyTests` proves it, because a row the runtime will not load is a product defect that reads to the user as a broken app.
+
+### The estimate tier
+
+A curated shape with no device measurement is sized by `ImportRAMAssessment.residentBytes` — the same arithmetic the import wizard shows a user before a download. One estimator, three consumers (wizard, imported admission, curated estimate), so a model cannot be advertised as "likely fits" and then refused at load time.
+
+The estimate deliberately over-states, and the direction is the point:
+
+- Weights ride llama.cpp's mmap path on CPU and Metal alike, so a third of the file is charged. The retained E2B full-workload peak (798,559,232 bytes for a 3,985MB pair) sits below even `base/3` alone.
+- Context charges 256KB per token, roughly twice the f16 KV a 3B-class shape allocates.
+
+An estimate that is too high refuses a load that would have fit — annoying and recoverable. An estimate that is too low admits one that does not — jetsam. Only one of those directions is acceptable, so the arithmetic errs high and the post-load reserve check still runs.
+
+Calibration identities never carry an estimate: they exist to gather the first measurement, and sizing them from artifact bytes would make the measurement run unnecessary.
+
+### Validated profiles
 
 For a validated profile:
 
@@ -26,13 +50,16 @@ When replacing an already loaded model, native unload must finish and a five-sec
 | Profile | Runtime shape | Evidence | Production |
 | --- | --- | --- | --- |
 | Gemma 4 E2B vision | projector required, context 4096, batch 512, microbatch 128 | Accepted on target `00008140-000178A1362B001C`: five measured cycles, 20 text prompts, five image turns, background/foreground, peak delta 798,559,232 bytes, required headroom 1,750,000,000 bytes | Validated |
-| Gemma 4 E4B text calibration | no projector, context 512, batch 256, microbatch 64, mmap enabled, CPU settings unchanged | Unvalidated | Disabled |
-| Gemma 4 E4B vision | projector required, context 4096, batch 512, microbatch 128 | Unvalidated | Disabled |
-| Llama 3.2 3B text | context 4096, batch 512, microbatch 128 | Unvalidated | Disabled |
-| Llama 3.2 3B text, Metal offload | as above, full Metal offload | Unvalidated | Disabled |
-| Gemma 4 E2B vision, Metal offload | as above, full Metal offload | Unvalidated | Disabled |
-| Gemma 4 E4B text, Metal offload | as above (512/256/64), full Metal offload | Unvalidated | Disabled |
-| Gemma 4 E4B vision, Metal offload | as above, full Metal offload | Unvalidated | Disabled |
+| Gemma 4 E4B text calibration | no projector, context 512, batch 256, microbatch 64, mmap enabled, CPU settings unchanged | Unvalidated | Disabled (calibration only) |
+| Gemma 4 E4B vision | projector required, context 4096, batch 512, microbatch 128 | Unvalidated | Estimated |
+| Llama 3.2 3B text | context 4096, batch 512, microbatch 128 | Unvalidated | Estimated |
+| Llama 3.2 3B text, Metal offload | as above, full Metal offload | Unvalidated | Estimated |
+| Gemma 4 E2B vision, Metal offload | as above, full Metal offload | Unvalidated | Estimated (validated CPU shape is served instead) |
+| Gemma 4 E4B text, Metal offload | as above (512/256/64), full Metal offload | Unvalidated | Estimated |
+| Gemma 4 E4B vision, Metal offload | as above, full Metal offload | Unvalidated | Estimated |
+| LFM 2.5 1.2B / 2.6B, Qwen 3.5 2B / 0.8B, Bonsai 8B / 4B (CPU and Metal) | `curatedText4K`: context 4096, batch 512, microbatch 128 | Unvalidated | Estimated |
+
+When one model has several shapes, the strongest evidence wins before the faster shape does: a validated CPU shape keeps serving instead of being displaced by an estimated Metal shape. Once a Metal shape earns experimental or validated evidence it selects automatically with no code change.
 
 The retained E2B load-only delta remains 790,334,488 bytes for diagnostic history; production admission uses the larger accepted full-workload peak of 798,559,232 bytes. Configured context, batch, and microbatch values are specified runtime controls, not measurements. Evidence is retained under `test-output/memory-diagnostic-e2b-round1-warm-20260726T165800Z/`.
 

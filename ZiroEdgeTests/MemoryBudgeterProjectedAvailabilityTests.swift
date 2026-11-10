@@ -220,7 +220,33 @@ final class MemoryBudgeterProjectedAvailabilityTests: XCTestCase {
             processAvailable: 16_000_000_000, total: 32_000_000_000
         )).decision(for: target, reclaimableBytes: .max)
         XCTAssertEqual(decision.recommendation, .insufficientRAM)
-        XCTAssertEqual(decision.reason, .profileUnvalidated)
+        // The shape HAS measured evidence; the remedy is permission, not a
+        // catalog fix, so the reason names that distinctly.
+        XCTAssertEqual(decision.reason, .consentRequired)
+    }
+
+    /// A curated-shaped row that is not in the catalog: no runtime shape, so
+    /// nothing to size it with. The only remaining zero-credit prior now that
+    /// every shipped row is measured or estimated.
+    private func makeUnshapedPrior() -> AIModel {
+        let id = "unshaped-\(UUID().uuidString.lowercased())"
+        return AIModel(
+            id: id,
+            displayName: "Unshaped",
+            description: "Fixture with no runtime shape",
+            modelType: .text,
+            baseURL: URL(string: "https://example.com/\(id).gguf")!,
+            mmprojURL: nil,
+            baseFileSizeBytes: 400_000_000,
+            mmprojFileSizeBytes: nil,
+            baseSHA256: String(repeating: "a", count: 64),
+            mmprojSHA256: nil,
+            quantization: "Q4_K_M",
+            config: .curatedText4K,
+            license: LicenseInfo(
+                name: "MIT", url: URL(string: "https://example.com/license")!, copyright: ""
+            )
+        )
     }
 
     // MARK: - Estimator unity (H1): clamp + mmap projector weight
@@ -441,21 +467,32 @@ func testMetricsZeroRefusesEvenWithCreditAndExplainsWithoutAFakeNumber() async {
         "internal vocabulary does not belong in a cold alert"
     )
     XCTAssertTrue(
-        message.contains("memory budget"),
-        "metricsUnavailable must name the real cause: the budget could not be read"
+        message.contains("couldn't check how much memory is free"),
+        "metricsUnavailable must name the real cause: the check itself failed"
+    )
+    XCTAssertTrue(
+        ModelCopyPolicy.violations(in: message).isEmpty,
+        "no internal vocabulary: \(ModelCopyPolicy.violations(in: message))"
     )
 }
 
-func testUnvalidatedPriorYieldsZeroCreditWithExplanation() async {
-    // Curated llama32-3B is unvalidated with nil measured peaks, so its
-    // eviction credits nothing: projected==raw by construction (genuine
-    // refuse, not a math bug). The details helper names the cause.
+func testEstimatedPriorCreditIsCappedByMeasuredFreedBytes() async {
+    // A curated shape with only an estimate has a required floor, but that
+    // floor is an upper bound on what the resident model actually occupies.
+    // Crediting it would make the projection more optimistic than reality —
+    // the one direction admission may never move — so the credit is capped by
+    // the device-measured freed bytes for the same class.
     let prior = ModelRegistry.llama32_3B
-    XCTAssertEqual(MemoryBudgeter.reclaimableBytes(for: prior), 0)
     let details = MemoryBudgeter.reclaimableCreditDetails(for: prior)
-    XCTAssertEqual(details.bytes, 0)
     XCTAssertEqual(details.evidenceStatus, MemoryEvidenceStatus.unvalidated.rawValue)
     XCTAssertNotNil(details.profileID)
+    XCTAssertGreaterThan(details.bytes, 0, "an estimated shape is still creditable")
+    XCTAssertLessThanOrEqual(
+        details.bytes,
+        MemoryBudgeter.deviceMeasuredFreedUnvalidatedTextBytes,
+        "credit must never exceed what teardown measurably frees"
+    )
+    XCTAssertEqual(MemoryBudgeter.reclaimableBytes(for: prior), details.bytes)
     XCTAssertNil(MemoryBudgeter.reclaimableCreditDetails(for: nil).profileID)
 }
 
@@ -473,10 +510,12 @@ func testConsentMissingSurfacesProfileUnvalidatedNotHeadroom() async {
         processAvailable: 16_000_000_000, total: 32_000_000_000
     )).decision(for: target, reclaimableBytes: .max)
     XCTAssertEqual(decision.recommendation, .insufficientRAM)
-    XCTAssertEqual(decision.reason, .profileUnvalidated)
+    XCTAssertEqual(decision.reason, .consentRequired)
     XCTAssertNil(decision.requiredBytes)
-    XCTAssertTrue(decision.alertMessage(modelName: "Fixture").contains("explicit consent"))
-    XCTAssertTrue(decision.logSummary.contains("profileUnvalidated"))
+    // The remedy is permission, and the sentence says so in words a user can
+    // act on — no "measured load evidence", no "explicit consent" jargon.
+    XCTAssertTrue(decision.alertMessage(modelName: "Fixture").contains("permission"))
+    XCTAssertTrue(decision.logSummary.contains("consentRequired"))
 }
 
 func testConsentGrantedComparesExperimentalRequiredAgainstProjection() async throws {
@@ -517,14 +556,20 @@ func testZeroCreditRefusalCarriesUnloadFirstGuidance() async throws {
     defer { ExperimentalModelConsent.setGranted(false, for: target) }
     let required = try requiredHeadroom(for: target)
     let available = required - 100_000_000
-    let prior = ModelRegistry.llama32_3B
+    // A prior with no runtime shape at all: its eviction credits nothing, so
+    // projected == raw by construction. Every shipped catalog row is now sized
+    // (measured or estimated), so this uses an imported fixture whose registry
+    // record does not exist — the one remaining zero-credit case.
+    let prior = makeUnshapedPrior()
     XCTAssertEqual(MemoryBudgeter.reclaimableBytes(for: prior), 0)
     let withPrior = await MemoryBudgeter(metrics: FixedMemoryMetricsProvider(
         processAvailable: available, total: totalRAM
     )).decision(for: target, allowUnvalidatedCalibration: true, reclaimableBytes: 0)
     XCTAssertEqual(withPrior.reason, .insufficientProcessHeadroom)
-    XCTAssertTrue(withPrior.alertMessage(modelName: "Target", priorActive: prior).contains("unloading it first"))
-    XCTAssertFalse(withPrior.alertMessage(modelName: "Target").contains("unloading it first"))
+    let withPriorMessage = withPrior.alertMessage(modelName: "Target", priorActive: prior)
+    XCTAssertTrue(withPriorMessage.contains("Unload"), withPriorMessage)
+    XCTAssertTrue(withPriorMessage.contains("first"), withPriorMessage)
+    XCTAssertFalse(withPrior.alertMessage(modelName: "Target").contains("Unload"))
 }
 
 func testTransientDipSettleRetryRecoversFirstLoad() async throws {
@@ -658,15 +703,17 @@ func testPreMmapRefusalStaysBareAfterTeardown() async throws {
     defer { ExperimentalModelConsent.setGranted(false, for: target) }
     let required = try requiredHeadroom(for: target)
     let available = required - 100_000_000
-    let prior = ModelRegistry.llama32_3B
+    // A prior with no runtime shape at all (see the zero-credit test): every
+    // shipped catalog row is sized now, so only an unshaped fixture credits 0.
+    let prior = makeUnshapedPrior()
     let decision = await MemoryBudgeter(metrics: FixedMemoryMetricsProvider(
         processAvailable: available, total: totalRAM
     )).decision(for: target, allowUnvalidatedCalibration: true, reclaimableBytes: 0)
     XCTAssertEqual(decision.reason, .insufficientProcessHeadroom)
     // Pre-teardown with the resident still present: unload-first guidance.
-    XCTAssertTrue(decision.alertMessage(modelName: "Target", priorActive: prior).contains("unloading it first"))
+    XCTAssertTrue(decision.alertMessage(modelName: "Target", priorActive: prior).contains("Unload"))
     // Post-teardown (nil prior): bare headroom message.
-    XCTAssertFalse(decision.alertMessage(modelName: "Target", priorActive: nil).contains("unloading it first"))
+    XCTAssertFalse(decision.alertMessage(modelName: "Target", priorActive: nil).contains("Unload"))
 }
 
 func testSmolmPriorCreditEqualsMeasuredFreed() async throws {

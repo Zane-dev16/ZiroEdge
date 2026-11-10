@@ -57,64 +57,64 @@ struct MemoryLoadDecision: Equatable, Sendable {
         ].joined(separator: " ")
     }
 
+    /// Plain-language sentence for a refused load.
+    ///
+    /// Delegates to `ModelLoadCopy` so an alert, an inline banner, and a model
+    /// page cannot word the same state three different ways — and so the app
+    /// never names a cause it has not explained. The switch stays exhaustive on
+    /// purpose: adding a reason is a compile error here rather than a case that
+    /// silently inherits another reason's sentence.
     func alertMessage(modelName: String, priorActive: AIModel? = nil) -> String {
-        // Exhaustive on purpose — no `default:`. This switch previously ended in
-        // one, so every new failure reason silently inherited the
-        // process-headroom sentence. `.metricsUnavailable` (produced by the
-        // zero-sample guard in `decision(...)` when the OS memory read fails)
-        // therefore rendered an unmeasured sample as "...needs more working
-        // memory than the 0 bytes of App Memory Headroom currently available" —
-        // asserting a cause the app had never actually measured. Adding a reason
-        // is now a compile error here instead of a silent copy bug.
         switch reason {
-        case .profileUnvalidated:
-            return "\(modelName) is not validated for normal use. Experimental use requires explicit consent and measured load evidence."
-        case .profileMissing:
-            return "\(modelName) has no registered runtime-memory profile and cannot be loaded."
+        case .profileUnvalidated, .profileMissing, .none:
+            // Neither measurement nor estimate exists for this shape. Unreachable
+            // for a shipped catalog row — `ModelCatalogValidator` refuses one —
+            // so the fallback must not describe internal machinery.
+            return ModelLoadCopy.genericFailure(modelName: modelName)
         case .profileDisabled:
-            return "\(modelName) was disabled after repeated unclean loads. Reset its safety history before calibrating again."
+            return ModelLoadCopy.pausedAfterRepeatedStops(modelName: modelName)
+        case .consentRequired:
+            return ModelLoadCopy.experimentalConsentRequired(modelName: modelName)
         case .metricsUnavailable:
-            // The budget could not be read. Say so; do not invent a number.
-            return "\(modelName) couldn't be loaded because ZiroEdge wasn't able to read this device's memory budget. This is usually temporary — try again."
+            return ModelLoadCopy.memoryCheckUnavailable(modelName: modelName)
         case .physicalRAMBelowMinimum:
-            // Not a transient shortfall: the device cannot host this model.
-            return "\(modelName) needs more memory than this device can provide, even with nothing else loaded."
+            return ModelLoadCopy.tooLargeForDevice(modelName: modelName)
         case .postLoadReserveBreached:
-            return "\(modelName) would leave too little memory for iOS to keep ZiroEdge responsive, so it wasn't loaded."
-        case .insufficientProcessHeadroom, .none:
-            // Never interpolate a zero sample here: "more than the 0 bytes
-            // available" reads as a broken app. A zero means the read failed or
-            // the device is mid-pressure, not that there is no RAM at all.
-            // "App Memory Headroom" is internal vocabulary (glossed in Settings);
-            // it does not belong in an alert the user hits cold.
-            let base = processAvailableBytes == 0
-                ? "\(modelName) needs more working memory than the device can currently spare."
-                : "\(modelName) needs more working memory than the \(formattedAppMemoryHeadroom) currently available."
+            return ModelLoadCopy.wouldStarveDevice(modelName: modelName)
+        case .insufficientProcessHeadroom:
+            let base = ModelLoadCopy.notEnoughMemory(
+                modelName: modelName,
+                requiredBytes: requiredBytes,
+                availableBytes: processAvailableBytes
+            )
             // Zero-credit guidance (Fix verify b): when the resident prior
-            // contributed no reclaimable credit because its profile has no
-            // measured evidence, projected==raw by construction. Tell the
-            // user the remedy (unload-first then retry) instead of leaving a
-            // bare headroom number. Purely presentational — admission math
-            // is unchanged (reclaimable stays 0, fail-closed).
-            if reason == .insufficientProcessHeadroom,
-               (reclaimableBytes ?? 0) == 0,
+            // contributed no reclaimable credit because its shape has no size at
+            // all, projected == raw by construction. Tell the user the remedy
+            // (unload first, then retry) instead of leaving a bare number.
+            // Purely presentational — admission math stays untouched.
+            if (reclaimableBytes ?? 0) == 0,
                let prior = priorActive,
                Self.priorHasNoMeasurableEvidence(prior) {
-                return base + " The current model has no measured memory evidence, so none of its footprint could be credited. Try unloading it first, then loading \(modelName) again."
+                return base + " " + ModelLoadCopy.unloadFirst(
+                    priorName: prior.displayName,
+                    modelName: modelName
+                )
             }
             return base
         }
     }
 
-    /// True when `prior` exists but its profile carries no measurable
-    /// evidence (unvalidated curated shape or missing profile), i.e. the
-    /// zero-credit case where projected==raw by construction.
+    /// True when `prior` exists but its shape has no size ZiroEdge can account
+    /// for: no measurement, and no estimate either. An estimated shape does have
+    /// a number, so it is explicitly not this case — that distinction is what
+    /// keeps the "unload it first" advice from appearing for a model the app
+    /// can already size.
     private static func priorHasNoMeasurableEvidence(_ prior: AIModel) -> Bool {
         guard let profile = MemoryProfileRegistry.profile(for: prior) else { return true }
         if profile.evidenceStatus == .validated { return false }
-        let hasValidated = (try? profile.requiredProcessHeadroomBytes()) != nil
-        let hasExperimental = (try? profile.experimentalRequiredProcessHeadroomBytes()) != nil
-        return !hasValidated && !hasExperimental
+        if (try? profile.requiredProcessHeadroomBytes()) != nil { return false }
+        if (try? profile.experimentalRequiredProcessHeadroomBytes()) != nil { return false }
+        return (try? profile.estimatedRequiredProcessHeadroomBytes()) == nil
     }
 }
 
@@ -122,10 +122,32 @@ enum MemoryAdmissionFailure: String, Sendable, Equatable {
     case metricsUnavailable
     case profileMissing
     case profileUnvalidated
+    /// The shape has measured evidence, but the user has not agreed to the
+    /// experimental runtime yet. Distinct from `.profileUnvalidated` because
+    /// the remedy is different: nothing is wrong with the model, it just needs
+    /// permission.
+    case consentRequired
     case physicalRAMBelowMinimum
     case insufficientProcessHeadroom
     case postLoadReserveBreached
     case profileDisabled
+}
+
+/// One admission verdict: what to do, why, and the number it was compared to.
+private struct MemoryAdmissionVerdict {
+    var recommendation: MemoryRecommendation
+    var reason: MemoryAdmissionFailure?
+    var requiredBytes: UInt64?
+}
+
+/// One reading of the device's memory, taken together so no branch can compare
+/// against a sample from a different moment.
+private struct DeviceMemorySample {
+    /// Process headroom right now. Every fail-closed gate reads this.
+    let available: UInt64
+    /// Headroom after the resident model is unloaded. Comparison-only.
+    let projected: UInt64
+    let total: UInt64
 }
 
 /// Profile-based model-load policy. The caller must complete unload/recovery before invoking `decision`.
@@ -201,6 +223,18 @@ actor MemoryBudgeter {
         if let required = try? profile.requiredProcessHeadroomBytes() {
             // ponytail: min(required, measured freed); per-shape table if more validated models land.
             return (min(required, Self.deviceMeasuredFreedValidatedVisionBytes), profile.id, status)
+        }
+        if let estimatedRequired = try? profile.estimatedRequiredProcessHeadroomBytes() {
+            // Estimated prior: its required floor is an upper bound on what the
+            // resident model occupies, so crediting it would make the projection
+            // more optimistic than reality — the one direction admission may
+            // never move. Credit what teardown measurably frees for the same
+            // class instead (text ~4MB: mmap base, context untouched), which
+            // keeps projected == raw for text and stays fail-closed for vision.
+            let cap = profile.mode == .text
+                ? Self.deviceMeasuredFreedUnvalidatedTextBytes
+                : Self.deviceMeasuredFreedValidatedVisionBytes
+            return (min(estimatedRequired, cap), profile.id, status)
         }
         // ponytail: min(peak, measured freed) for text; vision keeps peak until
         // calibrated (see above). Policy-validated via experimental succeeding;
@@ -313,7 +347,6 @@ actor MemoryBudgeter {
             total = metrics.totalRAM()
         }
         let profile = MemoryProfileRegistry.profile(for: model)
-        var required = try? profile?.requiredProcessHeadroomBytes()
         // Projected post-eviction headroom: only the memory comparison may
         // use it — every fail-closed gate stays on raw samples. Capped at
         // total RAM so eviction can never free more than exists.
@@ -321,55 +354,19 @@ actor MemoryBudgeter {
             Self.projectedAvailableAfterEviction(currentAvailable: processAvailable, reclaimableBytes: reclaimableBytes),
             total
         )
-        // Raw pass → proceed. Raw fail but projected pass → unloadCurrentFirst
-        // (proceed to teardown; the post-teardown hard gate re-samples with
-        // zero credit). Both fail → insufficientRAM.
-        func memoryVerdict(required: UInt64) -> (MemoryRecommendation, MemoryAdmissionFailure?) {
-            if processAvailable >= required { return (.proceed, nil) }
-            if projected >= required { return (.unloadCurrentFirst, nil) }
-            return (.insufficientRAM, .insufficientProcessHeadroom)
-        }
-        let recommendation: MemoryRecommendation
-        let reason: MemoryAdmissionFailure?
-
-        if processAvailable == 0 || total == 0 {
-            recommendation = .insufficientRAM
-            reason = .metricsUnavailable
-        } else if profile == nil {
-            recommendation = .insufficientRAM
-            reason = .profileMissing
-        } else if let profile, total < profile.minimumPhysicalRAMBytes {
-            recommendation = .insufficientRAM
-            reason = .physicalRAMBelowMinimum
-        } else if let profile, required == nil, allowUnvalidatedCalibration {
-            // Normal experimental consent still requires measured runtime evidence.
-            // DEBUG controlled calibration is the only path that may gather first evidence.
-            if let experimentalRequired = try? profile.experimentalRequiredProcessHeadroomBytes() {
-                required = experimentalRequired
-                (recommendation, reason) = memoryVerdict(required: experimentalRequired)
-            } else {
-#if DEBUG
-                if MemoryDiagnosticRecorder.shared.controlledWorkloadEnabled {
-                    recommendation = .proceed
-                    reason = nil
-                } else {
-                    recommendation = .insufficientRAM
-                    reason = .profileUnvalidated
-                }
-#else
-                recommendation = .insufficientRAM
-                reason = .profileUnvalidated
-#endif
-            }
-        } else if required == nil {
-            recommendation = .insufficientRAM
-            reason = .profileUnvalidated
-        } else if let required {
-            (recommendation, reason) = memoryVerdict(required: required)
-        } else {
-            recommendation = .proceed
-            reason = nil
-        }
+        let verdict = Self.verdict(
+            profile: profile,
+            measuredRequired: try? profile?.requiredProcessHeadroomBytes(),
+            allowUnvalidatedCalibration: allowUnvalidatedCalibration,
+            sample: DeviceMemorySample(
+                available: processAvailable,
+                projected: projected,
+                total: total
+            )
+        )
+        let recommendation = verdict.recommendation
+        let reason = verdict.reason
+        let required = verdict.requiredBytes
 
         let decision = MemoryLoadDecision(
             recommendation: recommendation,
@@ -407,6 +404,92 @@ actor MemoryBudgeter {
             logger.fault("Refused headroom miss zero-credit model=\(model.id, privacy: .public) \(decision.logSummary, privacy: .public)")
         }
         return decision
+    }
+
+    /// Decide one load. Split out of `decision(for:...)` so the policy chain
+    /// stays readable on its own: every branch here answers "may this shape be
+    /// compared against device headroom, and with what number?"
+    ///
+    /// Order matters and is load-bearing:
+    /// 1. unreadable samples refuse (never invent a number);
+    /// 2. a model with no shape at all refuses (catalog gate prevents this);
+    /// 3. a device below the shape's physical floor can never host it;
+    /// 4. explicit consent (or DEBUG calibration) uses retained measured evidence;
+    /// 5. with no measurement, the conservative static estimate admits or refuses;
+    /// 6. nothing left to compare against refuses.
+    private static func verdict(
+        profile: MemoryProfile?,
+        measuredRequired: UInt64?,
+        allowUnvalidatedCalibration: Bool,
+        sample: DeviceMemorySample
+    ) -> MemoryAdmissionVerdict {
+        // Raw pass → proceed. Raw fail but projected pass → unloadCurrentFirst
+        // (proceed to teardown; the post-teardown hard gate re-samples with
+        // zero credit). Both fail → insufficientRAM.
+        func compare(_ required: UInt64) -> MemoryAdmissionVerdict {
+            if sample.available >= required {
+                return MemoryAdmissionVerdict(recommendation: .proceed, reason: nil, requiredBytes: required)
+            }
+            if sample.projected >= required {
+                return MemoryAdmissionVerdict(recommendation: .unloadCurrentFirst, reason: nil, requiredBytes: required)
+            }
+            return MemoryAdmissionVerdict(
+                recommendation: .insufficientRAM,
+                reason: .insufficientProcessHeadroom,
+                requiredBytes: required
+            )
+        }
+        func refuse(_ reason: MemoryAdmissionFailure, required: UInt64? = nil) -> MemoryAdmissionVerdict {
+            MemoryAdmissionVerdict(recommendation: .insufficientRAM, reason: reason, requiredBytes: required)
+        }
+
+        if sample.available == 0 || sample.total == 0 {
+            return refuse(.metricsUnavailable)
+        }
+        guard let profile else {
+            return refuse(.profileMissing)
+        }
+        if sample.total < profile.minimumPhysicalRAMBytes {
+            return refuse(.physicalRAMBelowMinimum)
+        }
+        if let measuredRequired {
+            return compare(measuredRequired)
+        }
+        if allowUnvalidatedCalibration {
+            // Normal experimental consent still requires measured runtime
+            // evidence. DEBUG controlled calibration is the only path that may
+            // gather the first evidence for a shape that has none.
+            if let experimentalRequired = try? profile.experimentalRequiredProcessHeadroomBytes() {
+                return compare(experimentalRequired)
+            }
+#if DEBUG
+            if MemoryDiagnosticRecorder.shared.controlledWorkloadEnabled {
+                return MemoryAdmissionVerdict(recommendation: .proceed, reason: nil, requiredBytes: nil)
+            }
+#endif
+            return refuse(.profileUnvalidated)
+        }
+        // No device measurement exists for this exact shape, so admit on the
+        // conservative static estimate rather than refusing forever.
+        //
+        // This is the tier that makes the catalog usable: before it, only a shape
+        // that had completed a DEBUG-only calibration run could load, which made
+        // nine of the ten shipped models permanently unloadable and left the user
+        // reading a memory-policy sentence instead of getting an answer. The
+        // estimate over-states on every term (see
+        // `MemoryProfile.estimatedLoadDeltaBytes`), the post-load reserve check
+        // still runs, and memory pressure still unloads, so the failure
+        // direction is a refused load, never a jetsam.
+        if let estimated = try? profile.estimatedRequiredProcessHeadroomBytes() {
+            return compare(estimated)
+        }
+        // Nothing to compare against. Distinguish the two ways to get here: a
+        // measured-but-unconsented shape (the remedy is permission) from a shape
+        // with no number at all (the remedy is a catalog fix).
+        if profile.runtimeEligibility == .experimental {
+            return refuse(.consentRequired)
+        }
+        return refuse(.profileUnvalidated)
     }
 
     /// One post-load sample; validated and calibration loads must retain the fixed reserve.

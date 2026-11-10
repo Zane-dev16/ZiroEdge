@@ -2,9 +2,14 @@ import XCTest
 @testable import ZiroEdge
 
 /// The six device-validated imports, promoted to curated catalog rows so they
-/// are one-tap downloadable. Load stays gated: no MemoryProfile exists for
-/// these shapes yet, so eligibility is `.unavailable` (download now, load
-/// after calibration) while the import path remains the loadable route.
+/// are one-tap downloadable and loadable.
+///
+/// These rows used to be `.unavailable` — no MemoryProfile was registered for
+/// their shapes, so every attempt to load one was refused with a sentence about
+/// calibration. Six of ten shipped models could be downloaded and never run.
+/// They are now `.estimated`: admitted on the same conservative estimator
+/// imports use (`ImportRAMAssessment`), with no device measurement required.
+///
 /// URLs pin HF revisions; bytes/SHAs are the API LFS digests verified
 /// on-device 2026-09-23 (LFM-1.2B b1b3de11…, Qwen-0.8B bd258782…, 2B aaf42c8b…).
 final class CatalogLineupTests: XCTestCase {
@@ -50,11 +55,38 @@ final class CatalogLineupTests: XCTestCase {
         }
     }
 
-    func testLineupStaysOutOfProductionCatalog() {
-        // Unavailable rows must not enter the release download-verification set.
+    func testLineupIsLoadableButNotPromotedToValidated() {
+        // Loadable: an estimate admits the shape. Not validated: no measured
+        // full workload has been retained, so it must not enter the release
+        // download-verification set or claim measured evidence.
         for model in lineup {
-            XCTAssertEqual(model.runtimeEligibility, .unavailable, "\(model.id) loads only after calibration")
+            XCTAssertEqual(model.runtimeEligibility, .estimated, "\(model.id) must be loadable on an estimate")
             XCTAssertFalse(ModelRegistry.productionModels.contains { $0.id == model.id })
+            let profile = MemoryProfileRegistry.profile(for: model)
+            XCTAssertNotNil(profile, "\(model.id) must resolve a runtime shape")
+            XCTAssertNotNil(profile?.estimatedLoadDeltaBytes, "\(model.id) must publish an estimate")
+            XCTAssertNil(profile?.measuredLoadDeltaBytes, "\(model.id) must not claim measurement")
+            XCTAssertNil(profile?.measuredFullWorkloadPeakDeltaBytes)
+        }
+    }
+
+    func testEveryLineupRowHasDistinctCPUAndMetalShapes() {
+        // Profile ids key experimental consent AND load-safety history, so a
+        // duplicated id would let one shape inherit another's disabled state.
+        var ids = Set<String>()
+        for model in lineup {
+            for usesGPU in [false, true] {
+                guard let shape = MemoryProfileRegistry.profile(for: model.id, usesGPU: usesGPU) else {
+                    XCTFail("\(model.id) missing a shape (usesGPU: \(usesGPU))")
+                    continue
+                }
+                XCTAssertTrue(ids.insert(shape.id).inserted, "duplicate shape id \(shape.id)")
+                if usesGPU {
+                    XCTAssertGreaterThan(shape.gpuLayers, 0)
+                } else {
+                    XCTAssertEqual(shape.gpuLayers, 0)
+                }
+            }
         }
     }
 }

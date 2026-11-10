@@ -52,7 +52,11 @@ final class MemoryBudgeterTests: XCTestCase {
             metrics: FixedMemoryMetricsProvider(processAvailable: 1_000_000_000, total: 8_054_095_872)
         ).decision(for: ModelRegistry.gemma4E4BTextCalibration)
 
-        XCTAssertTrue(decision.alertMessage(modelName: "Fixture").contains("explicit consent"))
+        // The calibration identity has no estimate by design, so the refusal is
+        // a plain "couldn't start" — never internal vocabulary.
+        let message = decision.alertMessage(modelName: "Fixture")
+        XCTAssertTrue(ModelCopyPolicy.violations(in: message).isEmpty, message)
+        XCTAssertFalse(message.contains("calibration"))
         XCTAssertTrue(decision.logSummary.contains("processHeadroomBytes=1000000000"))
     }
 

@@ -160,14 +160,7 @@ struct AIModel: Identifiable, Hashable, Sendable {
     }
 
     var runtimeEligibilityExplanation: String {
-        switch runtimeEligibility {
-        case .validated:
-            "Passed the retained full-workload physical-device acceptance policy."
-        case .experimental:
-            "Measured load evidence provides a conservative admission floor, but the full workload is not yet validated. Explicit consent is required."
-        case .unavailable:
-            "No safe runtime-memory evidence exists for this configuration yet. You can download it now, but ZiroEdge will not load it until calibration provides evidence."
-        }
+        RuntimeEligibilityCopy.detail(for: runtimeEligibility)
     }
 
     /// Human-readable file size (e.g. "2.1 GB").
@@ -178,8 +171,7 @@ struct AIModel: Identifiable, Hashable, Sendable {
     /// A useful fail-closed reason when this catalog row cannot be verified.
     var catalogUnavailableReason: String? {
         ModelCatalogValidator.failureReason(for: self)
-    }
-}
+    }}
 
 /// Runtime counterpart to the release catalog checker. UI and orchestration use
 /// this before touching the network so malformed production metadata fails closed.
@@ -220,6 +212,15 @@ enum ModelCatalogValidator {
             if !ids.insert(model.id).inserted { return "The model catalog contains a duplicate model identity."
             }
             if let reason = failureReason(for: model) { return "\(model.displayName): \(reason)" }
+
+            // Catalog/runtime agreement. A row the memory registry cannot size is
+            // a row the app would list, let the user download, and then refuse to
+            // load — which is exactly how nine of ten models shipped unloadable.
+            // Enforced over the shipped catalog (not over every AIModel value):
+            // test fixtures and imported rows legitimately are not catalog rows.
+            guard MemoryProfileRegistry.hasCuratedShape(for: model.id) else {
+                return "\(model.displayName): The model catalog does not register a runtime memory shape for this model."
+            }
 
             let identity = (model.baseURL, model.baseFileSizeBytes, model.baseSHA256)
             if let existing = storage[model.baseArtifactStorageID],
@@ -569,7 +570,7 @@ enum ModelRegistry {
     static var selectableModels: [AIModel] {
         libraryModels.filter {
             switch $0.runtimeEligibility {
-            case .validated: true
+            case .validated, .estimated: true
             case .experimental: ExperimentalModelConsent.isGranted(for: $0)
             case .unavailable: false
             }
@@ -582,6 +583,25 @@ enum ModelRegistry {
             return profile.runtimeEligibility != .unavailable
                 && UInt64(clamping: deviceRAM) >= profile.minimumPhysicalRAMBytes
         }
+    }
+
+    /// Shipped catalog rows only: no calibration identities, no imported rows.
+    /// This is what runtime sizing may estimate from — a shape can only be sized
+    /// from a row that actually ships. Kept distinct from `curatedModel` (which
+    /// resolves file paths and does include the DEBUG calibration identity) so a
+    /// calibration-only profile can never be handed an estimate that would make
+    /// its measurement run unnecessary.
+    static func catalogModel(forID id: String) -> AIModel? {
+        allModels.first { $0.id == id }
+    }
+
+    /// Curated-only lookup, used for file paths and availability by ID.
+    ///
+    /// Deliberately excludes the imported registry: availability resolves a
+    /// catalog row on every status read, and `libraryModels` reads the imported
+    /// store from disk. Never route sizing through that.
+    static func curatedModel(forID id: String) -> AIModel? {
+        (allModels + calibrationModels).first { $0.id == id }
     }
 
     /// Look up normal catalog and calibration-only identities by ID.

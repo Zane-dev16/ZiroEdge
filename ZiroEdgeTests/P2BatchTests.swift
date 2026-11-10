@@ -299,11 +299,34 @@ final class P2BatchTests: XCTestCase {
     // MARK: - Integrity C/E single source
 
     func testIntegrityCopyIsSingleSourced() {
-        XCTAssertEqual(ArtifactIntegrityPresentation.needsRepairSubtitle, "Needs repair")
-        XCTAssertEqual(ArtifactIntegrityPresentation.needsRepairSpoken, "needs repair")
-        XCTAssertTrue(ArtifactIntegrityPresentation.repairBannerMessage.contains("needs repair"))
+        // The chip names the action the user can take, not an internal
+        // maintenance operation. "Repair" never ships again.
+        XCTAssertEqual(ArtifactIntegrityPresentation.needsRedownloadSubtitle, "Download again")
+        XCTAssertEqual(ArtifactIntegrityPresentation.needsRedownloadSpoken, "needs downloading again")
+        XCTAssertTrue(ArtifactIntegrityPresentation.damagedBannerMessage.contains("Download it again"))
         XCTAssertFalse(ArtifactIntegrityPresentation.message(for: .sha256Mismatch).isEmpty)
-        XCTAssertTrue(ArtifactIntegrityPresentation.message(for: .missing(artifact: .base)).lowercased().contains("missing"))
+        XCTAssertTrue(
+            ArtifactIntegrityPresentation.message(for: .missing(artifact: .base))
+                .lowercased()
+                .contains("isn't on your iphone")
+        )
+        // No internal vocabulary reaches a user through this surface.
+        let surfaces = [
+            ArtifactIntegrityPresentation.needsRedownloadSubtitle,
+            ArtifactIntegrityPresentation.needsRedownloadSpoken,
+            ArtifactIntegrityPresentation.damagedBannerMessage,
+            ArtifactIntegrityPresentation.message(for: .sha256Mismatch),
+            ArtifactIntegrityPresentation.message(for: .sizeMismatch),
+            ArtifactIntegrityPresentation.message(for: .missingGGUFHeader),
+            ArtifactIntegrityPresentation.message(for: .missing(artifact: .base)),
+            ArtifactIntegrityPresentation.message(for: .unknown("")),
+        ]
+        for surface in surfaces {
+            XCTAssertTrue(
+                ModelCopyPolicy.violations(in: surface).isEmpty,
+                "user copy contains internal vocabulary: \(ModelCopyPolicy.violations(in: surface)) in \(surface)"
+            )
+        }
     }
 
     // MARK: - Helpers

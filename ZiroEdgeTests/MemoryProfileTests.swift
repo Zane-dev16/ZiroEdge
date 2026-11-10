@@ -93,9 +93,14 @@ final class MemoryProfileTests: XCTestCase {
             source: .huggingFace(provenance)
         )
 
+        // No trap, no wrap. The estimator clamps the absurd context to the same
+        // 512...4096 range the runtime uses and saturates only the weights term,
+        // so the answer is deterministic rather than UInt64.max:
+        //   base = Int64.max / 3 (saturated), context = 4096 * 256_000.
+        let expected = UInt64(Int64.max / 3) + UInt64(4096) * 256_000
         XCTAssertEqual(
             MemoryProfileRegistry.importedProfile(for: model).measuredLoadDeltaBytes,
-            UInt64.max
+            expected
         )
     }
 

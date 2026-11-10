@@ -91,7 +91,7 @@ struct ModelDetailView: View {
     /// runtime strip. Semantic tokens keep caption-size text AA in both modes.
     private func eligibilityTint(_ eligibility: RuntimeEligibility) -> Color {
         switch eligibility {
-        case .validated: ZiroTheme.positiveText
+        case .validated, .estimated: ZiroTheme.positiveText
         case .experimental: ZiroTheme.warningText
         case .unavailable: ZiroTheme.secondaryText
         }
@@ -125,8 +125,8 @@ struct ModelDetailView: View {
 
         switch status.displayState {
         case .notDownloaded:
-            if status.isRepairNeeded || ModelManagerService.isRepairNeeded(for: model) {
-                Label(ArtifactIntegrityPresentation.repairBannerMessage, systemImage: "wrench.and.screwdriver")
+            if status.needsRedownload(for: model) {
+                Label(ArtifactIntegrityPresentation.damagedBannerMessage, systemImage: "arrow.clockwise.circle")
                     .font(.subheadline)
                     .foregroundStyle(ZiroTheme.warningText)
             }
@@ -367,6 +367,15 @@ struct ModelDetailView: View {
             } label: {
                 Label("Safety & Runtime", systemImage: "shield.lefthalf.filled")
             }
+            // The plain surface lives above; the precise facts live here. One
+            // tap, on purpose: a reader who wants digests and policy constants
+            // gets them, and a reader who does not never sees them.
+            NavigationLink {
+                ModelTechnicalDetailsPage(model: model, viewModel: viewModel)
+            } label: {
+                Label("Technical Details", systemImage: "info.circle")
+            }
+            .accessibilityIdentifier("modelTechnicalDetailsLink")
             NavigationLink {
                 StorageProvenancePage(model: model, viewModel: viewModel)
             } label: {

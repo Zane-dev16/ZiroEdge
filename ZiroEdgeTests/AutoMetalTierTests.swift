@@ -37,10 +37,12 @@ final class AutoMetalTierTests: XCTestCase {
     }
 
     func testMetalEntriesExistButServeCPUUntilCalibrated() {
-        // The Metal shapes exist with zero evidence (fail-closed):
+        // The Metal shape has no measurement, so it carries only an estimate —
+        // loadable, but weaker evidence than the validated CPU shape:
         let metal = MemoryProfileRegistry.all.first { $0.id == "gemma4-e2b-vision-metal-p1" }
         XCTAssertEqual(metal?.evidenceStatus, .unvalidated)
-        XCTAssertEqual(metal?.runtimeEligibility, .unavailable)
+        XCTAssertNil(metal?.measuredFullWorkloadPeakDeltaBytes)
+        XCTAssertEqual(metal?.runtimeEligibility, .estimated)
         // …but lookup serves what can serve, so the validated CPU shape
         // admits (and the engine follows it) until Metal calibrates:
         let served = MemoryProfileRegistry.profile(for: ModelRegistry.gemma4_e2b.id, usesGPU: true)

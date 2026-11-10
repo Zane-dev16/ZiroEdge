@@ -214,10 +214,10 @@ extension DownloadManager {
             $0.baseArtifactStorageID == model.baseArtifactStorageID
         }
         for sibling in siblings {
-            ModelManagerService.clearRepairNeeded(for: sibling)
+            ModelManagerService.clearDamaged(for: sibling)
         }
         if !siblings.contains(where: { $0.id == model.id }) {
-            ModelManagerService.clearRepairNeeded(for: model)
+            ModelManagerService.clearDamaged(for: model)
         }
     }
 

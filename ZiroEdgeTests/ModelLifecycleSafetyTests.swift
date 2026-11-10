@@ -10,9 +10,9 @@ final class ModelLifecycleSafetyTests: XCTestCase {
         )
     }
 
-    private func makeBudgeter() -> MemoryBudgeter {
+    private func makeBudgeter(available: UInt64 = 4_000_000_000) -> MemoryBudgeter {
         MemoryBudgeter(metrics: FixedMemoryMetricsProvider(
-            processAvailable: 4_000_000_000,
+            processAvailable: available,
             total: 8_054_095_872
         ))
     }
@@ -36,14 +36,20 @@ final class ModelLifecycleSafetyTests: XCTestCase {
 
         let result = await manager.loadModel(ModelRegistry.gemma4_e2b)
 
+        // Each native cause keeps its own sentence: three faults that all read
+        // "couldn't start" give the user nothing to act on and support nothing
+        // to work from. This one is the working-memory reservation failing.
+        let expected = ModelLoadCopy.couldNotReserveWorkingMemory(
+            modelName: ModelRegistry.gemma4_e2b.displayName
+        )
         XCTAssertEqual(result, .failed(ModelLoadFailure(
             kind: .nativeLoadFailure,
-            message: "The model context could not be created safely.",
+            message: expected,
             nativeKind: .contextCreation
         )))
         XCTAssertEqual(manager.currentState, .loadFailed)
         XCTAssertTrue(manager.showLoadFailure)
-        XCTAssertEqual(manager.loadFailureMessage, "The model context could not be created safely.")
+        XCTAssertEqual(manager.loadFailureMessage, expected)
         XCTAssertFalse(manager.loadFailureMessage?.contains("/private/") == true)
     }
 
@@ -262,12 +268,15 @@ final class ModelLifecycleSafetyTests: XCTestCase {
     }
 
     /// A budget refusal must keep the prior working model resident with no new unload.
-    /// E2B is validated (passes 4GB budget); E4B is unvalidated without consent (fails).
+    /// E2B is validated and fits 2.5GB headroom; E4B's estimated floor is far
+    /// above it, so the switch is a wide miss that refuses rather than tearing
+    /// the resident down. (A narrow miss is a different, separately tested path:
+    /// see `shouldAttemptTeardownOnNarrowMiss`.)
     func testP03BudgetRefusalKeepsPriorResident() async throws {
         let inference = LifecycleInferenceStub()
         let manager = ModelLifecycleManager(
             inferenceService: inference,
-            memoryBudgeter: makeBudgeter(),
+            memoryBudgeter: makeBudgeter(available: 2_500_000_000),
             loadSafetyStore: try makeStore(),
             availabilityProvider: { _ in .ready },
             recoveryDelay: .zero

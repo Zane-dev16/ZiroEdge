@@ -237,21 +237,30 @@ final class ModelLifecycleManager: ObservableObject {
         ))
     }
 
-    private static func userMessage(for error: InferenceError?) -> String {
-        guard let error else { return "The local model could not be loaded. Try repairing the download." }
+    private static func userMessage(for error: InferenceError?, modelName: String) -> String {
+        guard let error else { return ModelLoadCopy.engineCouldNotStart(modelName: modelName) }
         switch error {
         case .modelFileNotFound:
-            return "The model artifact is missing. Repair the download and try again."
+            return ModelLoadCopy.missingModelFile(modelName: modelName)
         case .mmprojFileNotFound:
-            return "The vision projector is missing. Repair the download and try again."
+            return ModelLoadCopy.missingImageFile(modelName: modelName)
         case .nativeFailure(let kind, _):
             switch kind {
-            case .modelMapping: return "The model file could not be mapped into memory."
-            case .contextCreation: return "The model context could not be created safely."
-            case .projectorInitialization: return "The vision projector could not be initialized."
-            case .memoryPressure: return "The model was unloaded because the required memory reserve was not available."
-            case .suspectedJetsam: return "Load safety state could not be committed. Loading remains blocked."
-            case .inference: return "The local inference engine could not load this model."
+            case .modelMapping:
+                return ModelLoadCopy.unreadableModelFile(modelName: modelName)
+            case .contextCreation:
+                return ModelLoadCopy.couldNotReserveWorkingMemory(modelName: modelName)
+            case .projectorInitialization:
+                return ModelLoadCopy.couldNotStartImageSupport(modelName: modelName)
+            case .memoryPressure:
+                return ModelLoadCopy.notEnoughMemory(
+                    modelName: modelName, requiredBytes: nil,
+                    availableBytes: UInt64(max(os_proc_available_memory(), 0))
+                )
+            case .suspectedJetsam:
+                return ModelLoadCopy.pausedAfterRepeatedStops(modelName: modelName)
+            case .inference:
+                return ModelLoadCopy.engineCouldNotStart(modelName: modelName)
             }
         case .modelNotLoaded, .visionNotSupported, .generationBusy:
             return error.localizedDescription
@@ -541,21 +550,24 @@ extension ModelLifecycleManager {
         }
         logger.info("Load preflight \(model.id, privacy: .public) availability=\(String(describing: availability), privacy: .public)")
         guard case .ready = availability else {
-            logger.error("Load refused unavailable artifact \(model.id, privacy: .public)")
-            let msg = "The downloaded model files are missing or failed integrity verification. Repair the download and try again."
+            logger.error("Load refused unavailable artifact \(model.id, privacy: .public) availability=\(String(describing: availability), privacy: .public)")
+            let msg = ModelLoadCopy.damagedFiles(modelName: model.displayName)
             return (nil, refuseLoadPreservingResident(kind: .unavailableArtifact, message: msg, priorActive: priorActive, priorState: priorState, modelID: model.id))
         }
         guard let profile = MemoryProfileRegistry.profile(for: model) else {
-            logger.error("Load refused no runtime profile \(model.id, privacy: .public)")
-            let msg = model.runtimeEligibilityExplanation
+            // Unreachable for a shipped catalog row: `ModelCatalogValidator`
+            // refuses a catalog whose models have no runtime shape. Keep the
+            // refusal fail-closed and the sentence free of internal vocabulary
+            // in case a future catalog change slips through.
+            logger.fault("Load refused no runtime shape \(model.id, privacy: .public)")
+            let msg = ModelLoadCopy.genericFailure(modelName: model.displayName)
             let refused = refuseLoadPreservingResident(kind: .runtimeProfileUnavailable, message: msg, priorActive: priorActive, priorState: priorState, modelID: model.id)
             return (nil, refused)
         }
         if loadSafetyStore.isDisabled(profileID: profile.id) {
             let unclean = loadSafetyStore.recentUncleanAttemptCount(profileID: profile.id)
             logger.error("Load refused safety-disabled profile \(profile.id, privacy: .public) unclean=\(unclean, privacy: .public) model=\(model.id, privacy: .public)")
-            let msg = "This exact runtime profile was disabled after two unclean attempts among its last five loads. "
-                + "Open the model details and explicitly reset its safety history before trying again."
+            let msg = ModelLoadCopy.pausedAfterRepeatedStops(modelName: model.displayName)
             return (nil, refuseLoadPreservingResident(kind: .safetyDisabled, message: msg, priorActive: priorActive, priorState: priorState, modelID: model.id))
         }
         let (override, consent, allow) = ModelAdmission.calibrationGate(for: model)
@@ -768,7 +780,7 @@ extension ModelLifecycleManager {
             let kindName = inferenceError?.nativeFailureKind.map(String.init(describing:)) ?? "none"
             logger.error("Model load failed: \(detail, privacy: .private) nativeKind=\(kindName, privacy: .public)")
             let nativeKind = inferenceError?.nativeFailureKind
-            let message = Self.userMessage(for: inferenceError)
+            let message = Self.userMessage(for: inferenceError, modelName: model.displayName)
             recordImportedLoadFailure(for: model, nativeKind: nativeKind, message: message)
             let kind: ModelLoadFailureKind = inferenceError?.sanitizedDiagnostic.contains("load-safety") == true ? .safetyPersistence : .nativeLoadFailure
             return await failPostTeardownOrRestorePrior(

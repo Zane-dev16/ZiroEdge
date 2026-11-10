@@ -145,7 +145,7 @@ enum ModelManagerService {
         )
         guard outcome == .valid else {
             quarantineInvalidArtifact(at: path, storageID: model.id)
-            markRepairNeeded(for: model)
+            markDamaged(for: model)
             return false
         }
         return true
@@ -301,11 +301,11 @@ enum ModelManagerService {
 
 extension ModelManagerService {
 
-    /// Comprehensive model availability check. Validates files on disk
-    /// and returns ready, repair-needed, or unavailable.
+    /// Comprehensive model availability check. Validates files on disk and
+    /// answers ready, not-downloaded, damaged, or catalog-invalid.
     static func availability(for modelID: String) -> ModelAvailability {
         guard let model = ModelRegistry.model(for: modelID) else {
-            return .unavailable
+            return .configurationError("The model catalog has no entry for this model.")
         }
         return availability(for: model)
     }
@@ -316,16 +316,20 @@ extension ModelManagerService {
         if HermeticUITestRuntime.isEnabled, model.id == ModelRegistry.llama32_3B.id {
             // ready/failedLoad fake a downloaded artifact; needsDownload fakes an
             // empty library so the chat surfaces the .needsDownload state.
-            return HermeticUITestRuntime.scenario == .needsDownload ? .unavailable : .ready
+            return HermeticUITestRuntime.scenario == .needsDownload ? .notDownloaded : .ready
         }
 #endif
         // Missing or malformed integrity metadata is a catalog configuration error.
         guard model.catalogUnavailableReason == nil,
               ModelCatalogValidator.catalogFailureReason(models: ModelRegistry.allModels) == nil else {
-            return .unavailable
+            return .configurationError("The model catalog row is invalid.")
         }
 
         var issues: [ArtifactIssue] = []
+        // Tracked separately from `issues`: absence and damage are different
+        // answers. A model with nothing on disk is not downloaded; a model with
+        // files that do not verify needs those files replaced.
+        var anyArtifactOnDisk = false
 
         // Single canonical validation pass per artifact (ModelArtifactVerifier);
         // outcomes map onto the historical ArtifactIssue taxonomy.
@@ -374,31 +378,37 @@ extension ModelManagerService {
         }
 
         // Check base artifact.
+        if FileManager.default.fileExists(atPath: baseModelPath(for: model).path) { anyArtifactOnDisk = true }
         if validateArtifact(
             baseModelPath(for: model),
             expectedBytes: model.baseFileSizeBytes,
             expectedSHA: model.baseSHA256,
             artifact: .base
         ) {
-            return .repairNeeded(issues: issues)
+            return .damaged(issues: issues)
         }
 
         // Check mmproj artifact for vision models.
         if model.requiresMMProj {
+            if FileManager.default.fileExists(atPath: mmprojModelPath(for: model).path) { anyArtifactOnDisk = true }
             if validateArtifact(
                 mmprojModelPath(for: model),
                 expectedBytes: model.mmprojFileSizeBytes ?? 0,
                 expectedSHA: model.mmprojSHA256 ?? "",
                 artifact: .mmproj
             ) {
-                return .repairNeeded(issues: issues)
+                return .damaged(issues: issues)
             }
         }
 
         if issues.isEmpty {
             return .ready
         }
-        return .repairNeeded(issues: issues)
+        // Absence is not damage. This single line is the difference between a
+        // fresh install showing ordinary "download" affordances and showing
+        // an orange "Repair" on every row for files the user never asked for.
+        if !anyArtifactOnDisk { return .notDownloaded }
+        return .damaged(issues: issues)
     }
 
     /// Startup fast-path: file existence + byte size + GGUF structure only.
@@ -406,19 +416,19 @@ extension ModelManagerService {
     /// hashing. The post-first-frame refresh (`DownloadManager.refreshStatusesFromDisk`
     /// + `OfflineAvailabilityGuard.sweep`) re-verifies digests off-main and
     /// corrects any optimistic `.ready` (a hash mismatch surfaces as
-    /// `.repairNeeded` there). Same taxonomy as `availability(for:)` so the
+    /// `.damaged` there). Same taxonomy as `availability(for:)` so the
     /// seeded statuses map onto identical UI states.
     static func quickAvailability(for model: AIModel) -> ModelAvailability {
 #if DEBUG
         if HermeticUITestRuntime.isEnabled, model.id == ModelRegistry.llama32_3B.id {
             // Match the full-check hermetic short-circuit so UI-test
             // scenarios converge identically before/after verification.
-            return HermeticUITestRuntime.scenario == .needsDownload ? .unavailable : .ready
+            return HermeticUITestRuntime.scenario == .needsDownload ? .notDownloaded : .ready
         }
 #endif
         guard model.catalogUnavailableReason == nil,
               ModelCatalogValidator.catalogFailureReason(models: ModelRegistry.allModels) == nil else {
-            return .unavailable
+            return .configurationError("The model catalog row is invalid.")
         }
         var issues: [ArtifactIssue] = []
         func checkQuick(_ model: AIModel, artifact: ArtifactType) {
@@ -435,7 +445,75 @@ extension ModelManagerService {
         if issues.isEmpty {
             return .ready
         }
-        return .repairNeeded(issues: issues)
+        return hasArtifactOnDisk(for: model) ? .damaged(issues: issues) : .notDownloaded
+    }
+
+    /// Disk-derived download status at the caller's verification depth (exists
+    /// + size + header + SHA-256 at `.full`, hash-free below it).
+    ///
+    /// Lives here — not on `DownloadManager` — because it is a pure projection
+    /// of `availability(for:)`: no download state, no manager instance, no
+    /// MainActor. The manager keeps a one-line forwarder for its own call sites.
+    /// Static so the post-first-frame refresh can compute it off-main without
+    /// touching MainActor-isolated state; the caller publishes the result.
+    /// The launch seed passes `.quick` so seeding never hashes; the deferred
+    /// refresh replaces those with `.full` values shortly after first frame.
+    static func downloadStatus(
+        for model: AIModel,
+        depth: ArtifactVerificationDepth = .full
+    ) -> ModelDownloadStatus {
+        let availability: ModelAvailability = switch depth {
+        case .full:
+            availability(for: model)
+        case .presence, .quick:
+            // No presence-tier availability sweep exists; the hash-free quick
+            // sweep is the cheapest availability signal at or below `.quick`.
+            quickAvailability(for: model)
+        }
+        switch availability {
+        case .ready:
+            return ModelDownloadStatus(
+                modelID: model.id,
+                baseState: .downloaded,
+                mmprojState: model.requiresMMProj ? .downloaded : nil,
+                baseExpectedBytes: model.baseFileSizeBytes,
+                mmprojExpectedBytes: model.mmprojFileSizeBytes,
+                allowsTextOnly: model.allowsTextOnlyCapability
+            )
+        case .notDownloaded, .configurationError:
+            return ModelDownloadStatus(
+                modelID: model.id,
+                baseState: .notDownloaded,
+                mmprojState: model.requiresMMProj ? .notDownloaded : nil,
+                baseExpectedBytes: model.baseFileSizeBytes,
+                mmprojExpectedBytes: model.mmprojFileSizeBytes,
+                allowsTextOnly: model.allowsTextOnlyCapability
+            )
+        case .damaged:
+            guard model.requiresMMProj else {
+                return ModelDownloadStatus(
+                    modelID: model.id,
+                    baseState: .notDownloaded,
+                    mmprojState: nil,
+                    baseExpectedBytes: model.baseFileSizeBytes
+                )
+            }
+            // Per-artifact verdicts come from the single depth-parameterized
+            // module: full verification at `.full`, hash-free quick check
+            // below it (matches `quickAvailability`, never quarantines).
+            let probe: ArtifactVerificationDepth = depth == .full ? .full : .quick
+            let verdicts = artifactVerdicts(for: model, depth: probe)
+            let hasBase = verdicts.baseVerified
+            let hasProjector = verdicts.projectorVerified ?? false
+            return ModelDownloadStatus(
+                modelID: model.id,
+                baseState: hasBase && !hasProjector ? .downloaded : .notDownloaded,
+                mmprojState: hasProjector ? .downloaded : .notDownloaded,
+                baseExpectedBytes: model.baseFileSizeBytes,
+                mmprojExpectedBytes: model.mmprojFileSizeBytes,
+                allowsTextOnly: model.allowsTextOnlyCapability
+            )
+        }
     }
 
     /// Single locality for the allowsTextOnly base-only exception (E2B).
@@ -468,11 +546,29 @@ extension ModelManagerService {
     }
 
     /// Repair-branch mapping: a lone missing projector on an allowsTextOnly
-    /// model is text-only ready, not repair-needed. Any other issue set stays
-    /// repair-needed. Centralizes the `issues == [.missing(mmproj)]` check so
+    /// model is text-only ready, not damaged. Any other issue set stays
+    /// damaged. Centralizes the `issues == [.missing(mmproj)]` check so
     /// `OfflineAvailabilityGuard.repairReadiness` doesn't own a copy.
     static func isTextOnlyFallback(issues: [ArtifactIssue], for model: AIModel) -> Bool {
         model.allowsTextOnlyCapability && issues == [.missing(artifact: .mmproj)]
+    }
+
+    /// Whether any artifact for this model exists on disk, verified or not.
+    /// The cheap stat behind "not downloaded" versus "download again".
+    static func hasArtifactOnDisk(for model: AIModel) -> Bool {
+        let fm = FileManager.default
+        if fm.fileExists(atPath: baseModelPath(for: model).path) { return true }
+        guard model.requiresMMProj else { return false }
+        return fm.fileExists(atPath: mmprojModelPath(for: model).path)
+    }
+
+    /// Registry-resolving overload for status types that only carry an ID.
+    static func hasArtifactOnDisk(for modelID: String) -> Bool {
+        guard !modelID.isEmpty,
+              let model = ModelRegistry.curatedModel(forID: modelID) ?? ImportedModelStore.shared.record(id: modelID)?.model else {
+            return false
+        }
+        return hasArtifactOnDisk(for: model)
     }
 }
 
@@ -547,30 +643,39 @@ extension ModelManagerService {
     }
 }
 
-// MARK: - Repair Tracking
-
+// MARK: - Damage Tracking
 extension ModelManagerService {
 
-    private static let repairMarkerPrefix = ".repair-needed-"
+    /// Persisted marker filename. Deliberately still `repair-needed-`: the
+    /// prefix is on-device state, and renaming it would silently orphan markers
+    /// written by earlier builds. Only the Swift API was renamed, because
+    /// "repair" is a word the user should never have to read.
+    private static let damageMarkerPrefix = ".repair-needed-"
 
-    /// Mark a model as needing repair (e.g. after a failed migration).
-    static func markRepairNeeded(for model: AIModel) {
+    /// Mark a model's files as verified-but-unusable (e.g. after a failed
+    /// migration or a hash mismatch).
+    static func markDamaged(for model: AIModel) {
         let marker = managedStorageDirectory
-            .appendingPathComponent("\(repairMarkerPrefix)\(model.id)")
+            .appendingPathComponent("\(damageMarkerPrefix)\(model.id)")
         try? Data("1".utf8).write(to: marker, options: .atomic)
     }
 
-    /// Check whether a model has been marked for repair.
-    static func isRepairNeeded(for model: AIModel) -> Bool {
+    /// Check whether a model's files were previously recorded as unusable.
+    static func isMarkedDamaged(modelID: String) -> Bool {
+        guard !modelID.isEmpty else { return false }
         let marker = managedStorageDirectory
-            .appendingPathComponent("\(repairMarkerPrefix)\(model.id)")
+            .appendingPathComponent("\(damageMarkerPrefix)\(modelID)")
         return FileManager.default.fileExists(atPath: marker.path)
     }
 
-    /// Clear the repair marker after a successful repair.
-    static func clearRepairNeeded(for model: AIModel) {
+    static func isMarkedDamaged(for model: AIModel) -> Bool {
+        isMarkedDamaged(modelID: model.id)
+    }
+
+    /// Clear the damage marker after a successful replacement download.
+    static func clearDamaged(for model: AIModel) {
         let marker = managedStorageDirectory
-            .appendingPathComponent("\(repairMarkerPrefix)\(model.id)")
+            .appendingPathComponent("\(damageMarkerPrefix)\(model.id)")
         try? FileManager.default.removeItem(at: marker)
     }
 }

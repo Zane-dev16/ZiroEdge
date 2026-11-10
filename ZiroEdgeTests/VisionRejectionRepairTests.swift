@@ -106,7 +106,7 @@ final class VisionRejectionRepairTests: XCTestCase {
 
         // Repair should recognize only the base is missing.
         let availability = ModelManagerService.availability(for: model)
-        guard case .repairNeeded(let issues) = availability else {
+        guard case .damaged(let issues) = availability else {
             XCTFail("Expected repair needed")
             return
         }
@@ -129,7 +129,7 @@ final class VisionRejectionRepairTests: XCTestCase {
         XCTAssertFalse(ModelManagerService.isArtifactVerified(model, artifact: .mmproj, depth: .full))
 
         let availability = ModelManagerService.availability(for: model)
-        guard case .repairNeeded(let issues) = availability else {
+        guard case .damaged(let issues) = availability else {
             XCTFail("Expected repair needed")
             return
         }
@@ -156,7 +156,7 @@ final class VisionRejectionRepairTests: XCTestCase {
         XCTAssertFalse(ModelManagerService.isArtifactVerified(model, artifact: .base, depth: .full))
 
         let availability = ModelManagerService.availability(for: model)
-        guard case .repairNeeded(let issues) = availability else {
+        guard case .damaged(let issues) = availability else {
             XCTFail("Expected repair needed")
             return
         }
@@ -208,7 +208,7 @@ final class VisionRejectionRepairTests: XCTestCase {
         try wrongSizeData.write(to: ModelManagerService.baseModelPath(for: model), options: .atomic)
 
         let availability = ModelManagerService.availability(for: model)
-        guard case .repairNeeded(let issues) = availability else {
+        guard case .damaged(let issues) = availability else {
             XCTFail("Expected repair needed")
             return
         }
@@ -279,8 +279,8 @@ final class VisionRejectionRepairTests: XCTestCase {
             config: .gemma4,
             license: LicenseInfo(name: "Test", url: URL(string: "https://example.com/license")!, copyright: "Test")
         )
-        guard case .unavailable = ModelManagerService.availability(for: model) else {
-            return XCTFail("Missing catalog metadata must be unavailable")
+        guard case .configurationError = ModelManagerService.availability(for: model) else {
+            return XCTFail("Missing catalog metadata must be a catalog configuration error")
         }
     }
 

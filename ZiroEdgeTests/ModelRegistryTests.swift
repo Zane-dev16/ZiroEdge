@@ -96,15 +96,17 @@ final class ModelRegistryTests: XCTestCase {
         XCTAssertEqual(ModelRegistry.allModels.count, 10)
         XCTAssertEqual(ModelRegistry.productionModels, [ModelRegistry.gemma4_e2b])
         XCTAssertEqual(ModelRegistry.gemma4_e2b.runtimeEligibility, .validated)
-        XCTAssertEqual(ModelRegistry.llama32_3B.runtimeEligibility, .unavailable)
-        XCTAssertEqual(ModelRegistry.gemma4_e4b_text.runtimeEligibility, .unavailable)
-        XCTAssertEqual(ModelRegistry.gemma4_e4b.runtimeEligibility, .unavailable)
-        // Device-validated import lineup: downloadable now, loadable after
-        // per-shape calibration (import path stays the loadable route).
+        XCTAssertEqual(ModelRegistry.llama32_3B.runtimeEligibility, .estimated)
+        XCTAssertEqual(ModelRegistry.gemma4_e4b_text.runtimeEligibility, .estimated)
+        XCTAssertEqual(ModelRegistry.gemma4_e4b.runtimeEligibility, .estimated)
+        // Device-validated import lineup: loadable on the same conservative
+        // estimate as imports, with no per-shape calibration run required.
         for id in ["lfm2.5-1.2b-q4", "lfm2.5-2.6b-q4", "qwen3.5-2b-q4", "qwen3.5-0.8b-q4", "bonsai-8b-q1", "bonsai-4b-q1"] {
-            XCTAssertEqual(ModelRegistry.model(for: id)?.runtimeEligibility, .unavailable, id)
+            XCTAssertEqual(ModelRegistry.model(for: id)?.runtimeEligibility, .estimated, id)
         }
-        XCTAssertEqual(ModelRegistry.availableModels(deviceRAM: 16_000_000_000), [ModelRegistry.gemma4_e2b])
+        // Only the measured shape is promoted; everything else stays loadable.
+        XCTAssertEqual(ModelRegistry.productionModels, [ModelRegistry.gemma4_e2b])
+        XCTAssertEqual(ModelRegistry.availableModels(deviceRAM: 16_000_000_000).count, 10)
         XCTAssertTrue(ModelRegistry.availableModels(deviceRAM: 500_000_000).isEmpty)
     }
 

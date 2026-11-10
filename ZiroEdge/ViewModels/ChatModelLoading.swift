@@ -340,11 +340,12 @@ extension ChatViewModel {
     func sendPreflightPassed(for model: AIModel, hasImages: Bool) -> Bool {
         let status = downloadStatusProvider.status(for: model)
         guard status.isReady else {
+            // `incompleteReason` is machine text ("base-incomplete"); it belongs
+            // in the log, never in a sentence a user reads.
             let reason = status.incompleteReason ?? "incomplete"
             logger.warning("Send blocked, model incomplete: \(model.id, privacy: .public)")
             logger.warning("Incomplete reason: \(reason, privacy: .public)")
-            errorMessage = "\(model.displayName) is not fully downloaded (\(reason)). " +
-                "Repair it or choose another model, then retry."
+            errorMessage = ModelLoadCopy.storageIncomplete(modelName: model.displayName)
             showError = true
             return false
         }

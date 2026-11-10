@@ -621,7 +621,10 @@ final class OfflineModelsPageTests: XCTestCase {
         let curated = Set(ModelRegistry.allModels)
         XCTAssertFalse(curated.isEmpty)
         XCTAssertTrue(curated.isSubset(of: Set(modelsViewModel.allModels)))
-        XCTAssertTrue(curated.contains { $0.runtimeEligibility == .unavailable })
+        // The catalog invariant: nothing shipped may be unloadable. Before the
+        // estimate tier, nine of ten rows resolved `.unavailable` and the UI
+        // offered models the runtime would always refuse.
+        XCTAssertFalse(curated.contains { $0.runtimeEligibility == .unavailable })
         XCTAssertTrue(curated.contains { $0.runtimeEligibility == .validated })
     }
 

@@ -48,7 +48,7 @@ final class ModelAvailabilitySurfaceTests: XCTestCase {
         // 2. DownloadManager status
         let dmStatus = DownloadManager().status(for: model)
         XCTAssertTrue(dmStatus.isReady, "DownloadManager status must report ready")
-        XCTAssertFalse(dmStatus.isRepairNeeded, "DownloadManager must not report repair needed")
+        XCTAssertFalse(dmStatus.needsRedownload(for: model), "a verified install must never ask to download again")
 
         // 3. ModelManagerService.isFullyDownloaded
         XCTAssertTrue(ModelManagerService.isFullyDownloaded(model))
@@ -81,7 +81,7 @@ final class ModelAvailabilitySurfaceTests: XCTestCase {
 
         // With only base installed and no text-only capability (allowsTextOnly not set): repair needed
         let status = DownloadManager().status(for: model)
-        XCTAssertTrue(status.isRepairNeeded, "Vision model with only base should need repair")
+        XCTAssertTrue(status.needsRedownload(for: model), "a vision pair with only base present must ask to download again")
         XCTAssertFalse(status.isReady, "Vision model with only base should not be ready")
         XCTAssertFalse(status.isVisionReady, "Vision model without projector should not be vision-ready")
     }
@@ -118,9 +118,11 @@ final class ModelAvailabilitySurfaceTests: XCTestCase {
         try FileManager.default.removeItem(at: ModelManagerService.baseModelPath(for: model))
         let third = ModelManagerService.availability(for: model)
         let fourth = ModelManagerService.availability(for: model)
-        // Both post-removal checks must agree
-        guard case .repairNeeded = third, case .repairNeeded = fourth else {
-            return XCTFail("Missing artifact must be repairable, got: \(third), \(fourth)")
+        // Both post-removal checks must agree. A deleted file is absence, not
+        // damage: nothing on disk means "not downloaded", and calling that
+        // damage is what made a fresh install show every row as broken.
+        guard case .notDownloaded = third, case .notDownloaded = fourth else {
+            return XCTFail("Missing artifact must read as not downloaded, got: \(third), \(fourth)")
         }
     }
 
@@ -151,7 +153,7 @@ final class ModelAvailabilitySurfaceTests: XCTestCase {
         try wrongData.write(to: destURL, options: .atomic)
 
         // The authoritative check must detect the hash mismatch
-        guard case .repairNeeded(let issues) = ModelManagerService.availability(for: model) else {
+        guard case .damaged(let issues) = ModelManagerService.availability(for: model) else {
             return XCTFail("Wrong hash must be repairable")
         }
         XCTAssertTrue(issues.contains { if case ArtifactIssue.sha256Mismatch = $0 { return true }; return false })
@@ -211,7 +213,7 @@ final class ModelAvailabilitySurfaceTests: XCTestCase {
         guard case .ready = ModelManagerService.quickAvailability(for: model) else {
             return XCTFail("quick is size+header only, so same-size corrupt reads optimistic ready")
         }
-        guard case .repairNeeded(let issues) = ModelManagerService.availability(for: model) else {
+        guard case .damaged(let issues) = ModelManagerService.availability(for: model) else {
             return XCTFail("full must detect hash mismatch")
         }
         XCTAssertTrue(issues.contains { if case .sha256Mismatch = $0 { return true }; return false })

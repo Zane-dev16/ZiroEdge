@@ -23,7 +23,7 @@ final class ModelArtifactVerificationTests: XCTestCase {
         XCTAssertFalse(ModelManagerService.isArtifactVerified(model, artifact: .mmproj, depth: .full))
         let status = DownloadManager().status(for: model)
         XCTAssertFalse(status.isReady)
-        XCTAssertTrue(status.isRepairNeeded)
+        XCTAssertTrue(status.needsRedownload(for: model))
         XCTAssertFalse(FileManager.default.fileExists(atPath: ModelManagerService.baseModelPath(for: model).path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: ModelManagerService.mmprojModelPath(for: model).path))
     }
@@ -31,7 +31,7 @@ final class ModelArtifactVerificationTests: XCTestCase {
         let model = makeRuntimeModel(id: "wrong-hash", baseSHA256: String(repeating: "f", count: 64))
         defer { ModelManagerService.deleteModel(model) }
         try validGGUFData(length: 16).write(to: ModelManagerService.baseModelPath(for: model))
-        guard case .repairNeeded(let issues) = ModelManagerService.availability(for: model) else {
+        guard case .damaged(let issues) = ModelManagerService.availability(for: model) else {
             return XCTFail("Wrong SHA-256 must be repairable")
         }
         XCTAssertFalse(ModelManagerService.isFullyDownloaded(model))
@@ -42,7 +42,7 @@ final class ModelArtifactVerificationTests: XCTestCase {
         defer { ModelManagerService.deleteModel(model) }
         try validGGUFData(length: 69).write(to: ModelManagerService.baseModelPath(for: model))
 
-        guard case .repairNeeded(let issues) = ModelManagerService.availability(for: model) else {
+        guard case .damaged(let issues) = ModelManagerService.availability(for: model) else {
             return XCTFail("Wrong byte count must be repairable")
         }
         XCTAssertFalse(ModelManagerService.isFullyDownloaded(model))
@@ -56,7 +56,7 @@ final class ModelArtifactVerificationTests: XCTestCase {
 
         XCTAssertTrue(ModelManagerService.isArtifactVerified(model, artifact: .base, depth: .full))
         XCTAssertFalse(ModelManagerService.isFullyDownloaded(model))
-        XCTAssertTrue(DownloadManager().status(for: model).isRepairNeeded)
+        XCTAssertTrue(DownloadManager().status(for: model).needsRedownload(for: model))
     }
 
     func testVisionModelWithOnlyValidMMProjIsNotInstalled() throws {
@@ -66,7 +66,7 @@ final class ModelArtifactVerificationTests: XCTestCase {
 
         XCTAssertTrue(ModelManagerService.isArtifactVerified(model, artifact: .mmproj, depth: .full))
         XCTAssertFalse(ModelManagerService.isFullyDownloaded(model))
-        XCTAssertTrue(DownloadManager().status(for: model).isRepairNeeded)
+        XCTAssertTrue(DownloadManager().status(for: model).needsRedownload(for: model))
     }
 
     func testTextModelWithValidArtifactIsInstalled() throws {
@@ -96,7 +96,7 @@ final class ModelArtifactVerificationTests: XCTestCase {
         let invalid = makeCatalogModel(baseSHA256: "")
 
         XCTAssertFalse(ModelManagerService.isFullyDownloaded(invalid))
-        guard case .unavailable = ModelManagerService.availability(for: invalid) else {
+        guard case .configurationError = ModelManagerService.availability(for: invalid) else {
             return XCTFail("Missing catalog metadata must be unavailable")
         }
     }
@@ -247,7 +247,7 @@ final class ModelArtifactVerificationTests: XCTestCase {
             license: LicenseInfo(name: "Test", url: URL(string: "https://example.com")!, copyright: "Test")
         )
         XCTAssertNotNil(model.catalogUnavailableReason, "Vision without projector metadata must be rejected")
-        guard case .unavailable = ModelManagerService.availability(for: model) else {
+        guard case .configurationError = ModelManagerService.availability(for: model) else {
             return XCTFail("Vision model without projector must be unavailable")
         }
     }

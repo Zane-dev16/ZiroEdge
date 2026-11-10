@@ -807,16 +807,30 @@ struct ImportRAMAssessment: Equatable, Sendable {
     }
 
     static func estimatedBytes(baseBytes: Int64, mmprojBytes: Int64?, contextLength: Int) -> UInt64 {
+        SaturatedArithmetic.add(
+            residentBytes(baseBytes: baseBytes, mmprojBytes: mmprojBytes, contextLength: contextLength),
+            MemoryProfile.productionReserveBytes
+        )
+    }
+
+    /// The resident half of `estimatedBytes`: what loading these artifacts at
+    /// this context is expected to cost, with no fixed reserve folded in.
+    ///
+    /// This single number feeds three consumers that must never disagree: the
+    /// pre-import wizard (`estimatedBytes`, reserve added), the imported
+    /// admission profile (`MemoryProfileRegistry.importedProfile`), and the
+    /// curated-shape estimate (`MemoryProfile.estimatedLoadDeltaBytes`).
+    /// Separating it is what lets a curated model size itself with the same
+    /// arithmetic imports already trust instead of a second hand-written
+    /// table that could drift.
+    static func residentBytes(baseBytes: Int64, mmprojBytes: Int64?, contextLength: Int) -> UInt64 {
         let base = UInt64(clamping: baseBytes / 3)
         let projector: UInt64 = {
             guard let mmprojBytes, mmprojBytes > 0 else { return 0 }
             return UInt64(clamping: mmprojBytes / 3)
         }()
         let context = SaturatedArithmetic.multiply(UInt64(clamping: clampedContextLength(contextLength)), 256_000)
-        return SaturatedArithmetic.add(
-            SaturatedArithmetic.add(SaturatedArithmetic.add(base, projector), context),
-            MemoryProfile.productionReserveBytes
-        )
+        return SaturatedArithmetic.add(SaturatedArithmetic.add(base, projector), context)
     }
 
     // TODO: remove once all call sites migrate to base/mmproj split — the
@@ -824,6 +838,20 @@ struct ImportRAMAssessment: Equatable, Sendable {
     @available(*, deprecated, message: "Use estimatedBytes(baseBytes:mmprojBytes:contextLength:) so vision projectors are weighted separately from base weights.")
     static func estimatedBytes(artifactBytes: Int64, contextLength: Int) -> UInt64 {
         estimatedBytes(baseBytes: artifactBytes, mmprojBytes: 0, contextLength: contextLength)
+    }
+
+    /// Physical-RAM floor for an artifact pair sized by `residentBytes`.
+    /// Absolute 4GB minimum plus the estimate and reserve, so a huge import
+    /// demands real hardware instead of passing on any 6GB device. Shared by
+    /// imported and curated estimation so one rule governs both.
+    static func physicalFloorBytes(baseBytes: Int64, mmprojBytes: Int64?, contextLength: Int) -> UInt64 {
+        max(
+            4_000_000_000,
+            SaturatedArithmetic.add(
+                residentBytes(baseBytes: baseBytes, mmprojBytes: mmprojBytes, contextLength: contextLength),
+                MemoryProfile.productionReserveBytes
+            )
+        )
     }
 
     var warning: String? {

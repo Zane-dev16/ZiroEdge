@@ -33,13 +33,13 @@ struct ModelRow: View {
         .accessibilityLabel(rowAccessibilityLabel)
     }
 
-    /// Combined row label. Repair-needed rows must not announce the generic
-    /// "available to download" — the visible orange Repair state is the row's
-    /// most important information, so it is spoken plus a pointer to the fix.
+    /// Combined row label. Damaged rows must not announce the generic
+    /// "available to download" — the visible orange chip is the row's most
+    /// important information, so it is spoken plus a pointer to the fix.
     private var rowAccessibilityLabel: String {
         var label = "\(model.displayName), \(meta), \(status.statusAccessibilityLabel(for: model))"
-        if status.presentsAsRepairNeeded(for: model) {
-            label += ". Open the model to repair its download."
+        if status.presentsAsNeedingRedownload(for: model) {
+            label += ". Open the model to download it again."
         }
         return label
     }
@@ -94,11 +94,17 @@ struct ModelRow: View {
                 .foregroundStyle(ZiroTheme.positiveText)
                 .accessibilityHidden(true)
         case .notDownloaded:
-            if status.isRepairNeeded || ModelManagerService.isRepairNeeded(for: model) {
-                Text("Repair")
+            if status.needsRedownload(for: model) {
+                // Say what the user can do, not what the app must maintain.
+                // "Repair" described an internal maintenance operation; the only
+                // remedy the app offers is fetching the files again.
+                Text(ArtifactIntegrityPresentation.needsRedownloadSubtitle)
                     .font(ZiroType.caption)
                     .foregroundStyle(ZiroTheme.warningText)
-                    .accessibilityLabel("Repair \(model.displayName)")
+                    .lineLimit(1)
+                    .accessibilityLabel(
+                        "\(ArtifactIntegrityPresentation.needsRedownloadSubtitle) \(model.displayName)"
+                    )
             } else {
                 Image(systemName: "arrow.down.circle")
                     .font(.title3)
@@ -110,13 +116,12 @@ struct ModelRow: View {
 }
 
 extension ModelDownloadStatus {
-    /// Whether this status should be presented as repair-needed (files on
-    /// disk failed validation, or a partial pair needs re-download). Shared
-    /// by the row indicator and its accessibility label so the two never
-    /// disagree.
-    func presentsAsRepairNeeded(for model: AIModel) -> Bool {
+    /// Whether this status should be presented as needing a fresh download
+    /// (files on disk failed validation). Shared by the row indicator and its
+    /// accessibility label so the two never disagree.
+    func presentsAsNeedingRedownload(for model: AIModel) -> Bool {
         guard case .notDownloaded = displayState else { return false }
-        return isRepairNeeded || ModelManagerService.isRepairNeeded(for: model)
+        return needsRedownload(for: model)
     }
 
     /// Spoken status for a catalog row; preserved from the pre-redesign
@@ -134,8 +139,8 @@ extension ModelDownloadStatus {
         case .cancelled: return "download cancelled"
         case .downloaded: return "installed"
         case .notDownloaded:
-            if presentsAsRepairNeeded(for: model) {
-                return ArtifactIntegrityPresentation.needsRepairSpoken
+            if presentsAsNeedingRedownload(for: model) {
+                return ArtifactIntegrityPresentation.needsRedownloadSpoken
             }
             return "available to download"
         }

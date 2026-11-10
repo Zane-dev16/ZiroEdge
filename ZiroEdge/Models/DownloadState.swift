@@ -133,10 +133,21 @@ enum ArtifactIssue: Sendable, Hashable {
 }
 
 /// Overall model availability after validation.
+///
+/// The three outcomes are deliberately distinct because they mean three
+/// different things to a user, and conflating them was a shipped bug: a model
+/// that had never been downloaded reported `.repairNeeded`, so every row on a
+/// fresh install announced "Repair" for a model the user had not touched.
+///
+/// - `.notDownloaded` — nothing on disk. The ordinary starting state.
+/// - `.damaged`      — files are present but do not verify. Files must be replaced.
+/// - `.configurationError` — the catalog row itself is malformed, so no verdict
+///   about this model's files can be trusted.
 enum ModelAvailability: Sendable, Hashable {
     case ready
-    case repairNeeded(issues: [ArtifactIssue])
-    case unavailable
+    case notDownloaded
+    case damaged(issues: [ArtifactIssue])
+    case configurationError(String)
 }
 
 /// Aggregated download status for a model (combines base + mmproj states).
@@ -246,24 +257,21 @@ struct ModelDownloadStatus: Sendable, Hashable {
         return results
     }
 
-    /// Whether files exist on disk but failed basic validation (GGUF header, SHA, size)
-    /// or a required artifact is missing while another is present.
-    var isRepairNeeded: Bool {
-        // If the model is fully ready, no repair needed.
-        if isReady { return false }
-        // If any artifact is downloaded or partially present, repair may be needed.
-        let hasAnyFile = baseState.isDownloaded
-            || (mmprojState?.isDownloaded ?? false)
-            || baseState.isDownloading
-            || (mmprojState?.isDownloading ?? false)
-        // Also check if base was previously downloaded but now fails validation.
-        if baseState == .notDownloaded, !modelID.isEmpty {
-            // Could have files on disk that fail validation — check via availability.
-            if case .repairNeeded = ModelManagerService.availability(for: modelID) {
-                return true
-            }
-        }
-        return hasAnyFile && !isReady
+    /// Whether the files on disk must be replaced before this model can run.
+    ///
+    /// Takes the model rather than resolving it by ID: an ID lookup routed
+    /// through the catalog and imported registry, so any model that was not a
+    /// catalog row (an import whose record was just removed, a calibration
+    /// identity, a test fixture) silently answered "nothing on disk". Presence
+    /// is a property of this model's own artifact paths, and nothing else.
+    ///
+    /// True only for damage — never for a model that was simply never
+    /// downloaded, and never while a transfer is in flight (progress is its own
+    /// state). The check is a stat, not a digest pass: rows call it per render.
+    func needsRedownload(for model: AIModel) -> Bool {
+        if isReady || isDownloading { return false }
+        if ModelManagerService.isMarkedDamaged(for: model) { return true }
+        return ModelManagerService.hasArtifactOnDisk(for: model)
     }
 
     /// Whether any download is currently in progress.

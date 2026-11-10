@@ -1,6 +1,20 @@
 import Foundation
 import os
 
+// Runtime memory policy, in three readable layers:
+//
+//   MemoryProfile        one exact runtime shape (model x context x CPU/Metal)
+//                        and the evidence or estimate that sizes it.
+//   MemoryProfileRegistry every shape the app knows, and which one to serve.
+//   MemoryBudgeter       the admission verdict for one load attempt.
+//
+// A shape is admitted when it has a number to compare against device headroom.
+// That number comes from measurement when measurement exists (`.validated`,
+// `.experimental`) and from `ImportRAMAssessment` when it does not
+// (`.estimated`). "No number at all" is not a state a shipped model may reach —
+// `ModelCatalogValidator` proves it, because a catalog row the runtime refuses to
+// load is a product defect that reads to the user as a broken app.
+
 enum MemoryProfileMode: String, Codable, Sendable {
     case text
     case vision
@@ -18,15 +32,49 @@ enum MemoryEvidenceStatus: String, Codable, Sendable {
 }
 
 enum RuntimeEligibility: String, Sendable {
+    /// Measured full physical workload on a retained device. Strict policy.
     case validated
+    /// Measured load delta only: conservative floor plus explicit consent.
     case experimental
+    /// No device measurement. Admitted on ZiroEdge's own conservative estimate
+    /// of what the shape costs (`MemoryProfile.estimatedLoadDeltaBytes`), which
+    /// over-states on every term so it can only ever refuse a load that would
+    /// have fit, never admit one that would not.
+    case estimated
+    /// No estimate and no measurement. Unreachable for a curated catalog row:
+    /// `ModelCatalogValidator` refuses a catalog whose models resolve here.
     case unavailable
 
+    /// Strength of the evidence behind a runtime shape. When one model has
+    /// several shapes, the strongest wins before the faster one, so a measured
+    /// CPU shape keeps serving instead of being replaced by an estimated Metal
+    /// shape — the promise `docs/memory-profiles.md` already makes.
+    var evidenceRank: Int {
+        switch self {
+        case .validated: 3
+        case .experimental: 2
+        case .estimated: 1
+        case .unavailable: 0
+        }
+    }
+
+    /// Whether selecting this shape must interrupt the user with a consent
+    /// sheet. An estimate is ZiroEdge's own arithmetic, not a user-visible
+    /// experiment, so it never asks.
+    var needsExplicitConsent: Bool {
+        switch self {
+        case .validated, .estimated: false
+        case .experimental, .unavailable: true
+        }
+    }
+
+    /// Short, plain status for a model row. "Ready" means the app will try;
+    /// whether it fits is decided by the memory check at load time, not here.
     var label: String {
         switch self {
-        case .validated: "Validated"
+        case .validated, .estimated: "Ready"
         case .experimental: "Experimental"
-        case .unavailable: "Runtime unavailable"
+        case .unavailable: "Not available"
         }
     }
 }
@@ -69,9 +117,42 @@ struct MemoryProfile: Codable, Hashable, Sendable {
         evidenceStatus == .validated && measuredFullWorkloadPeakDeltaBytes != nil
     }
 
+    /// Conservative static estimate of this exact shape's resident load cost,
+    /// present only while no device measurement exists for the shape.
+    ///
+    /// Computed from the catalog row rather than stored per profile so the
+    /// figures cannot drift from the artifact identity and a curated model
+    /// cannot ship without one: a shape in the catalog always has an estimate,
+    /// which is why `.unavailable` is structurally unreachable for shipped
+    /// models. Delegates to `ImportRAMAssessment.residentBytes` — the same
+    /// arithmetic the import wizard shows a user before they download — because
+    /// two estimators that disagree is exactly how a model gets imported as
+    /// "likely fits" and then refused at load time.
+    ///
+    /// Deliberately over-states, and the direction matters: an estimate that is
+    /// too high refuses a load that would have fit (annoying, recoverable); an
+    /// estimate that is too low admits one that does not (jetsam). Device
+    /// evidence backs the weights term — the retained E2B full-workload peak is
+    /// 798,559,232 bytes for a 3,985MB pair, below even `base/3` alone.
+    var estimatedLoadDeltaBytes: UInt64? {
+        guard measuredFullWorkloadPeakDeltaBytes == nil,
+              measuredLoadDeltaBytes == nil,
+              // Catalog rows only. The DEBUG calibration identity reuses a
+              // catalog artifact but exists precisely to gather the first
+              // measurement before an estimate would be needed, so sizing it
+              // from its artifact bytes would defeat its purpose.
+              let model = ModelRegistry.catalogModel(forID: modelID) else { return nil }
+        return ImportRAMAssessment.residentBytes(
+            baseBytes: model.baseFileSizeBytes,
+            mmprojBytes: model.requiresMMProj ? model.mmprojFileSizeBytes : nil,
+            contextLength: contextLength
+        )
+    }
+
     var runtimeEligibility: RuntimeEligibility {
         if isProductionValidated { return .validated }
         if measuredLoadDeltaBytes != nil { return .experimental }
+        if estimatedLoadDeltaBytes != nil { return .estimated }
         return .unavailable
     }
 
@@ -90,6 +171,20 @@ struct MemoryProfile: Codable, Hashable, Sendable {
             throw MemoryProfileError.incompleteEvidence
         }
         return try requiredHeadroom(forMeasuredPeak: peak)
+    }
+
+    /// Admission floor for a shape with no device measurement: the same policy
+    /// arithmetic as a measured profile, applied to the static estimate. Keeping
+    /// one code path means the multiplier, rounding quantum, and fixed reserve
+    /// cannot diverge between a measured and an estimated shape.
+    func estimatedRequiredProcessHeadroomBytes() throws -> UInt64 {
+        // An estimate may never stand in for retained evidence.
+        guard !isProductionValidated,
+              measuredLoadDeltaBytes == nil,
+              let estimate = estimatedLoadDeltaBytes else {
+            throw MemoryProfileError.incompleteEvidence
+        }
+        return try requiredHeadroom(forMeasuredPeak: estimate)
     }
 
     private func requiredHeadroom(forMeasuredPeak peak: UInt64) throws -> UInt64 {
@@ -236,12 +331,86 @@ enum MemoryProfileRegistry {
     )
 #endif
 
-    static var all: [MemoryProfile] {
+    /// Shapes generated from the curated catalog rather than hand-written.
+    ///
+    /// The lineup rows (LFM 2.5, Qwen 3.5, Bonsai) carry no device measurement,
+    /// so they were previously absent from this registry — which made
+    /// `MemoryProfileRegistry.profile(for:)` return nil for six of the ten
+    /// shipped models and refused every load with "no runtime profile exists".
+    /// Building them from the catalog row means adding a model to
+    /// `ModelRegistry.lineupText` can no longer leave the runtime blind: each
+    /// row gets a CPU and a Metal shape automatically.
+    static var lineupTextProfiles: [MemoryProfile] {
+        ModelRegistry.lineupText.flatMap { model in
+            [0, ModelConfiguration.fullMetalOffloadLayers].map { layers in
+                curatedEstimatedProfile(for: model, gpuLayers: layers)
+            }
+        }
+    }
+
+    /// Build the CPU/Metal shape for a catalog row that has no measurement.
+    /// Evidence stays `.unvalidated`; eligibility comes from the estimate alone
+    /// (`RuntimeEligibility.estimated`), and the physical floor uses the same
+    /// rule as imports.
+    private static func curatedEstimatedProfile(for model: AIModel, gpuLayers: Int) -> MemoryProfile {
+        let mode: MemoryProfileMode = model.modelType == .vision ? .vision : .text
+        let projectorBytes = model.requiresMMProj ? model.mmprojFileSizeBytes : nil
+        // The profile id keys both experimental consent and load-safety history,
+        // so it must be unique per shape and stable across launches.
+        let shape = gpuLayers > 0 ? "metal" : "cpu"
+        return MemoryProfile(
+            id: "\(model.id)-\(mode.rawValue)-\(shape)-ctx\(model.config.contextLength)-p1",
+            modelID: model.id,
+            mode: mode,
+            contextLength: model.config.contextLength,
+            batchSize: model.config.batchSize,
+            microBatchSize: model.config.microBatchSize,
+            gpuLayers: gpuLayers,
+            projectorPolicy: model.requiresMMProj ? .required : .disabled,
+            evidenceStatus: .unvalidated,
+            policyVersion: 1,
+            measuredFullWorkloadPeakDeltaBytes: nil,
+            measuredLoadDeltaBytes: nil,
+            safetyMultiplier: MemoryProfile.productionSafetyMultiplier,
+            fixedReserveBytes: MemoryProfile.productionReserveBytes,
+            minimumPhysicalRAMBytes: ImportRAMAssessment.physicalFloorBytes(
+                baseBytes: model.baseFileSizeBytes,
+                mmprojBytes: projectorBytes,
+                contextLength: model.config.contextLength
+            )
+        )
+    }
+
+    /// Shapes declared by hand, in a fixed order. CPU and Metal for the four
+    /// measured-or-legacy families; the DEBUG calibration identity joins them
+    /// only in Debug builds. `lineupTextProfiles` supplies the rest.
+    private static var declaredProfiles: [MemoryProfile] {
 #if DEBUG
-        [llama32Text, e2bVision, e4bText, e4bVision, llama32TextMetal, e2bVisionMetal, e4bTextMetal, e4bVisionMetal, e4bTextCalibration]
+        [
+            llama32Text, e2bVision, e4bText, e4bVision,
+            llama32TextMetal, e2bVisionMetal, e4bTextMetal, e4bVisionMetal,
+            e4bTextCalibration,
+        ]
 #else
-        [llama32Text, e2bVision, e4bText, e4bVision, llama32TextMetal, e2bVisionMetal, e4bTextMetal, e4bVisionMetal]
+        [
+            llama32Text, e2bVision, e4bText, e4bVision,
+            llama32TextMetal, e2bVisionMetal, e4bTextMetal, e4bVisionMetal,
+        ]
 #endif
+    }
+
+    static var all: [MemoryProfile] {
+        declaredProfiles + lineupTextProfiles
+    }
+
+    /// Shapes indexed once. `ModelCatalogValidator` asks for every model on
+    /// every availability check, so this cannot be a linear scan of `all`.
+    private static let shapesByModelID: [String: [MemoryProfile]] =
+        Dictionary(grouping: all, by: \.modelID)
+    /// Whether the curated registry can size this model at all. Disk-free and
+    /// cheap by construction: it never consults the imported registry.
+    static func hasCuratedShape(for modelID: String) -> Bool {
+        shapesByModelID[modelID]?.isEmpty == false
     }
 
     static func profile(for modelID: String, usesGPU: Bool = ModelConfiguration.autoGpuLayers() > 0) -> MemoryProfile? {
@@ -254,19 +423,31 @@ enum MemoryProfileRegistry {
         return ImportedModelStore.shared.record(id: modelID).map { importedProfile(for: $0.model) }
     }
 
-    /// Serve-what-can-serve: a Metal shape with zero evidence is unavailable,
-    /// so resolve to the CPU shape instead of refusing a load CPU could serve
-    /// (even when the CPU shape is also unavailable, it keeps execution on the
-    /// conservative path). Once a Metal shape calibrates (experimental or
-    /// validated) it selects automatically with no code change. Engine
-    /// execution follows the selected profile's gpuLayers (see InferenceService).
+    /// Serve-what-can-serve, now evidence-ranked. Every curated model has two
+    /// runtime shapes (CPU and Metal); a device may also have two shapes with
+    /// different evidence strength. The strongest evidence wins before the
+    /// faster shape does, so:
+    ///
+    /// - a validated CPU shape keeps serving instead of being displaced by an
+    ///   estimated Metal shape (today's E2B behavior, preserved verbatim);
+    /// - once a Metal shape earns experimental or validated evidence it selects
+    ///   automatically with no code change;
+    /// - two equally-evidenced shapes pick the one the device requests.
+    ///
+    /// Engine execution follows the selected profile's `gpuLayers` (see
+    /// InferenceService), so this choice is the real CPU/Metal switch.
     private static func curatedProfile(modelID: String, usesGPU: Bool) -> MemoryProfile? {
-        let match = all.first(where: { $0.modelID == modelID && ($0.gpuLayers > 0) == usesGPU })
-        if usesGPU, let metal = match, metal.runtimeEligibility == .unavailable,
-           let cpu = all.first(where: { $0.modelID == modelID && $0.gpuLayers == 0 }) {
-            return cpu
+        guard let shapes = shapesByModelID[modelID], !shapes.isEmpty else { return nil }
+        // (lower is better): strongest evidence first, then the requested shape.
+        func rank(_ shape: MemoryProfile) -> (Int, Int) {
+            (
+                -shape.runtimeEligibility.evidenceRank,
+                (shape.gpuLayers > 0) == usesGPU ? 0 : 1
+            )
         }
-        return match ?? all.first(where: { $0.modelID == modelID })
+        // `min(by:)` returns the first element of an equal-ranked run, and `all`
+        // is a fixed order, so the selection is deterministic across launches.
+        return shapes.min { rank($0) < rank($1) }
     }
 
 #if DEBUG
@@ -334,24 +515,12 @@ enum MemoryProfileRegistry {
                 return failClosedProfile()
             }
         }
-        let baseResident = UInt64(clamping: model.baseFileSizeBytes / 3)
-        let mmprojResident: UInt64 = {
-            guard let mmprojBytes = model.mmprojFileSizeBytes, mmprojBytes > 0 else { return 0 }
-            return UInt64(clamping: mmprojBytes / 3)
-        }()
-        let contextScale = SaturatedArithmetic.multiply(
-            UInt64(clamping: max(model.config.contextLength, 512)),
-            256_000
-        )
-        let estimated = SaturatedArithmetic.add(
-            SaturatedArithmetic.add(baseResident, mmprojResident),
-            contextScale
-        )
-        // Absolute 4GB floor plus dynamic estimated+reserve so huge imports
-        // demand real hardware instead of passing on any 6GB device.
-        let physicalFloor = max(
-            4_000_000_000,
-            SaturatedArithmetic.add(estimated, MemoryProfile.productionReserveBytes)
+        // One estimator for every consumer: the pre-import wizard, this profile,
+        // and curated-shape estimates all read `ImportRAMAssessment`.
+        let estimated = ImportRAMAssessment.residentBytes(
+            baseBytes: model.baseFileSizeBytes,
+            mmprojBytes: needsProjector ? model.mmprojFileSizeBytes : nil,
+            contextLength: model.config.contextLength
         )
         return MemoryProfile(
             id: "hf-\(model.id)-\(revision)-ctx\(model.config.contextLength)-p1",
@@ -368,7 +537,11 @@ enum MemoryProfileRegistry {
             measuredLoadDeltaBytes: estimated,
             safetyMultiplier: MemoryProfile.productionSafetyMultiplier,
             fixedReserveBytes: MemoryProfile.productionReserveBytes,
-            minimumPhysicalRAMBytes: physicalFloor
+            minimumPhysicalRAMBytes: ImportRAMAssessment.physicalFloorBytes(
+                baseBytes: model.baseFileSizeBytes,
+                mmprojBytes: needsProjector ? model.mmprojFileSizeBytes : nil,
+                contextLength: model.config.contextLength
+            )
         )
     }
 }

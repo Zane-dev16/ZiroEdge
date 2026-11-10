@@ -15,11 +15,18 @@ enum OfflineModelReadiness: Sendable, Equatable {
     /// Both required artifacts are verified and ready for offline use.
     case ready(textOnly: Bool)
 
-    /// At least one artifact exists on disk but fails catalog validation.
-    case repairNeeded(issues: [ArtifactIssue])
+    /// Files are on disk but fail catalog validation. They must be replaced.
+    case damaged(issues: [ArtifactIssue])
 
-    /// No verified artifacts exist. Nothing to load.
-    case unavailable
+    /// Nothing on disk. The ordinary state for a model the user has not
+    /// downloaded — deliberately distinct from `.damaged`, because calling an
+    /// untouched model damaged is how a fresh install ended up presenting
+    /// every row as needing repair.
+    case notDownloaded
+
+    /// The catalog row itself is malformed, so no verdict about its files is
+    /// trustworthy.
+    case configurationError(String)
 }
 
 /// Aggregate report produced after a launch-time offline sweep.
@@ -39,9 +46,9 @@ struct OfflineAvailabilityReport: Sendable {
     }
 
     /// IDs of models whose artifacts exist on disk but fail validation.
-    var repairNeededModelIDs: [String] {
+    var damagedModelIDs: [String] {
         models.compactMap { id, readiness -> String? in
-            if case .repairNeeded = readiness { return id }
+            if case .damaged = readiness { return id }
             return nil
         }
     }
@@ -92,13 +99,13 @@ enum OfflineAvailabilityGuard {
         OfflineAvailabilityReport(timestamp: Date(), models: [:], diagnostics: [])
     }
 
-    /// Repair-branch verdict for the launch sweep: E2B's base is a legitimate
+    /// Damage-branch verdict for the launch sweep: E2B's base is a legitimate
     /// text-only runtime, so a missing projector alone (verified base, nothing
-    /// else wrong) reports text-only ready instead of repair-needed — keeping
-    /// the offline badge, the models list, and the chat picker in agreement
-    /// with `ModelDownloadStatus.isReady`. Any other issue (corrupt base,
-    /// size/SHA mismatch) stays repair-needed with its diagnostic.
-    private static func repairReadiness(
+    /// else wrong) reports text-only ready instead of damaged — keeping the
+    /// offline badge, the models list, and the chat picker in agreement with
+    /// `ModelDownloadStatus.isReady`. Any other issue (corrupt base, size/SHA
+    /// mismatch) stays damaged with its diagnostic.
+    private static func damageReadiness(
         for model: AIModel,
         issues: [ArtifactIssue]
     ) -> (OfflineModelReadiness, String) {
@@ -120,8 +127,8 @@ enum OfflineAvailabilityGuard {
             }
         }
         return (
-            .repairNeeded(issues: issues),
-            "[offline-guard] \(model.id): repair needed — \(issueDescriptions.joined(separator: ", "))"
+            .damaged(issues: issues),
+            "[offline-guard] \(model.id): files need replacing — \(issueDescriptions.joined(separator: ", "))"
         )
     }
 
@@ -134,20 +141,23 @@ enum OfflineAvailabilityGuard {
             switch availability {
             case .ready:
                 // Pair verified complete by the sweep above, so never
-                // text-only: the base-only fallback maps in `repairReadiness`
+                // text-only: the base-only fallback maps in `damageReadiness`
                 // via `ModelManagerService.isTextOnlyFallback`. Deliberately
                 // no re-verification here (the old probe was a duplicate SHA-256 pass).
                 models[model.id] = .ready(textOnly: false)
                 diagnostics.append(
                     "[offline-guard] \(model.id): verified — ready for offline use"
                 )
-            case .repairNeeded(let issues):
-                let (readiness, diagnostic) = repairReadiness(for: model, issues: issues)
+            case .damaged(let issues):
+                let (readiness, diagnostic) = damageReadiness(for: model, issues: issues)
                 models[model.id] = readiness
                 diagnostics.append(diagnostic)
-            case .unavailable:
-                models[model.id] = .unavailable
-                diagnostics.append("[offline-guard] \(model.id): unavailable")
+            case .notDownloaded:
+                models[model.id] = .notDownloaded
+                diagnostics.append("[offline-guard] \(model.id): not downloaded")
+            case .configurationError(let reason):
+                models[model.id] = .configurationError(reason)
+                diagnostics.append("[offline-guard] \(model.id): catalog error — \(reason)")
             }
         }
         logger.info("Offline sweep complete: \(self.modelsSummary(models), privacy: .public)")
@@ -230,8 +240,9 @@ enum OfflineAvailabilityGuard {
 
     private static func modelsSummary(_ models: [String: OfflineModelReadiness]) -> String {
         let ready = models.values.filter { if case .ready = $0 { true } else { false } }.count
-        let repair = models.values.filter { if case .repairNeeded = $0 { true } else { false } }.count
-        let unavailable = models.values.filter { $0 == .unavailable }.count
-        return "\(ready) ready, \(repair) repair-needed, \(unavailable) unavailable"
+        let damaged = models.values.filter { if case .damaged = $0 { true } else { false } }.count
+        let absent = models.values.filter { if case .notDownloaded = $0 { true } else { false } }.count
+        let invalid = models.values.filter { if case .configurationError = $0 { true } else { false } }.count
+        return "\(ready) ready, \(damaged) damaged, \(absent) not downloaded, \(invalid) catalog errors"
     }
 }

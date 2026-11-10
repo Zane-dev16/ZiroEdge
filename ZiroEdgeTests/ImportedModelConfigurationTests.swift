@@ -221,7 +221,7 @@ final class ImportedModelConfigurationTests: XCTestCase {
     }
 
     func testCatalogModelsAreNotExperimental() {
-        XCTAssertEqual(ModelRegistry.llama32_3B.runtimeEligibility, .unavailable)
+        XCTAssertEqual(ModelRegistry.llama32_3B.runtimeEligibility, .estimated)
         XCTAssertEqual(ModelRegistry.gemma4_e2b.runtimeEligibility, .validated)
         XCTAssertFalse(ModelRegistry.llama32_3B.isImported)
     }

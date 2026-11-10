@@ -64,7 +64,10 @@ final class ModelPickerTests: XCTestCase {
 
     // MARK: - Auto-Selection Tests
 
-    func testAutoSelectDoesNotRestoreUnvalidatedLastUsedModel() {
+    func testAutoSelectRestoresEstimatedLastUsedModel() {
+        // An estimated shape is loadable and needs no consent, so the remembered
+        // model must come back. The old behavior dropped the user's choice and
+        // redirected to Models for a model that was already on the device.
         let provider = MockDownloadStatusProvider()
         let model = ModelRegistry.llama32_3B
         provider.readyModelIDs = [model.id]
@@ -73,8 +76,8 @@ final class ModelPickerTests: XCTestCase {
         let viewModel = makeViewModel(provider: provider)
         viewModel.autoSelectModel()
 
-        XCTAssertNil(viewModel.selectedModel)
-        XCTAssertTrue(viewModel.needsModelRedirect)
+        XCTAssertEqual(viewModel.selectedModel?.id, model.id)
+        XCTAssertFalse(viewModel.needsModelRedirect)
     }
 
     func testAutoSelectFallsBackWhenLastUsedDeleted() throws {
@@ -91,7 +94,11 @@ final class ModelPickerTests: XCTestCase {
         XCTAssertTrue(viewModel.needsModelRedirect)
     }
 
-    func testAutoSelectDoesNotFallBackToDownloadedUnvalidatedModel() {
+    func testAutoSelectFallsBackToDownloadedEstimatedModel() {
+        // An estimated shape is loadable — it has a conservative admission
+        // floor and needs no consent — so auto-select must use it. This used to
+        // assert the opposite: a downloaded model the app then refused to load,
+        // which left the user with a model on disk and a redirect to Models.
         let provider = MockDownloadStatusProvider()
         provider.readyModelIDs = [ModelRegistry.llama32_3B.id]
         UserDefaults.standard.set("nonexistent-model-id", forKey: "lastUsedModelID")
@@ -99,8 +106,8 @@ final class ModelPickerTests: XCTestCase {
         let viewModel = makeViewModel(provider: provider)
         viewModel.autoSelectModel()
 
-        XCTAssertNil(viewModel.selectedModel)
-        XCTAssertTrue(viewModel.needsModelRedirect)
+        XCTAssertEqual(viewModel.selectedModel?.id, ModelRegistry.llama32_3B.id)
+        XCTAssertFalse(viewModel.needsModelRedirect)
     }
 
     func testAutoSelectSignalsRedirectWhenNoModelsAvailable() throws {
@@ -118,13 +125,15 @@ final class ModelPickerTests: XCTestCase {
 
     // MARK: - Available Models Tests
 
-    func testAvailableModelsExcludeDownloadedProfilesWithoutAcceptance() {
+    func testAvailableModelsIncludeEstimatedShapesWithoutAcceptance() {
+        // Estimated is not experimental: no consent sheet, so the model is
+        // available the moment it finishes downloading.
         let provider = MockDownloadStatusProvider()
         provider.readyModelIDs = [ModelRegistry.llama32_3B.id]
 
         let viewModel = makeViewModel(provider: provider)
 
-        XCTAssertTrue(viewModel.availableModels.isEmpty)
+        XCTAssertEqual(viewModel.availableModels.map(\.id), [ModelRegistry.llama32_3B.id])
     }
 
     func testValidatedModelDoesNotRequireExperimentalConsent() {

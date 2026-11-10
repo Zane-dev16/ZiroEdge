@@ -75,7 +75,7 @@ enum ModelMigrationService {
             // blocked by a transient filesystem error.
             for modelID in manifest.repairModelIDs {
                 if let model = modelsByID[modelID] {
-                    ModelManagerService.markRepairNeeded(for: model)
+                    ModelManagerService.markDamaged(for: model)
                 }
             }
             return .failed(remainingEntries: remaining)
@@ -83,7 +83,7 @@ enum ModelMigrationService {
 
         for modelID in manifest.repairModelIDs {
             if let model = modelsByID[modelID] {
-                ModelManagerService.markRepairNeeded(for: model)
+                ModelManagerService.markDamaged(for: model)
             }
         }
 
@@ -347,11 +347,11 @@ extension ModelMigrationService {
                         artifact: artifact
                     )
                     if !issues.isEmpty {
-                        ModelManagerService.markRepairNeeded(for: model)
+                        ModelManagerService.markDamaged(for: model)
                         _ = moveToQuarantine(at: destination, preferredName: destination.lastPathComponent)
                     }
                 } else {
-                    ModelManagerService.markRepairNeeded(for: model)
+                    ModelManagerService.markDamaged(for: model)
                 }
             }
             return true

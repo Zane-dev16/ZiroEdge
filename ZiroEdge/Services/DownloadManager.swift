@@ -321,6 +321,26 @@ extension DownloadManager {
         StorageByteFormatter.string(fromByteCount: availableDiskSpace)
     }
 
+    /// Storage headroom to keep free above a transfer's own size (5% of the
+    /// transfer, floored at 512MB).
+    func storageSafetyMargin(for requiredBytes: Int64) -> Int64 {
+        max(requiredBytes / 20, Self.storageSafetyMarginBytes)
+    }
+
+    /// Disk truth at full verification depth, ignoring live transfer state.
+    func authoritativeDiskStatus(for model: AIModel) -> ModelDownloadStatus {
+        Self.diskStatus(for: model)
+    }
+
+    /// Forwarder to the availability module, which owns this projection. Kept on
+    /// the manager so every call site reads the same way and stays MainActor-free.
+    nonisolated static func diskStatus(
+        for model: AIModel,
+        depth: ArtifactVerificationDepth = .full
+    ) -> ModelDownloadStatus {
+        ModelManagerService.downloadStatus(for: model, depth: depth)
+    }
+
     /// Merge a hash-free disk probe with live transfer states so the tap
     /// fast-path never clobbers downloading/verifying UI with stale disk truth.
     func quickStatusMergingActiveTasks(

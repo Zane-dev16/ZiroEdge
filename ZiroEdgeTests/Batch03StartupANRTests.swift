@@ -26,7 +26,7 @@ final class Batch03StartupANRTests: XCTestCase {
         // Clean any fixture models
         for model in ModelRegistry.allModels {
             ModelManagerService.deleteModel(model)
-            ModelManagerService.clearRepairNeeded(for: model)
+            ModelManagerService.clearDamaged(for: model)
         }
         super.tearDown()
     }
@@ -281,7 +281,7 @@ final class Batch03StartupANRTests: XCTestCase {
             XCTFail("Missing")
             return
         }
-        if case .repairNeeded = readiness {
+        if case .damaged = readiness {
         } else {
             XCTFail("Corrupt file must be repairNeeded, got \(readiness)")
         }
