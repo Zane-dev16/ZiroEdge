@@ -224,10 +224,20 @@ final class AppStoreScreenshotCapture: UITestBase {
 
     /// Terminate and relaunch with the hermetic llama runtime so captures
     /// are independent of what is physically downloaded on this simulator.
+    ///
+    /// Set `ZIRO_REAL_MODEL=1` to capture the real runtime instead. The hermetic
+    /// fixture reports the llama row as a validated shape, so an image of the
+    /// eligibility copy taken under it makes a claim that is not true of the
+    /// shipped profile. A store capture that shows the Runtime Status block must
+    /// come from a genuinely installed model with the real profile behind it.
     private func relaunchWithHermeticModel() {
         app.terminate()
         app = XCUIApplication()
-        app.launchArguments += ["--uitesting", "--uitesting-hermetic-model"]
+        if ProcessInfo.processInfo.environment["ZIRO_REAL_MODEL"] == "1" {
+            app.launchArguments += ["--uitesting"]
+        } else {
+            app.launchArguments += ["--uitesting", "--uitesting-hermetic-model"]
+        }
         app.launch()
     }
 }
