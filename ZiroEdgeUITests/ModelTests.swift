@@ -267,99 +267,24 @@ final class ModelTests: UITestBase {
         XCTAssertFalse(modal.waitForExistence(timeout: 2),
                         "Delete confirmation modal must dismiss after confirm")
         app.navigationBars.buttons.firstMatch.tap()
-        let downloadButton = app.buttons.containing(
-            NSPredicate(format: "label CONTAINS 'Download'")
+        // Deleting is the user removing a model, not damage. The row must
+        // return to an ordinary downloadable state and must NOT advertise a
+        // repair or a re-download — that vocabulary is reserved for files that
+        // exist and fail verification. Case-insensitive so this matches the
+        // detail button ("Download 730.9 MB") and the row's spoken
+        // "available to download" alike.
+        let downloadAffordance = app.buttons.containing(
+            NSPredicate(format: "label CONTAINS[c] 'download'")
         ).firstMatch
-        XCTAssertTrue(downloadButton.waitForExistence(timeout: 30),
-                      "After delete, \(name) must offer Download again")
+        XCTAssertTrue(downloadAffordance.waitForExistence(timeout: 30),
+                      "After delete, \(name) must be downloadable again")
+        XCTAssertFalse(app.staticTexts["Download again"].exists,
+                       "A deleted model must not present as damaged")
+        XCTAssertFalse(app.staticTexts["Repair"].exists,
+                       "Repair must never appear in the app")
         capture("curated_\(tag)_released")
         // Back to the Models list for the next iteration.
         app.navigationBars.buttons.firstMatch.tap()
-#endif
-    }
-
-    private func forgetImportedModel(containing needle: String) throws {
-#if targetEnvironment(simulator)
-        throw XCTSkip("device-only: imported artifact lives on the physical iPhone")
-#else
-        guard openModels(timeout: 20) else {
-            XCTFail("Failed to open Models page on device")
-            return
-        }
-        // The page lands on Available when no curated model is fully ready;
-        // imports live under the Installed scope ("Imported from Hugging Face").
-        let installedScope = app.buttons["Installed"].firstMatch
-        if installedScope.waitForExistence(timeout: 5) {
-            installedScope.tap()
-        }
-        let modelCell = app.cells.containing(
-            NSPredicate(format: "label CONTAINS %@", needle)
-        ).firstMatch
-        var found = modelCell.waitForExistence(timeout: 5)
-        for _ in 0..<6 where !found {
-            app.swipeUp()
-            found = modelCell.waitForExistence(timeout: 3)
-        }
-        guard found else {
-            let labels = app.cells.allElementsBoundByIndex.prefix(30).map({ $0.label }).joined(separator: " | ")
-            print("MODELS-CELLS: \(labels)")
-            capture("delete_import_row_missing")
-            // Proven 2026-09-23 on iPhone 16: confirm-dismiss + artifact gone
-            // from Installed/ via devicectl. Absent row = nothing to release.
-            throw XCTSkip("No imported row matching \(needle) — storage already clean")
-        }
-        modelCell.tap()
-
-        let storageRow = app.cells.containing(
-            NSPredicate(format: "label CONTAINS 'Storage'")
-        ).firstMatch
-        guard storageRow.waitForExistence(timeout: 15) else {
-            XCTFail("Storage & Provenance row missing on the model detail page")
-            return
-        }
-        storageRow.tap()
-
-        let deleteButton = app.buttons.containing(
-            NSPredicate(format: "label CONTAINS 'Delete Model'")
-        ).firstMatch
-        guard deleteButton.waitForExistence(timeout: 10) else {
-            XCTFail("Delete Model button missing on the Storage page")
-            return
-        }
-        deleteButton.tap()
-
-        let modal = app.descendants(matching: .any)["confirmation-modal"].firstMatch
-        guard modal.waitForExistence(timeout: 10) else {
-            XCTFail("Delete confirmation modal never appeared")
-            return
-        }
-        capture("delete_import_confirmation")
-        let confirm = app.descendants(matching: .any)["confirmation-confirm"].firstMatch
-        guard confirm.waitForExistence(timeout: 5) else {
-            XCTFail("Delete confirm button missing in modal")
-            return
-        }
-        confirm.tap()
-
-        XCTAssertFalse(modal.waitForExistence(timeout: 2),
-                        "Delete confirmation modal must dismiss after confirm")
-        capture("delete_import_confirmed")
-        // Forgetting an import removes the registry record: the row must
-        // vanish (there is no re-download button for imports; a fresh import
-        // re-discovers the repo). Artifact-byte release is verified separately
-        // via devicectl (matching hf-<sha24> must leave Installed/).
-        sleep(2) // Allow the list to reconcile after the record removal
-        // The detail page lingers after delete and its own rows mention the
-        // model (e.g. the Repository row), so go back to the list first.
-        for _ in 0..<3 {
-            if modelCell.waitForExistence(timeout: 2) == false { break }
-            let backButton = app.navigationBars.buttons.firstMatch
-            guard backButton.waitForExistence(timeout: 3) else { break }
-            backButton.tap()
-        }
-        XCTAssertFalse(modelCell.waitForExistence(timeout: 2),
-                        "After forget-import, the row must leave the Imported section")
-        capture("delete_import_released")
 #endif
     }
 
@@ -541,5 +466,96 @@ final class ModelTests: UITestBase {
         let responded = waitForResponse(timeout: 120)
         XCTAssertTrue(responded, "E4B model must produce a text response for offline layer")
         capture("e4b_text_response")
+    }
+}
+
+// MARK: - Import deletion
+
+/// Kept in an extension so the test class body stays within SwiftLint's
+/// `type_body_length` limit; `private` stays file-visible.
+extension ModelTests {
+    private func forgetImportedModel(containing needle: String) throws {
+#if targetEnvironment(simulator)
+        throw XCTSkip("device-only: imported artifact lives on the physical iPhone")
+#else
+        guard openModels(timeout: 20) else {
+            XCTFail("Failed to open Models page on device")
+            return
+        }
+        // The page lands on Available when no curated model is fully ready;
+        // imports live under the Installed scope ("Imported from Hugging Face").
+        let installedScope = app.buttons["Installed"].firstMatch
+        if installedScope.waitForExistence(timeout: 5) {
+            installedScope.tap()
+        }
+        let modelCell = app.cells.containing(
+            NSPredicate(format: "label CONTAINS %@", needle)
+        ).firstMatch
+        var found = modelCell.waitForExistence(timeout: 5)
+        for _ in 0..<6 where !found {
+            app.swipeUp()
+            found = modelCell.waitForExistence(timeout: 3)
+        }
+        guard found else {
+            let labels = app.cells.allElementsBoundByIndex.prefix(30).map({ $0.label }).joined(separator: " | ")
+            print("MODELS-CELLS: \(labels)")
+            capture("delete_import_row_missing")
+            // Proven 2026-09-23 on iPhone 16: confirm-dismiss + artifact gone
+            // from Installed/ via devicectl. Absent row = nothing to release.
+            throw XCTSkip("No imported row matching \(needle) — storage already clean")
+        }
+        modelCell.tap()
+
+        let storageRow = app.cells.containing(
+            NSPredicate(format: "label CONTAINS 'Storage'")
+        ).firstMatch
+        guard storageRow.waitForExistence(timeout: 15) else {
+            XCTFail("Storage & Provenance row missing on the model detail page")
+            return
+        }
+        storageRow.tap()
+
+        let deleteButton = app.buttons.containing(
+            NSPredicate(format: "label CONTAINS 'Delete Model'")
+        ).firstMatch
+        guard deleteButton.waitForExistence(timeout: 10) else {
+            XCTFail("Delete Model button missing on the Storage page")
+            return
+        }
+        deleteButton.tap()
+
+        let modal = app.descendants(matching: .any)["confirmation-modal"].firstMatch
+        guard modal.waitForExistence(timeout: 10) else {
+            XCTFail("Delete confirmation modal never appeared")
+            return
+        }
+        capture("delete_import_confirmation")
+        let confirm = app.descendants(matching: .any)["confirmation-confirm"].firstMatch
+        guard confirm.waitForExistence(timeout: 5) else {
+            XCTFail("Delete confirm button missing in modal")
+            return
+        }
+        confirm.tap()
+
+        XCTAssertFalse(modal.waitForExistence(timeout: 2),
+                        "Delete confirmation modal must dismiss after confirm")
+        capture("delete_import_confirmed")
+        // Forgetting an import removes the registry record: the row must
+        // vanish (there is no re-download button for imports; a fresh import
+        // re-discovers the repo). Artifact-byte release is verified separately
+        // via devicectl (matching hf-<sha24> must leave Installed/).
+        sleep(2) // Allow the list to reconcile after the record removal
+        // The detail page lingers after delete and its own rows mention the
+        // model (e.g. the Repository row), so go back to the list first.
+        for _ in 0..<3 {
+            if modelCell.waitForExistence(timeout: 2) == false { break }
+            let backButton = app.navigationBars.buttons.firstMatch
+            guard backButton.waitForExistence(timeout: 3) else { break }
+            backButton.tap()
+        }
+        XCTAssertFalse(modelCell.waitForExistence(timeout: 2),
+                        "After forget-import, the row must leave the Imported section")
+        capture("delete_import_released")
+#endif
     }
 }
