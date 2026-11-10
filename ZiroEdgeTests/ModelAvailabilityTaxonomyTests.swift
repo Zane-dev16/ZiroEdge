@@ -51,6 +51,31 @@ final class ModelAvailabilityTaxonomyTests: XCTestCase {
     }
 
     @MainActor
+    func testDeletingAModelReturnsItToAPlainDownloadState() throws {
+        // The UI-layer failure this replaces ("After delete ... must offer
+        // Download again") encoded the old taxonomy: absence read as damage, so
+        // a deliberate delete looked like corruption. Delete is the user
+        // saying "remove this", and the honest result is an ordinary
+        // downloadable row — not a warning. Pure state assertion; no taps.
+        let data = TestModelFixtures.gguf(count: 128)
+        let model = TestModelFixtures.text(id: "delete-\(UUID().uuidString.lowercased())", data: data)
+        try TestModelFixtures.install(data, for: model)
+        XCTAssertTrue(ModelManagerService.hasArtifactOnDisk(for: model))
+
+        ModelManagerService.deleteModel(model)
+
+        XCTAssertFalse(ModelManagerService.hasArtifactOnDisk(for: model))
+        XCTAssertFalse(ModelManagerService.isMarkedDamaged(for: model))
+        guard case .notDownloaded = ModelManagerService.availability(for: model) else {
+            return XCTFail("a deleted model must read as not downloaded, never damaged")
+        }
+        XCTAssertFalse(
+            DownloadManager().status(for: model).needsRedownload(for: model),
+            "deleting a model is not damage; it must offer a plain download"
+        )
+    }
+
+    @MainActor
     func testDamagedFilesAskToDownloadAgain() throws {
         let data = TestModelFixtures.gguf(count: 128)
         let model = TestModelFixtures.text(id: "damaged-\(UUID().uuidString.lowercased())", data: data)
@@ -172,6 +197,68 @@ final class ModelAvailabilityTaxonomyTests: XCTestCase {
         XCTAssertEqual(decision.recommendation, .proceed)
         XCTAssertNil(decision.reason)
         XCTAssertEqual(decision.requiredBytes, required)
+    }
+
+    /// The whole catalog against the reference device, in one deterministic run.
+    /// `referenceHeadroom` is not a guess: it is the `raw=` value printed by
+    /// `[SWITCH-PROOF-BUDGET]` on the iPhone 16 used for acceptance
+    /// (3,507,977,344 bytes with the app foregrounded). This is the check the
+    /// UI scrolling was trying to answer — every row, no taps.
+    func testAdmissionTableAtReferenceDeviceHeadroom() async throws {
+        let referenceHeadroom: UInt64 = 3_507_977_344
+        let referenceRAM: UInt64 = 8_054_095_872
+
+        var admitted: [String] = []
+        var refused: [String: String] = [:]
+        var table: [String] = []
+
+        for model in ModelRegistry.allModels {
+            XCTAssertNotNil(
+                MemoryProfileRegistry.profile(for: model),
+                "\(model.id) must resolve a runtime shape"
+            )
+            let decision = await MemoryBudgeter(metrics: FixedMemoryMetricsProvider(
+                processAvailable: referenceHeadroom,
+                total: referenceRAM
+            )).decision(for: model)
+
+            let verdict: String = switch decision.recommendation {
+            case .proceed: "proceed"
+            case .unloadCurrentFirst: "proceed-after-unload"
+            case .insufficientRAM: "refused"
+            }
+            table.append(
+                "\(model.id) eligibility=\(model.runtimeEligibility.rawValue) "
+                    + "required=\(decision.requiredBytes.map(String.init) ?? "none") "
+                    + "\(verdict)\(decision.reason.map { " reason=\($0.rawValue)" } ?? "")"
+            )
+
+            if decision.recommendation == .insufficientRAM {
+                refused[model.id] = decision.reason?.rawValue ?? "none"
+            } else {
+                admitted.append(model.id)
+            }
+        }
+
+        // The product promise on an 8GB reference iPhone: one row per model,
+        // loadable, except the 5.9GB vision pair that genuinely does not fit.
+        // If the estimator or a profile changes, this table says exactly which
+        // row moved and why.
+        let report = "\n" + table.joined(separator: "\n")
+        XCTAssertEqual(
+            refused.keys.sorted(), ["gemma-4-e4b-q4"],
+            "admission table changed:" + report
+        )
+        XCTAssertEqual(
+            refused["gemma-4-e4b-q4"],
+            MemoryAdmissionFailure.insufficientProcessHeadroom.rawValue,
+            "the refused row must be a headroom miss, not a catalog fault" + report
+        )
+        XCTAssertEqual(
+            admitted.count,
+            ModelRegistry.allModels.count - 1,
+            "every other row must load" + report
+        )
     }
 
     func testEstimatedShapeRefusesWhenTheDeviceIsShort() async throws {
