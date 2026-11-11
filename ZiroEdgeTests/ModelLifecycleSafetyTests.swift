@@ -379,6 +379,64 @@ final class ModelLifecycleSafetyTests: XCTestCase {
         XCTAssertEqual(nativeLoads, 0, "native construction must never run on stale approval")
         XCTAssertTrue(manager.showInsufficientMemoryWarning)
     }
+    // MARK: - Text-only fallback (E2B without its projector)
+
+    /// The projector is optional for a row that can answer text without it.
+    /// Handing a path nobody downloaded to the engine is what produced the
+    /// "files damaged or incomplete" refusal on a device that had only ever
+    /// downloaded the base.
+    func testTextCapableRowWithoutItsProjectorResolvesTheTextOnlyVariant() {
+        let vision = ModelRegistry.gemma4_e2b
+        let resolved = ModelLifecycleManager.runtimeModel(for: vision, projectorOnDisk: false)
+        XCTAssertFalse(resolved.requiresMMProj, "a missing projector must not be handed to the engine")
+        XCTAssertEqual(resolved.id, vision.id, "the variant must keep the id that keys profile and consent")
+    }
+
+    func testTextCapableRowWithItsProjectorKeepsTheVisionShape() {
+        let vision = ModelRegistry.gemma4_e2b
+        let resolved = ModelLifecycleManager.runtimeModel(for: vision, projectorOnDisk: true)
+        XCTAssertTrue(resolved.requiresMMProj)
+        XCTAssertEqual(resolved.id, vision.id)
+    }
+
+    /// A vision-only row has no text-only runtime to fall back to, so it keeps
+    /// the pair and the availability gate refuses it honestly.
+    func testVisionOnlyRowWithoutItsProjectorKeepsThePair() {
+        let visionOnly = ModelRegistry.gemma4_e4b
+        XCTAssertFalse(visionOnly.allowsTextOnlyCapability)
+        let resolved = ModelLifecycleManager.runtimeModel(for: visionOnly, projectorOnDisk: false)
+        XCTAssertTrue(resolved.requiresMMProj)
+    }
+
+    func testTextCapableRowWithNoProjectorOnDiskLoadsTextOnly() async throws {
+        let projector = ModelManagerService.mmprojModelPath(for: ModelRegistry.gemma4_e2b)
+        try XCTSkipIf(
+            FileManager.default.fileExists(atPath: projector.path),
+            "this machine has E2B's projector installed, so the text-only path cannot be exercised"
+        )
+        let inference = LifecycleInferenceStub()
+        let manager = ModelLifecycleManager(
+            inferenceService: inference,
+            memoryBudgeter: makeBudgeter(),
+            loadSafetyStore: try makeStore(),
+            // The vision row is refused by the real gate while its projector is
+            // absent; the text-only variant must still reach the engine.
+            availabilityProvider: { model in
+                model.requiresMMProj ? .damaged(issues: [.missing(artifact: .mmproj)]) : .ready
+            },
+            recoveryDelay: .zero
+        )
+
+        let result = await manager.loadModel(ModelRegistry.gemma4_e2b)
+
+        guard case .loaded = result else {
+            return XCTFail("a text-capable row with only its base must load text-only, got \(result)")
+        }
+        let recordedProjector = await inference.recordedMmprojURL
+        XCTAssertNil(recordedProjector, "the engine must not be given a projector that is not on disk")
+        let recordedID = await inference.recordedModelID
+        XCTAssertEqual(recordedID, ModelRegistry.gemma4_e2b.id)
+    }
 }
 
 private actor LifecycleInferenceStub: InferenceServiceProtocol {
@@ -386,6 +444,8 @@ private actor LifecycleInferenceStub: InferenceServiceProtocol {
     private let loadError: Error?
     private(set) var loadCount = 0
     private(set) var unloadCount = 0
+    private(set) var recordedModelID: String?
+    private(set) var recordedMmprojURL: URL?
     private var suspendLoads = false
     private var loadGate: CheckedContinuation<Void, Never>?
 
@@ -402,6 +462,8 @@ private actor LifecycleInferenceStub: InferenceServiceProtocol {
 
     func loadModel(_ model: AIModel, baseURL: URL, mmprojURL: URL?) async throws {
         loadCount += 1
+        recordedModelID = model.id
+        recordedMmprojURL = mmprojURL
         if suspendLoads {
             await withCheckedContinuation { self.loadGate = $0 }
         }

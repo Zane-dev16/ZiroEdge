@@ -63,6 +63,69 @@ When one model has several shapes, the strongest evidence wins before the faster
 
 The retained E2B load-only delta remains 790,334,488 bytes for diagnostic history; production admission uses the larger accepted full-workload peak of 798,559,232 bytes. Configured context, batch, and microbatch values are specified runtime controls, not measurements. Evidence is retained under `test-output/memory-diagnostic-e2b-round1-warm-20260726T165800Z/`.
 
+## Measured load matrix (2026-11-11, iPhone 16, 8 GB)
+
+A DEBUG-only probe loaded every catalog row through the real lifecycle path,
+sampled the physical footprint before and after, ran one short generation, and
+unloaded. This is a **load-only** delta, so it proves the load and gives a
+lower bound on residency; it is not a full-workload peak and must not be written
+into `measuredFullWorkloadPeakDeltaBytes`.
+
+Reference device headroom: 3,512,351,848 bytes. Deltas are physical-footprint
+bytes.
+
+| Model | Shape selected | Load | Load delta | One generation |
+| --- | --- | --- | --- | --- |
+| llama3.2-3b-q4 | `llama32-3b-text-metal-p1` | loaded, 4.5 s | 533,743,440 | `OK` |
+| gemma-4-e2b-q4 | `gemma4-e2b-vision-p1` (validated CPU) | loaded, 5.0 s | 787,369,032 | `OK.` |
+| gemma-4-e4b-q4-text | `gemma4-e4b-text-metal-p1` | loaded, 5.3 s | 74,075,904 | **failed** |
+| gemma-4-e4b-q4 | `gemma4-e4b-vision-metal-p1` | refused by admission (needs 4.24 GB, 3.26 GB spare) | — | — |
+
+The E2B measurement independently corroborates the retained validated profile:
+a 787 MB load delta against the accepted 798,559,232-byte full-workload peak.
+
+### Finding: full Metal offload of a 5.3 GB base fails at decode
+
+`gemma-4-e4b-q4-text` **loads** on the Metal shape and then fails every decode:
+
+```
+error: Insufficient Memory (00000008:kIOGPUCommandBufferCallbackErrorOutOfMemory)
+ggml_metal_synchronize: error: command buffer 0 failed with status 5
+ggml_metal_graph_compute: backend is in error state from a previous command buffer failure
+llama_decode: failed to decode, ret = -3
+```
+
+The process footprint after load was 74 MB, so the weights are in GPU memory
+that process-headroom admission cannot see. `ModelConfiguration.autoGpuLayers`
+tiers on device RAM alone (`>= 8 GB` gets full offload) and never on the
+model's weight size, so a 5.34 GB base is fully offloaded on an 8 GB iPhone and
+the Metal allocation fails at the first decode. E2B (3.43 GB base) offloads
+fine on the same device, so the boundary sits between those two sizes.
+
+### Decision: Gemma 4 E4B vision stays refused (option 3)
+
+Measured reason, not a preference:
+
+1. Calibrating the vision shape today would exercise the **Metal** shape — both
+   E4B vision shapes are `.estimated`, so ranking prefers the faster one — and
+   the workload would die on the Metal allocation above instead of producing
+   evidence.
+2. The CPU vision shape is refused on the estimate (4.55 GB), so no shape can
+   serve on this device today.
+
+The path that can make the row loadable, in order:
+
+1. Give the E4B rows a CPU-only runtime shape (`gpuLayers: 0`) and remove the
+   E4B Metal profiles that would otherwise claim the offload shape.
+2. Run the retained CPU vision calibration (`--model e4b --profile vision`).
+3. Write `measuredFullWorkloadPeakDeltaBytes` + `.validated`, after which the
+   validated CPU shape serves automatically.
+
+Until then the row keeps its `.estimated` tier and is refused at load. Its
+surface copy still reads "Ready to use" and its download is still offered on a
+device that cannot load it; that copy is the next honest-copy item, not a
+memory-policy change.
+
 ## Physical calibration
 
 Calibration is DEBUG-only and never appears in Release. The E4B text identity reuses ZiroEdge's registered and SHA-256-verified base artifact in its own managed container. It does not copy data from another app and does not request a projector.

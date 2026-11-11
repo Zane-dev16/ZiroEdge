@@ -153,7 +153,13 @@ final class ModelLifecycleManager: ObservableObject {
     /// teardown so a refusal keeps `activeModel` resident; recovery sleep is
     /// cancellable per 100ms with epoch checks.
     @discardableResult
-    func loadModel(_ model: AIModel) async -> ModelLoadResult {
+    func loadModel(_ requestedModel: AIModel) async -> ModelLoadResult {
+        let model = Self.runtimeModel(
+            for: requestedModel,
+            projectorOnDisk: FileManager.default.fileExists(
+                atPath: ModelManagerService.mmprojModelPath(for: requestedModel).path
+            )
+        )
         if let active = activeModel, active.id == model.id, currentState == .loaded {
             return .alreadyLoaded
         }
@@ -532,6 +538,18 @@ final class ModelLifecycleManager: ObservableObject {
 // type_body_length; same-file extension retains private access).
 @MainActor
 extension ModelLifecycleManager {
+    /// A row that can run text without its projector is a text-only runtime when
+    /// the projector is not on this iPhone. Loading the pair would fail on a file
+    /// nobody downloaded, and the failure copy would then accuse the user's files
+    /// of being damaged. The variant keeps the model id, so the memory profile,
+    /// consent state, and load-safety history are unchanged.
+    static func runtimeModel(for model: AIModel, projectorOnDisk: Bool) -> AIModel {
+        guard model.allowsTextOnlyCapability, model.requiresMMProj, !projectorOnDisk else {
+            return model
+        }
+        return model.textOnlyRuntimeVariant
+    }
+
     private func preflightAndAdmit(
         _ model: AIModel,
         loadEpoch: UInt64,
