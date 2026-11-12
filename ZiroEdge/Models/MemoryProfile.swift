@@ -289,25 +289,13 @@ enum MemoryProfileRegistry {
         minimumPhysicalRAMBytes: 8_054_095_872
     )
 
-    static let e4bTextMetal = MemoryProfile(
-        id: "gemma4-e4b-text-metal-p1", modelID: ModelRegistry.gemma4_e4b_text.id,
-        mode: .text, contextLength: 512, batchSize: 256, microBatchSize: 64,
-        gpuLayers: ModelConfiguration.fullMetalOffloadLayers,
-        projectorPolicy: .disabled, evidenceStatus: .unvalidated, policyVersion: 1,
-        measuredFullWorkloadPeakDeltaBytes: nil, measuredLoadDeltaBytes: nil,
-        safetyMultiplier: 1.25, fixedReserveBytes: 750_000_000,
-        minimumPhysicalRAMBytes: 8_054_095_872
-    )
-
-    static let e4bVisionMetal = MemoryProfile(
-        id: "gemma4-e4b-vision-metal-p1", modelID: ModelRegistry.gemma4_e4b.id,
-        mode: .vision, contextLength: 4096, batchSize: 512, microBatchSize: 128,
-        gpuLayers: ModelConfiguration.fullMetalOffloadLayers,
-        projectorPolicy: .required, evidenceStatus: .unvalidated, policyVersion: 1,
-        measuredFullWorkloadPeakDeltaBytes: nil, measuredLoadDeltaBytes: nil,
-        safetyMultiplier: 1.25, fixedReserveBytes: 750_000_000,
-        minimumPhysicalRAMBytes: 8_054_095_872
-    )
+    // The E4B rows (vision and text) deliberately have no Metal shape. Their
+    // base is 4.97 GB and full offload dies at the first decode with a GPU
+    // out-of-memory on an 8 GB iPhone — memory admission cannot see it, because
+    // the weights are not in the process footprint. Both runtime presets pin
+    // `gpuLayers: 0`; registering a Metal shape here would advertise an offload
+    // the runtime no longer performs. Restore one only alongside a measured
+    // size-aware tier (docs/memory-profiles.md).
 
 #if DEBUG
     static let hermeticLlamaText = MemoryProfile(
@@ -381,20 +369,20 @@ enum MemoryProfileRegistry {
         )
     }
 
-    /// Shapes declared by hand, in a fixed order. CPU and Metal for the four
-    /// measured-or-legacy families; the DEBUG calibration identity joins them
-    /// only in Debug builds. `lineupTextProfiles` supplies the rest.
+    /// Shapes declared by hand, in a fixed order. CPU and Metal for the three
+    /// families that still have a Metal shape; the DEBUG calibration identity
+    /// joins them only in Debug builds. `lineupTextProfiles` supplies the rest.
     private static var declaredProfiles: [MemoryProfile] {
 #if DEBUG
         [
             llama32Text, e2bVision, e4bText, e4bVision,
-            llama32TextMetal, e2bVisionMetal, e4bTextMetal, e4bVisionMetal,
+            llama32TextMetal, e2bVisionMetal,
             e4bTextCalibration,
         ]
 #else
         [
             llama32Text, e2bVision, e4bText, e4bVision,
-            llama32TextMetal, e2bVisionMetal, e4bTextMetal, e4bVisionMetal,
+            llama32TextMetal, e2bVisionMetal,
         ]
 #endif
     }

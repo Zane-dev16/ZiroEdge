@@ -241,26 +241,33 @@ struct ModelConfiguration: Codable, Sendable, Hashable {
         gpuLayers: autoGpuLayers()
     )
 
-    /// E4B text-only runtime shape. It shares the base artifact with E4B vision
-    /// but has independent evidence and never initializes a projector.
-    static let gemma4E4BText = ModelConfiguration(
+    /// Gemma 4 E4B vision runtime shape. Pinned to CPU on every device.
+    ///
+    /// The E4B base is 4.97 GB. Full Metal offload of it is admitted by the
+    /// RAM tier and then dies at the first decode with a GPU out-of-memory
+    /// (`llama_decode ret=-3` after `kIOGPUCommandBufferCallbackErrorOutOfMemory`,
+    /// measured twice on iPhone 16 — see docs/memory-profiles.md). Weights
+    /// allocated in GPU memory are invisible to the process-headroom admission
+    /// this app runs on, so the only fail-closed shape is no offload at all.
+    /// CPU residency rides the mmap path (`~base/3`) and does fit the budget.
+    static let gemma4E4B = ModelConfiguration(
         promptPath: .gemma,
         addBos: true,
         stopStrings: ["<end_of_turn>"],
         defaultSampling: .default,
-        contextLength: 512,
-        batchSize: 256,
-        microBatchSize: 64,
+        contextLength: 4096,
+        batchSize: 512,
+        microBatchSize: 128,
         threadCount: 2,
         useMmap: true,
         f16KV: true,
-        gpuLayers: autoGpuLayers()
+        gpuLayers: 0
     )
 
-#if DEBUG
-    /// Calibration-only alias of the independently selectable Release text shape.
-    /// Pins CPU: the harness measures the CPU shape (see memory-profiles.md).
-    static let gemma4E4BTextCalibration = ModelConfiguration(
+    /// E4B text-only runtime shape. It shares the base artifact with E4B vision
+    /// but has independent evidence and never initializes a projector. Pinned to
+    /// CPU for the same reason as `gemma4E4B`.
+    static let gemma4E4BText = ModelConfiguration(
         promptPath: .gemma,
         addBos: true,
         stopStrings: ["<end_of_turn>"],
@@ -273,7 +280,6 @@ struct ModelConfiguration: Codable, Sendable, Hashable {
         f16KV: true,
         gpuLayers: 0
     )
-#endif
 
     /// Qwen 2.5-VL — vision model, chat template. (Phase 2)
     static let qwen25VL = ModelConfiguration(

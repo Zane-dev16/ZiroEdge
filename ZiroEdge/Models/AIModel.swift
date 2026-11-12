@@ -312,7 +312,7 @@ enum ModelRegistry {
         baseSHA256: "9d23b7b4cd3c6c6c9ffadd7a9b1e16448621005b80a803e85afa3ca2c48714e3",
         mmprojSHA256: "51d4b7fd825e4569f746b200fccc5332bf914e8ef7cbe447272ce4fec6df3db6",
         quantization: "Q4_K_M",
-        config: .gemma4,
+        config: .gemma4E4B,
         license: LicenseInfo(
             name: "Gemma Terms of Use",
             url: URL(string: "https://ai.google.dev/gemma/terms")!,
@@ -350,7 +350,7 @@ enum ModelRegistry {
         baseSHA256: gemma4_e4b.baseSHA256,
         mmprojSHA256: nil,
         quantization: gemma4_e4b.quantization,
-        config: .gemma4E4BTextCalibration,
+        config: .gemma4E4BText,
         license: gemma4_e4b.license
     )
 #endif

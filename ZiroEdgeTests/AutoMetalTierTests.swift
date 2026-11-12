@@ -26,8 +26,29 @@ final class AutoMetalTierTests: XCTestCase {
         )
     }
 
-    func testCalibrationPresetStaysCPU() {
-        XCTAssertEqual(ModelConfiguration.gemma4E4BTextCalibration.gpuLayers, 0)
+    func testE4BPresetsAndShapesNeverOffloadToMetal() {
+        // Measured twice on iPhone 16: full Metal offload of the 4.97 GB E4B base
+        // is admitted by the RAM tier and then fails every decode with
+        // `kIOGPUCommandBufferCallbackErrorOutOfMemory` (docs/memory-profiles.md).
+        // Weights allocated in GPU memory are invisible to process-headroom
+        // admission, so the only fail-closed shape is no offload at all.
+        for model in [ModelRegistry.gemma4_e4b, ModelRegistry.gemma4_e4b_text] {
+            XCTAssertEqual(model.config.gpuLayers, 0, "\(model.id) must not offload")
+            XCTAssertEqual(
+                MemoryProfileRegistry.profile(for: model.id, usesGPU: true)?.gpuLayers, 0,
+                "\(model.id) must not serve a Metal shape to an 8 GB+ device"
+            )
+        }
+    }
+
+    func testE4BRegistersNoMetalShapeAtAll() {
+        let e4bIDs: Set<String> = [
+            ModelRegistry.gemma4_e4b.id,
+            ModelRegistry.gemma4_e4b_text.id,
+            ModelRegistry.gemma4E4BTextCalibration.id,
+        ]
+        let metal = MemoryProfileRegistry.all.filter { e4bIDs.contains($0.modelID) && $0.gpuLayers > 0 }
+        XCTAssertTrue(metal.isEmpty, "Metal shapes were re-added for \(metal.map(\.id))")
     }
 
     func testCPUValidationUntouchedByMetalEntries() {
