@@ -494,43 +494,62 @@ final class FeatureTests: UITestBase {
 
     // MARK: - Honest memory copy before the download
 
-    /// A row this iPhone cannot load must say so on its own page, before the
-    /// download button, instead of promising "Ready to use" and failing after a
-    /// multi-gigabyte transfer.
+    /// A row this iPhone cannot load must say so on its own page instead of
+    /// promising "Ready to use" and failing after a multi-gigabyte transfer.
     ///
-    /// The assertion is device-specific on purpose: this is the evidence device
-    /// (iPhone 16, 8 GB), where admission refuses Gemma 4 E4B on the vision
-    /// estimate (4.55 GB needed against a ~3.54 GB app ceiling). If a future
-    /// device can host it, this test fails and the expectation gets revisited
-    /// rather than silently rotting.
+    /// Device-specific on purpose: this is the evidence device (iPhone 16,
+    /// 8 GB), where admission refuses Gemma 4 E4B on the vision estimate
+    /// (4.55 GB needed against a ~3.54 GB app ceiling). If a future device can
+    /// host it, this fails and the expectation gets revisited rather than
+    /// silently rotting.
     func testRefusedRowSaysSoBeforeTheDownload() throws {
         guard openModels(timeout: 20) else {
             XCTFail("Failed to open the Models page")
             return
         }
-        let visionRow = app.cells.containing(
-            NSPredicate(format: "label CONTAINS 'Gemma 4 E4B,'")
-        ).firstMatch
-        guard visionRow.waitForExistence(timeout: 15) else {
-            XCTFail("Gemma 4 E4B vision row missing from the catalog")
+        capture("catalog_top")
+        // The catalog splits into Available / Installed. A downloaded row (the
+        // E4B pair is installed on the evidence device) lives behind the second
+        // segment, so the list must be switched before the row can exist.
+        let installedSegment = app.buttons["Installed"].firstMatch
+        if installedSegment.waitForExistence(timeout: 5) {
+            installedSegment.tap()
+        }
+        capture("catalog_installed")
+
+        // Same navigation the store capture uses: the row's own name text. The
+        // list is lazy, so walk to it instead of assuming a screenful.
+        let row = app.staticTexts["Gemma 4 E4B"].firstMatch
+        var swipes = 0
+        while !row.exists && swipes < 6 {
+            app.swipeUp()
+            swipes += 1
+        }
+        guard row.waitForExistence(timeout: 10) else {
+            capture("catalog_scrolled")
+            XCTFail("Gemma 4 E4B row missing from the Installed catalog after \(swipes) swipes")
             return
         }
-        visionRow.tap()
+        row.tap()
 
         let mode = app.staticTexts["modelRuntimeMode"].firstMatch
         guard mode.waitForExistence(timeout: 15) else {
             XCTFail("Runtime strip did not render on the model page")
             return
         }
-        XCTAssertEqual(mode.label, "Won't load on this iPhone",
-                       "a row admission refuses must not read as ready")
+        // LabeledContent merges the row's label into the value's accessibility
+        // label ("Mode, Won't load on this iPhone"), so match on the state word.
+        XCTAssertTrue(mode.label.contains("Won't load on this iPhone"),
+                      "a row admission refuses must say so: \(mode.label)")
+        XCTAssertFalse(mode.label.contains("Ready"),
+                       "a refused row must never read as ready: \(mode.label)")
         let explanation = app.staticTexts["modelRuntimeExplanation"].firstMatch
         XCTAssertTrue(explanation.label.contains("Pick a smaller model"),
                       "refusal must name a remedy: \(explanation.label)")
         XCTAssertFalse(explanation.label.lowercased().contains("close other apps"),
                        "no app is holding this memory, so that remedy is false")
         XCTAssertTrue(app.staticTexts["modelMemoryRefusalFlag"].firstMatch.exists,
-                      "the download offer must carry the refusal too")
+                      "the offer must carry the refusal too")
         capture("refused_row_says_so_before_download")
     }
 }
