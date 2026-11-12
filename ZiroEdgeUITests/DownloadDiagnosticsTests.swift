@@ -105,8 +105,6 @@ final class DownloadDiagnosticsTests: UITestBase {
         // Look for the download button indicator
         let downloadBtn = app.buttons["arrow.down.circle"].firstMatch
         let repairIcon = app.images.containing(NSPredicate(format: "identifier CONTAINS 'wrench'")).firstMatch
-        let unavailableIcon = app.images.containing(NSPredicate(format: "identifier CONTAINS 'exclamationmark'")).firstMatch
-
         print("[UITEST] downloadBtn.exists=\(downloadBtn.exists)")
         print("[UITEST] repairIcon.exists=\(repairIcon.exists)")
 
