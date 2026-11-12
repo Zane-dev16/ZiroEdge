@@ -81,6 +81,12 @@ docs/release-evidence/
 # Generated App Store screenshots (produced by capture scripts, don't commit)
 ziroedge-docs/app-store-screenshots/
 Shots/
+AppStore/screenshots/
+
+# Verification harnesses: injected probes belong in the verification skill
+# (.agents/skills/verify-ziroedge/scaffolds), installed on demand by
+# `verify.sh scaffold install <name>` and struck afterwards. Never commit one.
+*Harness/
 
 # Xcode device/index state accidentally created in-repo (regenerates, don't commit)
 .dd-device/
