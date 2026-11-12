@@ -491,4 +491,46 @@ final class FeatureTests: UITestBase {
         app.swipeDown()
         capture("hermetic_wizard_artifacts")
     }
+
+    // MARK: - Honest memory copy before the download
+
+    /// A row this iPhone cannot load must say so on its own page, before the
+    /// download button, instead of promising "Ready to use" and failing after a
+    /// multi-gigabyte transfer.
+    ///
+    /// The assertion is device-specific on purpose: this is the evidence device
+    /// (iPhone 16, 8 GB), where admission refuses Gemma 4 E4B on the vision
+    /// estimate (4.55 GB needed against a ~3.54 GB app ceiling). If a future
+    /// device can host it, this test fails and the expectation gets revisited
+    /// rather than silently rotting.
+    func testRefusedRowSaysSoBeforeTheDownload() throws {
+        guard openModels(timeout: 20) else {
+            XCTFail("Failed to open the Models page")
+            return
+        }
+        let visionRow = app.cells.containing(
+            NSPredicate(format: "label CONTAINS 'Gemma 4 E4B,'")
+        ).firstMatch
+        guard visionRow.waitForExistence(timeout: 15) else {
+            XCTFail("Gemma 4 E4B vision row missing from the catalog")
+            return
+        }
+        visionRow.tap()
+
+        let mode = app.staticTexts["modelRuntimeMode"].firstMatch
+        guard mode.waitForExistence(timeout: 15) else {
+            XCTFail("Runtime strip did not render on the model page")
+            return
+        }
+        XCTAssertEqual(mode.label, "Won't load on this iPhone",
+                       "a row admission refuses must not read as ready")
+        let explanation = app.staticTexts["modelRuntimeExplanation"].firstMatch
+        XCTAssertTrue(explanation.label.contains("Pick a smaller model"),
+                      "refusal must name a remedy: \(explanation.label)")
+        XCTAssertFalse(explanation.label.lowercased().contains("close other apps"),
+                       "no app is holding this memory, so that remedy is false")
+        XCTAssertTrue(app.staticTexts["modelMemoryRefusalFlag"].firstMatch.exists,
+                      "the download offer must carry the refusal too")
+        capture("refused_row_says_so_before_download")
+    }
 }
