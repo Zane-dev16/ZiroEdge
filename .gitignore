@@ -92,3 +92,6 @@ docs/issues/
 buildServer.json
 # sourcekit-lsp fallback flags: absolute Xcode paths, machine-local
 .sourcekit-lsp/
+
+# xcode-build-server compile database (machine-local)
+.compile
