@@ -236,6 +236,21 @@ final class MemoryBudgeterTests: XCTestCase {
         XCTAssertTrue(ModelCopyPolicy.violations(in: message).isEmpty, message)
     }
 
+    /// A model page may only say "won't load here" for a capacity refusal.
+    /// Permission, a paused shape, and an unreadable sample all have their own
+    /// sentences, and collapsing them onto the phone would be a false claim.
+    func testOnlyCapacityRefusalsCountAsMemoryRefusalsForSurfaces() {
+        XCTAssertTrue(MemoryAdmissionFailure.moreThanThisAppCanUse.isMemoryCapacity)
+        XCTAssertTrue(MemoryAdmissionFailure.physicalRAMBelowMinimum.isMemoryCapacity)
+        XCTAssertTrue(MemoryAdmissionFailure.insufficientProcessHeadroom.isMemoryCapacity)
+        XCTAssertFalse(MemoryAdmissionFailure.consentRequired.isMemoryCapacity)
+        XCTAssertFalse(MemoryAdmissionFailure.profileDisabled.isMemoryCapacity)
+        XCTAssertFalse(MemoryAdmissionFailure.metricsUnavailable.isMemoryCapacity)
+        XCTAssertFalse(MemoryAdmissionFailure.profileUnvalidated.isMemoryCapacity)
+        XCTAssertFalse(MemoryAdmissionFailure.profileMissing.isMemoryCapacity)
+        XCTAssertFalse(MemoryAdmissionFailure.postLoadReserveBreached.isMemoryCapacity)
+    }
+
     // MARK: - P1-4 malformed sizes fail closed
 
     /// Negative base bytes can never admit, even with ample headroom.

@@ -213,9 +213,11 @@ struct ModelDetailView: View {
         }
     }
 
-    /// A refusal, as opposed to no verdict yet or a load the app will attempt.
+    /// A memory-capacity refusal, as opposed to no verdict yet, a consent gate,
+    /// a paused shape, or an unreadable sample. Only these say the device cannot
+    /// host the model; the rest keep their own copy.
     private var refusal: MemoryLoadDecision? {
-        guard let outlook, outlook.recommendation == .insufficientRAM else { return nil }
+        guard let outlook, outlook.reason?.isMemoryCapacity == true else { return nil }
         return outlook
     }
 

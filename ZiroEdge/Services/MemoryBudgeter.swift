@@ -187,6 +187,21 @@ enum MemoryAdmissionFailure: String, Sendable, Equatable {
     case moreThanThisAppCanUse
     case postLoadReserveBreached
     case profileDisabled
+
+    /// Whether this refusal is about how much memory this iPhone can give the
+    /// app. Only those may be phrased as "won't load here": a missing consent
+    /// gate, a shape paused after repeated stops, and an unreadable sample are
+    /// different promises with different remedies, and a surface that collapsed
+    /// them into "this iPhone can't run it" would be wrong three ways.
+    var isMemoryCapacity: Bool {
+        switch self {
+        case .moreThanThisAppCanUse, .physicalRAMBelowMinimum, .insufficientProcessHeadroom:
+            true
+        case .metricsUnavailable, .profileMissing, .profileUnvalidated,
+             .consentRequired, .postLoadReserveBreached, .profileDisabled:
+            false
+        }
+    }
 }
 
 /// One admission verdict: what to do, why, and the number it was compared to.
