@@ -538,6 +538,15 @@ final class ModelLifecycleManager: ObservableObject {
 // type_body_length; same-file extension retains private access).
 @MainActor
 extension ModelLifecycleManager {
+    /// Admission preview for any catalog row: the same verdict a load would get,
+    /// from the same code, so a surface can say what will happen before a
+    /// multi-gigabyte download instead of after it. Disk-free by construction —
+    /// it reads the profile and one memory sample, never artifacts — because the
+    /// estimate tier is sized from the catalog row, not from files on disk.
+    func admissionOutlook(for model: AIModel) async -> MemoryLoadDecision {
+        await memoryBudgeter.decision(for: model)
+    }
+
     /// A row that can run text without its projector is a text-only runtime when
     /// the projector is not on this iPhone. Loading the pair would fail on a file
     /// nobody downloaded, and the failure copy would then accuse the user's files

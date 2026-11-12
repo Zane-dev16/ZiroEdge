@@ -30,6 +30,11 @@ enum RuntimeEligibilityCopy {
         eligibility.label
     }
 
+    /// Stands in for `label(for:)` when this iPhone's own memory verdict for the
+    /// row is a refusal. Distinct from "Not available" on purpose: the model is
+    /// fine, the device cannot host it, and the sentence that follows says why.
+    static let refusedLabel = "Won't load on this iPhone"
+
     /// The plain sentence shown on a model's page. Leads with whether the
     /// model will run, because that is the only thing most readers want.
     static func detail(for eligibility: RuntimeEligibility) -> String {
@@ -131,6 +136,32 @@ enum ModelLoadCopy {
     static func tooLargeForDevice(modelName: String) -> String {
         "\(modelName) needs more memory than this iPhone has, even with every other "
             + "app closed. Pick a smaller model."
+    }
+
+    /// The model needs more memory than iOS will ever give this app here. Said
+    /// with the numbers because the same figures sit on the download page: no
+    /// action short of a smaller model closes this gap, so the sentence must not
+    /// suggest freeing memory that is not the problem.
+    static func moreThanThisAppCanUse(
+        modelName: String,
+        requiredBytes: UInt64?,
+        limitBytes: UInt64
+    ) -> String {
+        guard let requiredBytes, requiredBytes > 0, limitBytes > 0 else {
+            return "\(modelName) needs more memory than this iPhone can give ZiroEdge, "
+                + "even with nothing else open. Pick a smaller model."
+        }
+        return "\(modelName) needs about \(byteLabel(requiredBytes)) of memory, and this "
+            + "iPhone gives ZiroEdge about \(byteLabel(limitBytes)) even with nothing else "
+            + "open. Pick a smaller model."
+    }
+
+    /// One-line flag on a model page whose download is still on offer, when the
+    /// same page is about to say in full why the load will be refused. Kept
+    /// short so the warning can sit above the download button without repeating
+    /// the sentence below it.
+    static func cannotRunHereFlag(modelName: String) -> String {
+        "\(modelName) can't run on this iPhone."
     }
 
     /// The memory read failed. Say so instead of inventing a shortfall.

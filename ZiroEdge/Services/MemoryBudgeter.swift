@@ -5,13 +5,33 @@ import os
 protocol MemoryMetricsProviding: Sendable {
     func processAvailableMemory() -> UInt64
     func totalRAM() -> UInt64
+    /// The ceiling this process can ever reach: its jetsam limit. `0` means the
+    /// platform would not say, and no caller may claim a structural refusal
+    /// without it.
+    ///
+    /// Derived, not guessed: `os_proc_available_memory()` is documented as the
+    /// app's limit minus its current footprint, so limit = available +
+    /// phys_footprint. This is a *reporting* input only. It separates "you are
+    /// short right now" from "this iPhone will never give ZiroEdge that much",
+    /// and it never admits a load (required > limit implies required >
+    /// available, so every structural refusal was already a refusal).
+    func processMemoryLimit() -> UInt64
+}
+
+extension MemoryMetricsProviding {
+    func processMemoryLimit() -> UInt64 { 0 }
 }
 
 struct FixedMemoryMetricsProvider: MemoryMetricsProviding {
     let processAvailable: UInt64
     let total: UInt64
+    /// `0` (the default) keeps every existing fixture on the pre-ceiling path:
+    /// no test may start reporting a structural refusal by accident.
+    var processLimit: UInt64 = 0
+
     func processAvailableMemory() -> UInt64 { processAvailable }
     func totalRAM() -> UInt64 { total }
+    func processMemoryLimit() -> UInt64 { processLimit }
 }
 
 struct SystemMemoryMetricsProvider: MemoryMetricsProviding {
@@ -20,6 +40,25 @@ struct SystemMemoryMetricsProvider: MemoryMetricsProviding {
         var size: UInt64 = 0
         var sizeSize = MemoryLayout<UInt64>.size
         return sysctlbyname("hw.memsize", &size, &sizeSize, nil, 0) == 0 ? size : 0
+    }
+    func processMemoryLimit() -> UInt64 {
+        let available = UInt64(os_proc_available_memory())
+        guard available > 0, let footprint = Self.physicalFootprintBytes() else { return 0 }
+        return SaturatedArithmetic.add(available, footprint)
+    }
+
+    /// Jetsam accounts the same `phys_footprint` this reads; it is the term the
+    /// kernel subtracts before `os_proc_available_memory` answers.
+    static func physicalFootprintBytes() -> UInt64? {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+        let result = withUnsafeMutablePointer(to: &info) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+            }
+        }
+        guard result == KERN_SUCCESS else { return nil }
+        return info.phys_footprint
     }
 }
 
@@ -34,6 +73,10 @@ struct MemoryLoadDecision: Equatable, Sendable {
     /// the reclaimable credit used. Nil for pre-credit callers/tests.
     var projectedAvailableBytes: UInt64? = nil
     var reclaimableBytes: UInt64? = nil
+    /// The most this process can ever have (its jetsam limit), sampled with the
+    /// rest of the reading. `0` when the platform would not say. Reporting and
+    /// wording only — see `MemoryMetricsProviding.processMemoryLimit()`.
+    var appMemoryLimitBytes: UInt64 = 0
 
     /// A regression sentinel: admission never consumes download/storage byte counts.
     var artifactBytesUsedForAdmission: UInt64? { nil }
@@ -53,6 +96,7 @@ struct MemoryLoadDecision: Equatable, Sendable {
             "totalPhysicalBytes=\(totalPhysicalBytes)",
             "profileID=\(profileID ?? "unknown")",
             "requiredBytes=\(requiredBytes.map(String.init) ?? "unknown")",
+            "appMemoryLimitBytes=\(appMemoryLimitBytes)",
             "reason=\(reason?.rawValue ?? "none")",
         ].joined(separator: " ")
     }
@@ -79,6 +123,12 @@ struct MemoryLoadDecision: Equatable, Sendable {
             return ModelLoadCopy.memoryCheckUnavailable(modelName: modelName)
         case .physicalRAMBelowMinimum:
             return ModelLoadCopy.tooLargeForDevice(modelName: modelName)
+        case .moreThanThisAppCanUse:
+            return ModelLoadCopy.moreThanThisAppCanUse(
+                modelName: modelName,
+                requiredBytes: requiredBytes,
+                limitBytes: appMemoryLimitBytes
+            )
         case .postLoadReserveBreached:
             return ModelLoadCopy.wouldStarveDevice(modelName: modelName)
         case .insufficientProcessHeadroom:
@@ -129,6 +179,12 @@ enum MemoryAdmissionFailure: String, Sendable, Equatable {
     case consentRequired
     case physicalRAMBelowMinimum
     case insufficientProcessHeadroom
+    /// The shape's requirement exceeds this app's own memory limit, sampled as
+    /// available + footprint. A resident model cannot be unloaded to close this
+    /// gap and no other app is holding the memory: the process will never be
+    /// allowed to allocate that much on this device. Distinct from
+    /// `.insufficientProcessHeadroom`, whose remedy is to free memory now.
+    case moreThanThisAppCanUse
     case postLoadReserveBreached
     case profileDisabled
 }
@@ -148,6 +204,9 @@ private struct DeviceMemorySample {
     /// Headroom after the resident model is unloaded. Comparison-only.
     let projected: UInt64
     let total: UInt64
+    /// The most this process can ever have. `0` = unknown, which forbids a
+    /// structural refusal. Reporting only: it never admits a load.
+    let limit: UInt64
 }
 
 /// Profile-based model-load policy. The caller must complete unload/recovery before invoking `decision`.
@@ -333,7 +392,8 @@ actor MemoryBudgeter {
                 totalPhysicalBytes: metrics.totalRAM(),
                 profileID: MemoryProfileRegistry.profile(for: model)?.id,
                 requiredBytes: nil,
-                reason: .profileUnvalidated
+                reason: .profileUnvalidated,
+                appMemoryLimitBytes: metrics.processMemoryLimit()
             )
             lastDecision = refused
             return refused
@@ -354,6 +414,8 @@ actor MemoryBudgeter {
             Self.projectedAvailableAfterEviction(currentAvailable: processAvailable, reclaimableBytes: reclaimableBytes),
             total
         )
+        // Sampled with the same reading as headroom, and never used to admit.
+        let limit = metrics.processMemoryLimit()
         let verdict = Self.verdict(
             profile: profile,
             measuredRequired: try? profile?.requiredProcessHeadroomBytes(),
@@ -361,7 +423,8 @@ actor MemoryBudgeter {
             sample: DeviceMemorySample(
                 available: processAvailable,
                 projected: projected,
-                total: total
+                total: total,
+                limit: limit
             )
         )
         let recommendation = verdict.recommendation
@@ -376,7 +439,8 @@ actor MemoryBudgeter {
             requiredBytes: required,
             reason: reason,
             projectedAvailableBytes: projected,
-            reclaimableBytes: reclaimableBytes
+            reclaimableBytes: reclaimableBytes,
+            appMemoryLimitBytes: limit
         )
         lastDecision = decision
         // Fix verify (a): always log the calibration gate alongside the
@@ -427,6 +491,13 @@ actor MemoryBudgeter {
         // (proceed to teardown; the post-teardown hard gate re-samples with
         // zero credit). Both fail → insufficientRAM.
         func compare(_ required: UInt64) -> MemoryAdmissionVerdict {
+            // Structural first: a requirement above the process's own limit can
+            // never be met, so no headroom number is worth consulting. Reported
+            // as its own reason so the sentence a user reads says "this will not
+            // fit here" instead of advising them to free memory that is not there.
+            if sample.limit > 0, required > sample.limit {
+                return refuse(.moreThanThisAppCanUse, required: required)
+            }
             if sample.available >= required {
                 return MemoryAdmissionVerdict(recommendation: .proceed, reason: nil, requiredBytes: required)
             }

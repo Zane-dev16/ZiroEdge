@@ -39,6 +39,13 @@ final class ModelStatusCopyTests: XCTestCase {
             ),
             ModelLoadCopy.notEnoughMemory(modelName: modelName, requiredBytes: nil, availableBytes: 900_000_000),
             ModelLoadCopy.tooLargeForDevice(modelName: modelName),
+            ModelLoadCopy.moreThanThisAppCanUse(
+                modelName: modelName, requiredBytes: 4_550_000_000, limitBytes: 3_540_000_000
+            ),
+            ModelLoadCopy.moreThanThisAppCanUse(
+                modelName: modelName, requiredBytes: nil, limitBytes: 3_540_000_000
+            ),
+            ModelLoadCopy.cannotRunHereFlag(modelName: modelName),
             ModelLoadCopy.memoryCheckUnavailable(modelName: modelName),
             ModelLoadCopy.wouldStarveDevice(modelName: modelName),
             ModelLoadCopy.interruptedBySystem(),
@@ -59,6 +66,7 @@ final class ModelStatusCopyTests: XCTestCase {
         let cases: [RuntimeEligibility] = [.validated, .estimated, .experimental, .unavailable]
         return cases.map { RuntimeEligibilityCopy.detail(for: $0) }
             + cases.map { RuntimeEligibilityCopy.label(for: $0) }
+            + [RuntimeEligibilityCopy.refusedLabel]
     }
 
     /// Every sentence the damaged-download surface can produce.
@@ -165,6 +173,9 @@ final class ModelStatusCopyTests: XCTestCase {
             ModelLoadCopy.unreadableModelFile(modelName: modelName),
             ModelLoadCopy.memoryCheckUnavailable(modelName: modelName),
             ModelLoadCopy.tooLargeForDevice(modelName: modelName),
+            ModelLoadCopy.moreThanThisAppCanUse(
+                modelName: modelName, requiredBytes: 4_550_000_000, limitBytes: 3_540_000_000
+            ),
         ]
         XCTAssertEqual(Set(distinct).count, distinct.count, "each cause needs its own sentence")
     }

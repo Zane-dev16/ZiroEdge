@@ -19,6 +19,9 @@ struct ModelDetailView: View {
     /// Pops back to the chat root and selects this model (offered for
     /// downloaded models). Default no-op keeps previews compiling.
     var onStartChatting: (AIModel) -> Void = { _ in }
+    /// The admission verdict a load would get right now. Nil until the first
+    /// sample lands, so the page never flashes a refusal it has not measured.
+    @State private var outlook: MemoryLoadDecision?
 
     var body: some View {
         List {
@@ -33,6 +36,9 @@ struct ModelDetailView: View {
         .listRowBackground(ZiroTheme.raisedBackground)
         .navigationTitle(model.displayName)
         .navigationBarTitleDisplayMode(.inline)
+        .task(id: model.id) {
+            outlook = await viewModel.lifecycleManager.admissionOutlook(for: model)
+        }
         .alert("Load Safety", isPresented: $viewModel.showingSafetyResetResult) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -190,6 +196,27 @@ struct ModelDetailView: View {
         if !viewModel.isDownloaded(model) && !status.isDownloading {
             storageWarning
         }
+        memoryRefusalFlag
+    }
+
+    /// The verdict this page exists to stop hiding: admission will refuse this
+    /// row on this iPhone, and the download or Start Chatting control is still
+    /// on the page as if it would work. Same code path as the load, so the two
+    /// cannot disagree.
+    @ViewBuilder
+    private var memoryRefusalFlag: some View {
+        if refusal != nil {
+            Label(ModelLoadCopy.cannotRunHereFlag(modelName: model.displayName), systemImage: "exclamationmark.triangle.fill")
+                .font(ZiroType.caption)
+                .foregroundStyle(ZiroTheme.warningText)
+                .accessibilityIdentifier("modelMemoryRefusalFlag")
+        }
+    }
+
+    /// A refusal, as opposed to no verdict yet or a load the app will attempt.
+    private var refusal: MemoryLoadDecision? {
+        guard let outlook, outlook.recommendation == .insufficientRAM else { return nil }
+        return outlook
     }
 
     private func readyContent(_ status: ModelDownloadStatus) -> some View {
@@ -341,14 +368,34 @@ struct ModelDetailView: View {
     private var runtimeSection: some View {
         Section("Runtime Status") {
             LabeledContent("Mode") {
-                Text(model.runtimeEligibility.label)
+                Text(runtimeModeLabel)
                     .font(.subheadline)
-                    .foregroundStyle(eligibilityTint(model.runtimeEligibility))
+                    .foregroundStyle(runtimeModeTint)
+                    .accessibilityIdentifier("modelRuntimeMode")
             }
-            Text(model.runtimeEligibilityExplanation)
+            Text(runtimeExplanation)
                 .font(ZiroType.supporting)
                 .foregroundStyle(ZiroTheme.secondaryText)
+                .accessibilityIdentifier("modelRuntimeExplanation")
         }
+    }
+
+    private var runtimeModeLabel: String {
+        refusal == nil ? model.runtimeEligibility.label : RuntimeEligibilityCopy.refusedLabel
+    }
+
+    private var runtimeModeTint: Color {
+        refusal == nil ? eligibilityTint(model.runtimeEligibility) : ZiroTheme.warningText
+    }
+
+    /// When this iPhone has refused the row, the surface says the refusal with
+    /// the numbers it measured instead of promising the model is ready.
+    private var runtimeExplanation: String {
+        guard let refusal else { return model.runtimeEligibilityExplanation }
+        return refusal.alertMessage(
+            modelName: model.displayName,
+            priorActive: viewModel.lifecycleManager.activeModel
+        )
     }
 
     // MARK: - Child Pages

@@ -170,6 +170,72 @@ final class MemoryBudgeterTests: XCTestCase {
         XCTAssertEqual(metrics.processAvailableCallCount, 2)
     }
 
+    // MARK: - Structural refusal: more than this app can ever use
+
+    /// E4B vision needs 4.55 GB by estimate. On an 8 GB iPhone this process is
+    /// allowed about 3.5 GB, so no resident model can be unloaded and no other
+    /// app is holding the difference. The verdict says so, instead of advising
+    /// the user to free memory that can never be enough.
+    func testRequirementAboveProcessLimitRefusesAsMoreThanThisAppCanUse() async {
+        let decision = await MemoryBudgeter(
+            metrics: FixedMemoryMetricsProvider(
+                processAvailable: 3_490_000_000,
+                total: 8_054_095_872,
+                processLimit: 3_540_000_000
+            )
+        ).decision(for: ModelRegistry.gemma4_e4b)
+
+        XCTAssertEqual(decision.recommendation, .insufficientRAM)
+        XCTAssertEqual(decision.reason, .moreThanThisAppCanUse)
+        XCTAssertEqual(decision.requiredBytes, 4_550_000_000)
+        XCTAssertEqual(decision.appMemoryLimitBytes, 3_540_000_000)
+    }
+
+    /// Same requirement, a limit above it: the shortfall is something the user
+    /// can close right now, so it keeps the headroom refusal. That distinction
+    /// is what the two sentences rest on.
+    func testShortfallBelowProcessLimitStaysAHeadroomRefusal() async {
+        let decision = await MemoryBudgeter(
+            metrics: FixedMemoryMetricsProvider(
+                processAvailable: 3_490_000_000,
+                total: 8_054_095_872,
+                processLimit: 5_500_000_000
+            )
+        ).decision(for: ModelRegistry.gemma4_e4b)
+
+        XCTAssertEqual(decision.reason, .insufficientProcessHeadroom)
+        XCTAssertEqual(decision.requiredBytes, 4_550_000_000)
+    }
+
+    /// Unknown limit (every pre-ceiling fixture) must not invent a structural
+    /// refusal: `0` means "the platform did not say", never "there is no room".
+    func testUnknownProcessLimitNeverClaimsStructuralRefusal() async {
+        let decision = await MemoryBudgeter(
+            metrics: FixedMemoryMetricsProvider(processAvailable: 3_490_000_000, total: 8_054_095_872)
+        ).decision(for: ModelRegistry.gemma4_e4b)
+
+        XCTAssertEqual(decision.reason, .insufficientProcessHeadroom)
+        XCTAssertEqual(decision.appMemoryLimitBytes, 0)
+    }
+
+    /// The structural sentence names both numbers and never sends the user to
+    /// close apps, because no app is holding the memory.
+    func testStructuralRefusalSentenceNamesTheLimitAndOffersNoFalseRemedy() async {
+        let decision = await MemoryBudgeter(
+            metrics: FixedMemoryMetricsProvider(
+                processAvailable: 3_490_000_000,
+                total: 8_054_095_872,
+                processLimit: 3_540_000_000
+            )
+        ).decision(for: ModelRegistry.gemma4_e4b)
+
+        let message = decision.alertMessage(modelName: "Gemma 4 E4B")
+        XCTAssertTrue(message.contains(ModelLoadCopy.byteLabel(4_550_000_000)), message)
+        XCTAssertTrue(message.contains(ModelLoadCopy.byteLabel(3_540_000_000)), message)
+        XCTAssertFalse(message.lowercased().contains("close other apps"), message)
+        XCTAssertTrue(ModelCopyPolicy.violations(in: message).isEmpty, message)
+    }
+
     // MARK: - P1-4 malformed sizes fail closed
 
     /// Negative base bytes can never admit, even with ample headroom.
