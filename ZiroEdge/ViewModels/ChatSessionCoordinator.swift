@@ -56,7 +56,7 @@ final class ChatSessionCoordinator {
     private var chunks: [String] = []
     var streamedCharacterCount = 0
     private var pendingFlush: Task<Void, Never>?
-    private var lastFlushMs: UInt64 = Self.nowMs()
+    private var lastFlushMs: UInt64 = 0
     /// Flush when this many tokens accumulate (legacy streamingChunkThreshold).
     private static let chunkThreshold = 20
     /// Or when this many ms elapsed (legacy streamingFlushIntervalMs).
