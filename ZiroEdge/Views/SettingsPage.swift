@@ -329,6 +329,7 @@ private func previewLoadSafetyStore() -> LoadSafetyStore {
 }
 #endif
 
+#if DEBUG
 #Preview {
     NavigationStack {
         SettingsPage(
@@ -356,3 +357,4 @@ private func previewLoadSafetyStore() -> LoadSafetyStore {
         )
     }
 }
+#endif
