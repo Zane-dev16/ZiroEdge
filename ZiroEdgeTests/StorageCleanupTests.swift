@@ -298,6 +298,31 @@ final class StorageCleanupTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: freshQuarantine.path))
     }
 
+    /// A repair marker is keyed by model ID, so once that row leaves the
+    /// catalog nothing can read or clear it again. The launch sweep is the one
+    /// place that already knows every live identity, so it owns this rule —
+    /// only unowned markers are removed; a live row's marker is its own state.
+    func testReclaimRemovesOnlyDamageMarkersWithNoLiveOwner() throws {
+        ModelMigrationService.ensureManagedDirectories()
+        let root = ModelManagerService.managedStorageDirectory
+        let orphan = root.appendingPathComponent(".repair-needed-removed-catalog-row")
+        let live = root.appendingPathComponent(".repair-needed-\(ModelRegistry.llama32_3B.id)")
+        try Data("1".utf8).write(to: orphan, options: .atomic)
+        try Data("1".utf8).write(to: live, options: .atomic)
+        defer { try? FileManager.default.removeItem(at: live) }
+
+        _ = downloadManager.reclaimOrphanedStorage()
+
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: orphan.path),
+            "a marker whose row is gone can never be read again; it must not survive launch"
+        )
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: live.path),
+            "a live row's repair marker is the row's own state and must survive"
+        )
+    }
+
     // MARK: - Managed Storage Breakdown
 
     func testManagedStorageBreakdownHasAllCategories() {

@@ -79,6 +79,10 @@ extension DownloadManager {
             }
         }
         reclaimed += reclaimOrphanedInstalledArtifacts()
+        let markers = ModelManagerService.reclaimOrphanedDamageMarkers()
+        if markers > 0 {
+            logger.info("Reclaimed \(markers) orphaned damage marker(s)")
+        }
         if reclaimed > 0 { scheduleStorageBreakdownRefresh() }
         return reclaimed
     }

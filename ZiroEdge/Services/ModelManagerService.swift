@@ -244,6 +244,10 @@ enum ModelManagerService {
         preservingReferences references: [AIModel] = []
     ) {
         let fm = FileManager.default
+        // The repair marker describes this row's artifacts. Deleting the row's
+        // artifacts without it leaves a row whose only remaining state says
+        // "download again" — the residue outlives the thing it describes.
+        clearDamaged(for: model)
         let otherReferences = references.filter { $0.id != model.id }
         let baseIsReferenced = otherReferences.contains {
             $0.baseArtifactStorageID == model.baseArtifactStorageID
@@ -269,6 +273,7 @@ enum ModelManagerService {
     /// the same before and after the registry swap.
     static func deleteReplacedArtifacts(previous: AIModel, retaining replacement: AIModel) {
         let fm = FileManager.default
+        clearDamaged(for: previous)
         let previousBasePath = baseModelPath(for: previous)
         if previousBasePath != baseModelPath(for: replacement),
            !isBaseArtifactShared(previous) {
@@ -677,6 +682,30 @@ extension ModelManagerService {
         let marker = managedStorageDirectory
             .appendingPathComponent("\(damageMarkerPrefix)\(model.id)")
         try? FileManager.default.removeItem(at: marker)
+    }
+
+    /// Remove repair markers whose model is no longer in the catalog. The
+    /// marker is keyed by model ID, so once a row is removed or renamed the
+    /// marker can never be read or cleared again. Only markers with no owner
+    /// are touched: a marker for a live row is that row's own state.
+    @discardableResult
+    static func reclaimOrphanedDamageMarkers() -> Int {
+        let knownIDs = Set(
+            (ModelRegistry.transferModels + ModelRegistry.calibrationModels).map(\.id)
+        )
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            atPath: managedStorageDirectory.path
+        ) else { return 0 }
+        var removed = 0
+        for name in entries where name.hasPrefix(damageMarkerPrefix) {
+            let modelID = String(name.dropFirst(damageMarkerPrefix.count))
+            guard !knownIDs.contains(modelID) else { continue }
+            let marker = managedStorageDirectory.appendingPathComponent(name)
+            guard (try? FileManager.default.removeItem(at: marker)) != nil else { continue }
+            removed += 1
+            logger.info("Removed orphaned damage marker: \(name, privacy: .public)")
+        }
+        return removed
     }
 }
 
