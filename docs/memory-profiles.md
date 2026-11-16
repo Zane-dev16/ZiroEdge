@@ -6,7 +6,12 @@ Runtime memory admission is independent of GGUF and projector download sizes. Ar
 
 Runtime is auto-tiered: full Metal GPU offload on 8GB+ devices, CPU-only below (`ModelConfiguration.autoGpuLayers()`). Each tier is a separate runtime shape with independent evidence — an uncalibrated Metal shape fails closed to CPU instead of refusing a load CPU could serve.
 
-One family is exempt from the tier: **Gemma 4 E4B** (vision and text) is pinned to `gpuLayers: 0` on every device, and registers no Metal shape at all. Its base artifact is 4.97 GB, and full offload of that is admitted by the RAM tier and then dies at the first decode:
+Removed from the catalog 2026-11-15: **Gemma 4 E4B** (vision and text) no
+longer ships. The 5.34 GB base could not load on an 8 GB iPhone (vision
+refused by admission; text kept the base alive for no runtime). What follows
+is retained as measurement history for why it was removed.
+
+One family was exempt from the tier: **Gemma 4 E4B** (vision and text) was pinned to `gpuLayers: 0` on every device, and registered no Metal shape at all. Its base artifact is 4.97 GB, and full offload of that is admitted by the RAM tier and then dies at the first decode:
 
 ```
 error: Insufficient Memory (00000008:kIOGPUCommandBufferCallbackErrorOutOfMemory)
@@ -62,13 +67,15 @@ When replacing an already loaded model, native unload must finish and a five-sec
 | Profile | Runtime shape | Evidence | Production |
 | --- | --- | --- | --- |
 | Gemma 4 E2B vision | projector required, context 4096, batch 512, microbatch 128 | Accepted on target `00008140-000178A1362B001C`: five measured cycles, 20 text prompts, five image turns, background/foreground, peak delta 798,559,232 bytes, required headroom 1,750,000,000 bytes | Validated |
-| Gemma 4 E4B text calibration | no projector, context 512, batch 256, microbatch 64, mmap enabled, CPU settings unchanged | Unvalidated | Disabled (calibration only) |
-| Gemma 4 E4B vision | projector required, context 4096, batch 512, microbatch 128, CPU-pinned | Unvalidated | Estimated (refused on this device: 4.55 GB needed, ~3.54 GB is this app's ceiling) |
 | Llama 3.2 3B text | context 4096, batch 512, microbatch 128 | Unvalidated | Estimated |
 | Llama 3.2 3B text, Metal offload | as above, full Metal offload | Unvalidated | Estimated |
 | Gemma 4 E2B vision, Metal offload | as above, full Metal offload | Unvalidated | Estimated (validated CPU shape is served instead) |
-| Gemma 4 E4B text | no projector, context 512, batch 256, microbatch 64, CPU-pinned | Unvalidated | Estimated (measured load + one generation, 2026-11-12) |
-| LFM 2.5 1.2B / 2.6B, Qwen 3.5 2B / 0.8B, Bonsai 8B / 4B (CPU and Metal) | `curatedText4K`: context 4096, batch 512, microbatch 128 | Unvalidated | Estimated |
+| LFM 2.5 1.2B, Qwen 3.5 2B / 0.8B, Bonsai 4B (CPU and Metal) | `curatedText4K`: context 4096, batch 512, microbatch 128 | Unvalidated | Estimated |
+
+Removed 2026-11-15 (kept here as history): Gemma 4 E4B text/vision and their
+calibration identity; LFM 2.5 2.6B (deprecated upstream, fails the usage
+quality gate); Bonsai 8B (fails the usage quality gate). No two surviving
+catalog rows share a base artifact.
 
 When one model has several shapes, the strongest evidence wins before the faster shape does: a validated CPU shape keeps serving instead of being displaced by an estimated Metal shape. Once a Metal shape earns experimental or validated evidence it selects automatically with no code change.
 
@@ -165,6 +172,10 @@ surface now says so before the download, using the admission verdict itself
 rather than a second heuristic (`ModelDetailView.runtimeSection`).
 
 ## Physical calibration
+
+> Retired 2026-11-15: the E4B calibration identity was removed with the
+> catalog rows. The workflow below is retained as a template for calibrating
+> any future row; substitute a surviving model id for `e4b`.
 
 Calibration is DEBUG-only and never appears in Release. The E4B text identity reuses ZiroEdge's registered and SHA-256-verified base artifact in its own managed container. It does not copy data from another app and does not request a projector.
 

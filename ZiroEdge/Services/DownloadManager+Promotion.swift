@@ -206,9 +206,9 @@ extension DownloadManager {
     }
 
     /// Clear repair markers for every catalog identity sharing this model's
-    /// installed base artifact. E4B vision + E4B text share one base file, so
-    /// clearing only the promoted identity would leave a stale sibling marker
-    /// (and a phantom repair banner) behind.
+    /// installed base artifact. (No curated rows share a base today; imported
+    /// rows may.) Clearing only the promoted identity would leave a stale
+    /// sibling marker (and a phantom repair banner) behind.
     func clearRepairMarkersForSharedBase(of model: AIModel) {
         let siblings = ModelRegistry.libraryModels.filter {
             $0.baseArtifactStorageID == model.baseArtifactStorageID

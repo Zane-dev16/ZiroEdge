@@ -224,7 +224,7 @@ class UITestBase: XCTestCase {
         sleep(1) // Wait for menu popup
 
         // The menu shows available models as buttons. Tap the first one.
-        // Model names include "Gemma 4 E2B", "Gemma 4 E4B", etc.
+        // Model names include "Gemma 4 E2B", "Llama 3.2 3B", etc.
         let firstModel = app.buttons.containing(NSPredicate(format: "label CONTAINS 'Gemma'")).firstMatch
         if firstModel.waitForExistence(timeout: 3) {
             firstModel.tap()

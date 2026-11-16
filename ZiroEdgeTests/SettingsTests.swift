@@ -136,8 +136,7 @@ final class SettingsTests: XCTestCase {
         XCTAssertTrue(notice.contains("## llama.cpp"))
         XCTAssertTrue(notice.contains("Llama 3.2 3B"))
         XCTAssertTrue(notice.contains("Gemma 4 E2B"))
-        XCTAssertTrue(notice.contains("Gemma 4 E4B"))
-        XCTAssertEqual(notice.components(separatedBy: "### Gemma 4 E4B").count - 1, 1)
+        XCTAssertFalse(notice.contains("Gemma 4 E4B"))
     }
 
     func testDownloadDiagnosticsRedactURLsCredentialsPathsAndConversationFields() {

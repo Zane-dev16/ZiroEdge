@@ -124,9 +124,7 @@ final class ModelTests: UITestBase {
         // Size-ordered smallest-first so early iterations validate fast.
         try proveCuratedModelDownload(name: "Bonsai 4B", tag: "bonsai4b", downloadTimeout: 2400)
         try proveCuratedModelDownload(name: "LFM 2.5 1.2B", tag: "lfm12b", downloadTimeout: 2400)
-        try proveCuratedModelDownload(name: "Bonsai 8B", tag: "bonsai8b", downloadTimeout: 3600)
         try proveCuratedModelDownload(name: "Qwen 3.5 2B", tag: "qwen2b", downloadTimeout: 3600)
-        try proveCuratedModelDownload(name: "LFM 2.5 2.6B", tag: "lfm26b", downloadTimeout: 4200)
 #endif
     }
 
@@ -346,7 +344,7 @@ final class ModelTests: UITestBase {
 
     private func requireOfflineLayer() throws {
         guard ProcessInfo.processInfo.environment["ZIROEDGE_REQUIRE_OFFLINE_MODELS"] == "1" else {
-            throw XCTSkip("E2B/E4B checks run only in the physical offline layer")
+            throw XCTSkip("E2B checks run only in the physical offline layer")
         }
     }
 
@@ -405,35 +403,6 @@ final class ModelTests: UITestBase {
         capture("e2b_model_installed")
     }
 
-    /// Verify E4B model is installed and can be loaded.
-    /// Fails if E4B is not found — this layer requires it.
-    func testE4BModelInstalledAndLoadable() throws {
-        try requireOfflineLayer()
-        guard openModels() else {
-            XCTFail("Cannot navigate to Models view")
-            return
-        }
-
-        let e4bCell = app.tables.cells.containing(
-            NSPredicate(format: "label CONTAINS[c] 'E4B'")
-        ).firstMatch
-
-        guard e4bCell.waitForExistence(timeout: 5) else {
-            XCTFail("E4B model not found on device — required for offline layer")
-            return
-        }
-
-        e4bCell.tap()
-        capture("e4b_model_detail")
-
-        let installed = app.staticTexts["Installed"].firstMatch
-        XCTAssertTrue(
-            installed.exists,
-            "E4B model must show as Installed for offline layer"
-        )
-        capture("e4b_model_installed")
-    }
-
     /// Verify E2B model produces a text response.
     /// Fails if model does not respond — this layer requires functional inference.
     func testE2BTextResponse() throws {
@@ -451,22 +420,6 @@ final class ModelTests: UITestBase {
         capture("e2b_text_response")
     }
 
-    /// Verify E4B model produces a text response.
-    /// Fails if model does not respond — this layer requires functional inference.
-    func testE4BTextResponse() throws {
-        try requireOfflineLayer()
-        guard selectChatModel(containing: "E4B") else {
-            XCTFail("Could not select E4B for the offline response test")
-            return
-        }
-
-        sendChatMessage("Reply with exactly: E4B_OK")
-        capture("e4b_text_prompt_sent")
-
-        let responded = waitForResponse(timeout: 120)
-        XCTAssertTrue(responded, "E4B model must produce a text response for offline layer")
-        capture("e4b_text_response")
-    }
 }
 
 // MARK: - Import deletion

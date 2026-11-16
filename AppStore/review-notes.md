@@ -43,12 +43,12 @@ ZiroEdge performs **all AI inference locally on the device** using llama.cpp, an
 ### 6. Required Device Capabilities
 
 - iOS 18.0 or later
-- At least 4 GB RAM recommended for the smallest model (Gemma 4 E2B Text ~3.4 GB download, ~3.7 GB loaded)
-- Sufficient free storage for model downloads (models range from ~1.6 GB to ~54 GB)
+- At least 4 GB RAM recommended for the smallest model (Bonsai 4B ~0.6 GB download)
+- Sufficient free storage for model downloads (models range from ~0.6 GB to ~4.0 GB)
 
 ### 7. Known Limitations (Not Blockers)
 
-- **Model download size**: Larger models (e.g., Gemma 4 E4B at ~8 GB) may exceed cellular download limits. The app recommends Wi-Fi but does not enforce it — this is intentional to respect user choice.
+- **Model download size**: Larger models (e.g., Gemma 4 E2B at ~4 GB) may exceed cellular download limits. The app recommends Wi-Fi but does not enforce it — this is intentional to respect user choice.
 - **Memory management**: Under extreme memory pressure, iOS may terminate the app. This is expected behavior — the app restores state on relaunch.
 - **First-load time**: The first model load after download takes 4–10 seconds depending on model size, as the engine performs a one-time initialization.
 

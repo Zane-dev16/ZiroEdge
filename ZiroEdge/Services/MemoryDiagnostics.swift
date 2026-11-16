@@ -128,12 +128,11 @@ enum MemorySnapshotReader {
 final class MemoryDiagnosticRecorder: @unchecked Sendable {
     static let shared = MemoryDiagnosticRecorder()
 #if DEBUG
-    static let defaultTargetModelID = "gemma-4-e4b-q4-text-calibration"
+    static let defaultTargetModelID = "llama3.2-3b-q4"
     static let allowedTargetModelIDs = [
         defaultTargetModelID,
-        "llama3.2-3b-q4",
         "gemma-4-e2b-q4",
-        "gemma-4-e4b-q4"
+        "lfm2.5-1.2b-q4",
     ]
 
     static var targetModelID: String {

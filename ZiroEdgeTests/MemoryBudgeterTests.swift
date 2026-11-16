@@ -33,27 +33,28 @@ final class MemoryBudgeterTests: XCTestCase {
     func testZeroProcessHeadroomFailsClosed() async {
         let decision = await MemoryBudgeter(
             metrics: FixedMemoryMetricsProvider(processAvailable: 0, total: 128_000_000_000)
-        ).decision(for: ModelRegistry.gemma4E4BTextCalibration, allowUnvalidatedCalibration: true)
+        ).decision(for: ModelRegistry.llama32_3B)
 
         XCTAssertEqual(decision.recommendation, .insufficientRAM)
         XCTAssertEqual(decision.reason, .metricsUnavailable)
     }
 
-    func testPhysicalRAMMinimumIsEnforcedForCalibration() async {
+    func testPhysicalRAMMinimumIsEnforcedForLargeModel() async {
         let decision = await MemoryBudgeter(
             metrics: FixedMemoryMetricsProvider(processAvailable: 4_000_000_000, total: 6_000_000_000)
-        ).decision(for: ModelRegistry.gemma4E4BTextCalibration, allowUnvalidatedCalibration: true)
+        ).decision(for: ModelRegistry.gemma4_e2b)
 
         XCTAssertEqual(decision.reason, .physicalRAMBelowMinimum)
     }
 
     func testDecisionOwnsFormattingAndUnvalidatedWording() async {
+        let model = ModelRegistry.allModels.first { $0.id == "qwen3.5-2b-q4" }!
         let decision = await MemoryBudgeter(
             metrics: FixedMemoryMetricsProvider(processAvailable: 1_000_000_000, total: 8_054_095_872)
-        ).decision(for: ModelRegistry.gemma4E4BTextCalibration)
+        ).decision(for: model)
 
-        // The calibration identity has no estimate by design, so the refusal is
-        // a plain "couldn't start" — never internal vocabulary.
+        // An unvalidated lineup estimate still refuses in plain user wording —
+        // never internal vocabulary.
         let message = decision.alertMessage(modelName: "Fixture")
         XCTAssertTrue(ModelCopyPolicy.violations(in: message).isEmpty, message)
         XCTAssertFalse(message.contains("calibration"))
@@ -63,7 +64,7 @@ final class MemoryBudgeterTests: XCTestCase {
     func testSettingsFormattingReusesLatestDecisionSample() async {
         let metrics = CountingMemoryMetricsProvider(processAvailable: 2_500_000_000, total: 8_054_095_872)
         let budgeter = MemoryBudgeter(metrics: metrics)
-        let decision = await budgeter.decision(for: ModelRegistry.gemma4E4BTextCalibration)
+        let decision = await budgeter.decision(for: ModelRegistry.gemma4_e2b)
         let displayedHeadroom = await budgeter.formattedAppMemoryHeadroom()
 
         XCTAssertEqual(displayedHeadroom, decision.formattedAppMemoryHeadroom)
@@ -162,8 +163,7 @@ final class MemoryBudgeterTests: XCTestCase {
     func testP1PersistentZeroMetricsFailClosedAfterOneRetry() async {
         let metrics = CountingMemoryMetricsProvider(processAvailable: 0, total: 128_000_000_000)
         let decision = await MemoryBudgeter(metrics: metrics).decision(
-            for: ModelRegistry.gemma4E4BTextCalibration,
-            allowUnvalidatedCalibration: true
+            for: ModelRegistry.llama32_3B
         )
         XCTAssertEqual(decision.recommendation, .insufficientRAM)
         XCTAssertEqual(decision.reason, .metricsUnavailable)
@@ -172,47 +172,61 @@ final class MemoryBudgeterTests: XCTestCase {
 
     // MARK: - Structural refusal: more than this app can ever use
 
-    /// E4B vision needs 4.55 GB by estimate. On an 8 GB iPhone this process is
-    /// allowed about 3.5 GB, so no resident model can be unloaded and no other
-    /// app is holding the difference. The verdict says so, instead of advising
-    /// the user to free memory that can never be enough.
+    /// A large estimate on a small-process device can never fit: no resident
+    /// model can be unloaded and no other app is holding the difference. The
+    /// verdict says so, instead of advising the user to free memory that can
+    /// never be enough. (Previously exercised with E4B vision's 4.55 GB estimate.)
     func testRequirementAboveProcessLimitRefusesAsMoreThanThisAppCanUse() async {
+        let model = ModelRegistry.allModels.first { $0.id == "qwen3.5-2b-q4" }!
+        guard let profile = MemoryProfileRegistry.profile(for: model),
+              let required = try? profile.estimatedRequiredProcessHeadroomBytes() else {
+            XCTFail("lineup estimate must exist"); return
+        }
         let decision = await MemoryBudgeter(
             metrics: FixedMemoryMetricsProvider(
                 processAvailable: 3_490_000_000,
                 total: 8_054_095_872,
-                processLimit: 3_540_000_000
+                processLimit: required - 200_000_000
             )
-        ).decision(for: ModelRegistry.gemma4_e4b)
+        ).decision(for: model)
 
         XCTAssertEqual(decision.recommendation, .insufficientRAM)
         XCTAssertEqual(decision.reason, .moreThanThisAppCanUse)
-        XCTAssertEqual(decision.requiredBytes, 4_550_000_000)
-        XCTAssertEqual(decision.appMemoryLimitBytes, 3_540_000_000)
+        XCTAssertEqual(decision.requiredBytes, required)
     }
 
     /// Same requirement, a limit above it: the shortfall is something the user
     /// can close right now, so it keeps the headroom refusal. That distinction
     /// is what the two sentences rest on.
     func testShortfallBelowProcessLimitStaysAHeadroomRefusal() async {
+        let model = ModelRegistry.allModels.first { $0.id == "qwen3.5-2b-q4" }!
+        guard let profile = MemoryProfileRegistry.profile(for: model),
+              let required = try? profile.estimatedRequiredProcessHeadroomBytes() else {
+            XCTFail("lineup estimate must exist"); return
+        }
         let decision = await MemoryBudgeter(
             metrics: FixedMemoryMetricsProvider(
-                processAvailable: 3_490_000_000,
+                processAvailable: required - 100_000_000,
                 total: 8_054_095_872,
-                processLimit: 5_500_000_000
+                processLimit: required + 1_000_000_000
             )
-        ).decision(for: ModelRegistry.gemma4_e4b)
+        ).decision(for: model)
 
         XCTAssertEqual(decision.reason, .insufficientProcessHeadroom)
-        XCTAssertEqual(decision.requiredBytes, 4_550_000_000)
+        XCTAssertEqual(decision.requiredBytes, required)
     }
 
     /// Unknown limit (every pre-ceiling fixture) must not invent a structural
     /// refusal: `0` means "the platform did not say", never "there is no room".
     func testUnknownProcessLimitNeverClaimsStructuralRefusal() async {
+        let model = ModelRegistry.allModels.first { $0.id == "qwen3.5-2b-q4" }!
+        guard let profile = MemoryProfileRegistry.profile(for: model),
+              let required = try? profile.estimatedRequiredProcessHeadroomBytes() else {
+            XCTFail("lineup estimate must exist"); return
+        }
         let decision = await MemoryBudgeter(
-            metrics: FixedMemoryMetricsProvider(processAvailable: 3_490_000_000, total: 8_054_095_872)
-        ).decision(for: ModelRegistry.gemma4_e4b)
+            metrics: FixedMemoryMetricsProvider(processAvailable: required - 100_000_000, total: 8_054_095_872)
+        ).decision(for: model)
 
         XCTAssertEqual(decision.reason, .insufficientProcessHeadroom)
         XCTAssertEqual(decision.appMemoryLimitBytes, 0)
@@ -221,17 +235,23 @@ final class MemoryBudgeterTests: XCTestCase {
     /// The structural sentence names both numbers and never sends the user to
     /// close apps, because no app is holding the memory.
     func testStructuralRefusalSentenceNamesTheLimitAndOffersNoFalseRemedy() async {
+        let model = ModelRegistry.allModels.first { $0.id == "qwen3.5-2b-q4" }!
+        guard let profile = MemoryProfileRegistry.profile(for: model),
+              let required = try? profile.estimatedRequiredProcessHeadroomBytes() else {
+            XCTFail("lineup estimate must exist"); return
+        }
+        let limit = required - 200_000_000
         let decision = await MemoryBudgeter(
             metrics: FixedMemoryMetricsProvider(
                 processAvailable: 3_490_000_000,
                 total: 8_054_095_872,
-                processLimit: 3_540_000_000
+                processLimit: limit
             )
-        ).decision(for: ModelRegistry.gemma4_e4b)
+        ).decision(for: model)
 
-        let message = decision.alertMessage(modelName: "Gemma 4 E4B")
-        XCTAssertTrue(message.contains(ModelLoadCopy.byteLabel(4_550_000_000)), message)
-        XCTAssertTrue(message.contains(ModelLoadCopy.byteLabel(3_540_000_000)), message)
+        let message = decision.alertMessage(modelName: model.displayName)
+        XCTAssertTrue(message.contains(ModelLoadCopy.byteLabel(required)), message)
+        XCTAssertTrue(message.contains(ModelLoadCopy.byteLabel(limit)), message)
         XCTAssertFalse(message.lowercased().contains("close other apps"), message)
         XCTAssertTrue(ModelCopyPolicy.violations(in: message).isEmpty, message)
     }

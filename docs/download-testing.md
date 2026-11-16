@@ -58,9 +58,6 @@ override func tearDown() {
     for model in ModelRegistry.allModels {
         ModelManagerService.deleteModel(model)
     }
-    try? FileManager.default.removeItem(
-        at: ModelManagerService.baseModelPath(for: ModelRegistry.gemma4_e4b)
-    )
     downloadManager = nil
     super.tearDown()
 }
@@ -82,14 +79,16 @@ operations.
 
 ### 2.4 Shared Artifact Awareness
 
-Tests explicitly verify that shared base artifacts are not double-freed:
+Tests explicitly verify that shared base artifacts are not double-freed,
+using synthetic imported pairs sharing one digest (no catalog rows share a
+base since the E4B pair was removed 2026-11-15):
 
-- `DeletingE4BTextPreservesBaseUsedByVision`: deleting the E2B text model leaves
-  the shared base GGUF intact when E4B vision still references it
-- `DeletingE4BVisionPreservesBaseUsedByTextAndDeletesProjector`: deleting the E4B
-  vision model removes the projector but preserves the shared base
-- `E4BTextAndVisionCannotClaimTwoBaseWriters`: verifies shared artifact write
-  coordination
+- `testDeletingSharedBaseSiblingPreservesBase`: deleting one variant leaves
+  the shared base GGUF intact while its sibling still references it
+- `testDeletingUnsharedVisionRemovesBaseAndProjector`: deleting an unshared
+  vision model (E2B) removes both artifacts
+- `testSharedBaseSiblingsCannotClaimTwoBaseWriters`: verifies shared artifact
+  write coordination
 
 ---
 
@@ -181,9 +180,9 @@ Before any physical-device download test, the test environment must:
 - `VisionModelWithOnlyValidMMProjIsNotInstalled` — partial ≠ installed
 - `TextModelWithValidArtifactIsInstalled` — text model: base alone = ready
 - `OptionalVisionProductIsTextReadyWithBaseButNotVisionReady` — text-only capability flag
-- `DeletingE4BTextPreservesBaseUsedByVision` — shared artifact safety
-- `DeletingE4BVisionPreservesBaseUsedByTextAndDeletesProjector` — shared artifact safety
-- `E4BTextAndVisionCannotClaimTwoBaseWriters` — write coordination
+- `testDeletingSharedBaseSiblingPreservesBase` — shared artifact safety
+- `testDeletingUnsharedVisionRemovesBaseAndProjector` — shared artifact safety
+- `testSharedBaseSiblingsCannotClaimTwoBaseWriters` — write coordination
 
 ### Offline Verification
 - `DownloadStatusCheckUsesFileManagerOnly` — no network in status check

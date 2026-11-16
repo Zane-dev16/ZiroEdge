@@ -179,8 +179,8 @@ current destination is valid. If valid, the backup is discarded. If the destinat
 is invalid but the backup is valid, the backup is restored.
 
 **Regression tests:** `InjectedPromotionFailurePreservesVerifiedInstallationByteForByte`,
-`DeleteModelClearsStatus`, `DeletingE4BTextPreservesBaseUsedByVision`,
-`DeletingE4BVisionPreservesBaseUsedByTextAndDeletesProjector`
+`DeleteModelClearsStatus`, `testDeletingSharedBaseSiblingPreservesBase`,
+`testDeletingUnsharedVisionRemovesBaseAndProjector`, `testSharedBaseSiblingsCannotClaimTwoBaseWriters`
 
 ---
 

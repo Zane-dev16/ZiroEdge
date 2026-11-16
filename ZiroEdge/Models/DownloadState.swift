@@ -306,7 +306,7 @@ struct ModelDownloadStatus: Sendable, Hashable {
         // incomplete — never complete. E2B text-ready base-only already
         // returned `.downloaded` via `isReady` above; this branch only runs
         // when `!isReady`, i.e. the projector is genuinely still required
-        // (E4B and every non-`allowsTextOnly` vision pair). Surfacing
+        // (every non-`allowsTextOnly` vision pair). Surfacing
         // `.notDownloaded` keeps repair banners and retry paths reachable
         // instead of masking the gap as installed.
         if let mmprojState, baseState.isDownloaded, mmprojState == .notDownloaded, !isReady {

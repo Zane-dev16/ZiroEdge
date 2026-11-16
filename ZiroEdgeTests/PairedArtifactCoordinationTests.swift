@@ -200,9 +200,10 @@ final class PairedArtifactCoordinationTests: XCTestCase {
         XCTAssertFalse(status.isVisionReady, "E2B without projector should not be vision ready")
     }
 
-    func testE4BVisionModelIsNotReadyWithoutProjector() {
-        // gemma-4-e4b-q4 does NOT have allowsTextOnlyCapability
-        let model = ModelRegistry.gemma4_e4b
+    func testVisionModelIsNotReadyWithoutProjector() {
+        // A vision row without text-only capability is not ready without its projector.
+        let model = visionFixture()
+        XCTAssertFalse(model.allowsTextOnlyCapability)
         let status = ModelDownloadStatus(
             modelID: model.id,
             baseState: .downloaded,
@@ -211,7 +212,7 @@ final class PairedArtifactCoordinationTests: XCTestCase {
             mmprojExpectedBytes: model.mmprojFileSizeBytes,
             allowsTextOnly: model.allowsTextOnlyCapability
         )
-        XCTAssertFalse(status.isReady, "E4B vision model without projector must not be ready")
+        XCTAssertFalse(status.isReady, "Vision model without projector must not be ready")
         XCTAssertFalse(status.isVisionReady)
     }
 
@@ -392,14 +393,33 @@ final class PairedArtifactCoordinationTests: XCTestCase {
 
     // MARK: - Stable Identity Across Shared Base Artifacts
 
-    func testE4BTextAndE4BVisionShareBaseArtifactIdentity() {
-        let vision = ModelRegistry.gemma4_e4b
-        let text = ModelRegistry.gemma4_e4b_text
+    func testSharedDigestVariantsShareBaseArtifactIdentity() {
+        // Two imported rows with the same digest share one baseArtifactStorageID.
+        let digest = String(repeating: "f", count: 64)
+        var first = textFixture(bytes: validGGUFData(length: 16))
+        first.source = .huggingFace(HuggingFaceProvenance(
+            repositoryID: "test/shared-base",
+            revision: "main",
+            baseFilename: "shared.gguf",
+            baseSHA256: digest,
+            architecture: "llama",
+            projectorFilename: nil,
+            projectorSHA256: nil
+        ))
+        var second = textFixture(bytes: validGGUFData(length: 16))
+        second.source = .huggingFace(HuggingFaceProvenance(
+            repositoryID: "test/shared-base",
+            revision: "main",
+            baseFilename: "shared.gguf",
+            baseSHA256: digest,
+            architecture: "llama",
+            projectorFilename: nil,
+            projectorSHA256: nil
+        ))
 
-        XCTAssertEqual(vision.baseArtifactStorageID, text.baseArtifactStorageID,
-                       "E4B text and vision variants must share base artifact storage")
-        XCTAssertEqual(vision.baseURL, text.baseURL)
-        XCTAssertEqual(vision.baseSHA256, text.baseSHA256)
+        XCTAssertEqual(first.baseArtifactStorageID, second.baseArtifactStorageID,
+                       "Same-digest variants must share base artifact storage")
+        XCTAssertEqual(first.baseSHA256, second.baseSHA256)
     }
 
     // MARK: - Helpers

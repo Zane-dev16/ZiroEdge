@@ -35,14 +35,15 @@ final class ImportedModelRemovalTests: XCTestCase {
 
     // MARK: - Shared artifact awareness
 
-    func testSharedBaseArtifactIsDetected() {
-        // Gemma 4 E4B text and vision share the same base artifact.
-        let text = ModelRegistry.gemma4_e4b_text
-        let vision = ModelRegistry.gemma4_e4b
-
-        XCTAssertEqual(text.baseArtifactStorageID, vision.baseArtifactStorageID)
-        XCTAssertTrue(ModelManagerService.isBaseArtifactShared(text))
-        XCTAssertTrue(ModelManagerService.isBaseArtifactShared(vision))
+    func testNoCatalogBaseArtifactIsShared() {
+        // The removed E4B pair was the only shared-base catalog entry.
+        for model in ModelRegistry.allModels {
+            XCTAssertEqual(
+                model.baseArtifactStorageID, model.id,
+                "\(model.id) must own its base artifact"
+            )
+            XCTAssertFalse(ModelManagerService.isBaseArtifactShared(model), model.id)
+        }
     }
 
     func testUnsharedArtifactIsNotShared() {
@@ -79,19 +80,32 @@ final class ImportedModelRemovalTests: XCTestCase {
     }
 
     func testDeleteSharedModelPreservesArtifactForOtherVariant() throws {
-        // Use the Gemma E4B shared-base pair — deleting text variant shouldn't
-        // delete the shared base artifact since the vision variant still references it.
+        // Synthetic imported pair sharing one digest: deleting one variant must
+        // preserve the base while the sibling references it.
+        let digest = String(repeating: "aa", count: 32)
+        let provenance = HuggingFaceProvenance(
+            repositoryID: "test/shared-base",
+            revision: "main",
+            baseFilename: "shared.gguf",
+            baseSHA256: digest,
+            architecture: "llama",
+            projectorFilename: nil,
+            projectorSHA256: nil
+        )
         let data = TestModelFixtures.gguf()
-        let textModel = ModelRegistry.gemma4_e4b_text
-        let sharedPath = ModelManagerService.baseModelPath(for: textModel)
+        var first = TestModelFixtures.text(id: "fixture-im-a-\(UUID().uuidString.lowercased())")
+        first.source = .huggingFace(provenance)
+        var second = TestModelFixtures.text(id: "fixture-im-b-\(UUID().uuidString.lowercased())")
+        second.source = .huggingFace(provenance)
+        let sharedPath = ModelManagerService.baseModelPath(for: first)
 
         // Install the shared base.
         try data.write(to: sharedPath)
         defer { try? FileManager.default.removeItem(at: sharedPath) }
 
-        // "Delete" the text model. Since the base is shared with the vision model,
-        // the file should remain.
-        ModelManagerService.deleteModel(textModel)
+        // "Delete" the first variant. Since the base is shared with the sibling,
+        // the file must remain.
+        ModelManagerService.deleteModel(first, preservingReferences: [second])
 
         XCTAssertTrue(
             FileManager.default.fileExists(atPath: sharedPath.path),

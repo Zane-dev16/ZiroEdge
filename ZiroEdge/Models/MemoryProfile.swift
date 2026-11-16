@@ -137,10 +137,6 @@ struct MemoryProfile: Codable, Hashable, Sendable {
     var estimatedLoadDeltaBytes: UInt64? {
         guard measuredFullWorkloadPeakDeltaBytes == nil,
               measuredLoadDeltaBytes == nil,
-              // Catalog rows only. The DEBUG calibration identity reuses a
-              // catalog artifact but exists precisely to gather the first
-              // measurement before an estimate would be needed, so sizing it
-              // from its artifact bytes would defeat its purpose.
               let model = ModelRegistry.catalogModel(forID: modelID) else { return nil }
         return ImportRAMAssessment.residentBytes(
             baseBytes: model.baseFileSizeBytes,
@@ -246,25 +242,7 @@ enum MemoryProfileRegistry {
         minimumPhysicalRAMBytes: 8_054_095_872
     )
 
-    static let e4bText = MemoryProfile(
-        id: "gemma4-e4b-text-p1", modelID: ModelRegistry.gemma4_e4b_text.id,
-        mode: .text, contextLength: 512, batchSize: 256, microBatchSize: 64,
-        gpuLayers: 0,
-        projectorPolicy: .disabled, evidenceStatus: .unvalidated, policyVersion: 1,
-        measuredFullWorkloadPeakDeltaBytes: nil, measuredLoadDeltaBytes: nil,
-        safetyMultiplier: 1.25, fixedReserveBytes: 750_000_000,
-        minimumPhysicalRAMBytes: 8_054_095_872
-    )
-
-    static let e4bVision = MemoryProfile(
-        id: "gemma4-e4b-vision-p1", modelID: ModelRegistry.gemma4_e4b.id,
-        mode: .vision, contextLength: 4096, batchSize: 512, microBatchSize: 128,
-        gpuLayers: 0,
-        projectorPolicy: .required, evidenceStatus: .unvalidated, policyVersion: 1,
-        measuredFullWorkloadPeakDeltaBytes: nil, measuredLoadDeltaBytes: nil,
-        safetyMultiplier: 1.25, fixedReserveBytes: 750_000_000,
-        minimumPhysicalRAMBytes: 8_054_095_872
-    )
+    /* E4B profiles removed 2026-11-15 with the catalog rows. */
 
     /// Metal offload mirrors of the CPU shapes above. Unvalidated with no
     /// evidence: each GPU shape must complete physical calibration per
@@ -289,13 +267,7 @@ enum MemoryProfileRegistry {
         minimumPhysicalRAMBytes: 8_054_095_872
     )
 
-    // The E4B rows (vision and text) deliberately have no Metal shape. Their
-    // base is 4.97 GB and full offload dies at the first decode with a GPU
-    // out-of-memory on an 8 GB iPhone — memory admission cannot see it, because
-    // the weights are not in the process footprint. Both runtime presets pin
-    // `gpuLayers: 0`; registering a Metal shape here would advertise an offload
-    // the runtime no longer performs. Restore one only alongside a measured
-    // size-aware tier (docs/memory-profiles.md).
+    /* The E4B family is removed (see AIModel.swift); no Metal shape ever existed for it. */
 
 #if DEBUG
     static let hermeticLlamaText = MemoryProfile(
@@ -306,16 +278,6 @@ enum MemoryProfileRegistry {
         measuredFullWorkloadPeakDeltaBytes: 1, measuredLoadDeltaBytes: 1,
         safetyMultiplier: 1.25, fixedReserveBytes: 750_000_000,
         minimumPhysicalRAMBytes: 1
-    )
-
-    static let e4bTextCalibration = MemoryProfile(
-        id: "gemma4-e4b-text-calibration-p1", modelID: ModelRegistry.gemma4E4BTextCalibration.id,
-        mode: .text, contextLength: 512, batchSize: 256, microBatchSize: 64,
-        gpuLayers: 0,
-        projectorPolicy: .disabled, evidenceStatus: .unvalidated, policyVersion: 1,
-        measuredFullWorkloadPeakDeltaBytes: nil, measuredLoadDeltaBytes: nil,
-        safetyMultiplier: 1.25, fixedReserveBytes: 750_000_000,
-        minimumPhysicalRAMBytes: 8_054_095_872
     )
 #endif
 
@@ -375,13 +337,12 @@ enum MemoryProfileRegistry {
     private static var declaredProfiles: [MemoryProfile] {
 #if DEBUG
         [
-            llama32Text, e2bVision, e4bText, e4bVision,
+            llama32Text, e2bVision,
             llama32TextMetal, e2bVisionMetal,
-            e4bTextCalibration,
         ]
 #else
         [
-            llama32Text, e2bVision, e4bText, e4bVision,
+            llama32Text, e2bVision,
             llama32TextMetal, e2bVisionMetal,
         ]
 #endif

@@ -22,12 +22,28 @@ final class DownloadManagerTests: XCTestCase {
         for model in ModelRegistry.allModels {
             ModelManagerService.deleteModel(model)
         }
-        // Shared catalog artifacts intentionally survive per-entry deletion.
-        try? FileManager.default.removeItem(
-            at: ModelManagerService.baseModelPath(for: ModelRegistry.gemma4_e4b)
-        )
         downloadManager = nil
         super.tearDown()
+    }
+
+    /// Two synthetic imported models sharing one base artifact (same digest →
+    /// same storage ID and file path). Replaces the removed E4B catalog pair.
+    private func sharedBasePair() -> (AIModel, AIModel) {
+        let digest = String(repeating: "d", count: 64)
+        let provenance = HuggingFaceProvenance(
+            repositoryID: "test/shared-base",
+            revision: "main",
+            baseFilename: "shared.gguf",
+            baseSHA256: digest,
+            architecture: "llama",
+            projectorFilename: nil,
+            projectorSHA256: nil
+        )
+        var first = TestModelFixtures.text(id: "fixture-dm-a-\(UUID().uuidString.lowercased())")
+        first.source = .huggingFace(provenance)
+        var second = TestModelFixtures.text(id: "fixture-dm-b-\(UUID().uuidString.lowercased())")
+        second.source = .huggingFace(provenance)
+        return (first, second)
     }
 
     // MARK: - Download State Machine Transitions
@@ -432,38 +448,46 @@ extension DownloadManagerTests {
 
     // MARK: - Delete Model
 
-    func testDeletingE4BTextPreservesBaseUsedByVision() throws {
-        let path = ModelManagerService.baseModelPath(for: ModelRegistry.gemma4_e4b_text)
+    func testDeletingSharedBaseSiblingPreservesBase() throws {
+        let (first, second) = sharedBasePair()
+        let path = ModelManagerService.baseModelPath(for: first)
         ModelManagerService.ensureModelsDirectory()
         try Data("shared-base".utf8).write(to: path, options: .atomic)
+        defer { try? FileManager.default.removeItem(at: path) }
 
-        ModelManagerService.deleteModel(ModelRegistry.gemma4_e4b_text)
+        ModelManagerService.deleteModel(first, preservingReferences: [second])
 
         XCTAssertTrue(FileManager.default.fileExists(atPath: path.path))
     }
 
-    func testDeletingE4BVisionPreservesBaseUsedByTextAndDeletesProjector() throws {
-        let basePath = ModelManagerService.baseModelPath(for: ModelRegistry.gemma4_e4b)
-        let projectorPath = ModelManagerService.mmprojModelPath(for: ModelRegistry.gemma4_e4b)
+    func testDeletingUnsharedVisionRemovesBaseAndProjector() throws {
+        // E2B is the surviving vision pair; nothing shares its artifacts.
+        let basePath = ModelManagerService.baseModelPath(for: ModelRegistry.gemma4_e2b)
+        let projectorPath = ModelManagerService.mmprojModelPath(for: ModelRegistry.gemma4_e2b)
         ModelManagerService.ensureModelsDirectory()
         try Data("shared-base".utf8).write(to: basePath, options: .atomic)
         try Data("projector".utf8).write(to: projectorPath, options: .atomic)
+        defer {
+            try? FileManager.default.removeItem(at: basePath)
+            try? FileManager.default.removeItem(at: projectorPath)
+        }
 
-        ModelManagerService.deleteModel(ModelRegistry.gemma4_e4b)
+        ModelManagerService.deleteModel(ModelRegistry.gemma4_e2b)
 
-        XCTAssertTrue(FileManager.default.fileExists(atPath: basePath.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: basePath.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: projectorPath.path))
     }
 
-    func testE4BTextAndVisionCannotClaimTwoBaseWriters() {
-        let visionTask = DownloadTask(model: ModelRegistry.gemma4_e4b, artifact: .base)
-        let textTask = DownloadTask(model: ModelRegistry.gemma4_e4b_text, artifact: .base)
+    func testSharedBaseSiblingsCannotClaimTwoBaseWriters() {
+        let (first, second) = sharedBasePair()
+        let firstTask = DownloadTask(model: first, artifact: .base)
+        let secondTask = DownloadTask(model: second, artifact: .base)
 
-        XCTAssertEqual(visionTask.storageID, textTask.storageID)
-        XCTAssertTrue(downloadManager.registerActiveTaskIfAbsent(visionTask))
-        XCTAssertFalse(downloadManager.registerActiveTaskIfAbsent(textTask))
-        XCTAssertTrue(downloadManager.hasActiveDownload(model: ModelRegistry.gemma4_e4b_text, artifact: .base))
-        downloadManager.cancelDownload(for: ModelRegistry.gemma4_e4b)
+        XCTAssertEqual(firstTask.storageID, secondTask.storageID)
+        XCTAssertTrue(downloadManager.registerActiveTaskIfAbsent(firstTask))
+        XCTAssertFalse(downloadManager.registerActiveTaskIfAbsent(secondTask))
+        XCTAssertTrue(downloadManager.hasActiveDownload(model: second, artifact: .base))
+        downloadManager.cancelDownload(for: first)
     }
 
     func testDeleteModelClearsStatus() throws {

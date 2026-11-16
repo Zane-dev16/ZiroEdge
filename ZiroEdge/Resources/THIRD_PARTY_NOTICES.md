@@ -86,25 +86,11 @@ ship beside the font files in `app/ZiroEdge/Resources/Fonts/`.
 - **URL**: <https://ai.google.dev/gemma/terms>
 - **Attribution**: Based on Google Gemma 4
 
-### Gemma 4 E4B (gemma-4-e4b-q4)
-
-- **Base model**: Google Gemma 4 4B
-- **License**: Gemma Terms of Use
-- **URL**: <https://ai.google.dev/gemma/terms>
-- **Attribution**: Based on Google Gemma 4
-
 ### LFM 2.5 1.2B (lfm2.5-1.2b-q4)
 
 - **Base model**: LiquidAI LFM 2.5 1.2B Instruct
 - **License**: LFM Open License v1.0
 - **URL**: <https://huggingface.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF>
-- **Attribution**: Official LiquidAI GGUF release, device-validated 2026-09-23
-
-### LFM 2.5 2.6B (lfm2.5-2.6b-q4)
-
-- **Base model**: LiquidAI LFM 2.5 2.6B (base, non-instruct)
-- **License**: LFM Open License v1.0
-- **URL**: <https://huggingface.co/LiquidAI/LFM2.5-2.6B-GGUF>
 - **Attribution**: Official LiquidAI GGUF release, device-validated 2026-09-23
 
 ### Qwen 3.5 2B (qwen3.5-2b-q4)
@@ -121,19 +107,12 @@ ship beside the font files in `app/ZiroEdge/Resources/Fonts/`.
 - **URL**: <https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF>
 - **Attribution**: Community conversion by unsloth, device-validated 2026-09-23
 
-### Bonsai 8B (bonsai-8b-q1)
-
-- **Base model**: PrismML Bonsai 8B (Qwen3-8B dense, end-to-end 1-bit Q1_0)
-- **License**: Apache 2.0
-- **URL**: <https://huggingface.co/prism-ml/Bonsai-8B-gguf>
-- **Attribution**: Official PrismML release, runs on stock llama.cpp b9821, device-validated 2026-09-23
-
 ### Bonsai 4B (bonsai-4b-q1)
 
 - **Base model**: PrismML Bonsai 4B (Qwen3-4B dense, end-to-end 1-bit Q1_0)
 - **License**: Apache 2.0
 - **URL**: <https://huggingface.co/prism-ml/Bonsai-4B-gguf>
-- **Attribution**: Official PrismML release, runs on stock llama.cpp b9821, device-validated 2026-09-23
+- **Attribution**: Official PrismML release, runs on stock llama.cpp b12000, device-validated 2026-09-23
 
 ---
 

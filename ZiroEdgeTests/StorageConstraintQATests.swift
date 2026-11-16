@@ -140,33 +140,56 @@ final class StorageConstraintQATests: XCTestCase {
         }
     }
 
-    func testE4BTextAndVisionShareBaseArtifactCorrectly() throws {
-        let baseData = TestModelFixtures.gguf(count: 128)
-        let baseModel = TestModelFixtures.text(
-            id: ModelRegistry.gemma4_e4b.id,
-            data: baseData
+    func testSharedStorageIDConceptForImportedPairs() throws {
+        // Two imported rows with the same digest resolve to one storage ID and one file.
+        // (Previously exercised with the E4B catalog pair; the concept is registry-independent.)
+        let digest = String(repeating: "b", count: 64)
+        let provenance = HuggingFaceProvenance(
+            repositoryID: "test/shared-base",
+            revision: "main",
+            baseFilename: "shared.gguf",
+            baseSHA256: digest,
+            architecture: "llama",
+            projectorFilename: nil,
+            projectorSHA256: nil
         )
-        defer { ModelManagerService.deleteModel(baseModel) }
-        try TestModelFixtures.install(baseData, for: baseModel)
-        // Verify ModelRegistry models share storage ID concept.
+        var first = TestModelFixtures.text(id: "fixture-qa-a-\(UUID().uuidString.lowercased())")
+        first.source = .huggingFace(provenance)
+        var second = TestModelFixtures.text(id: "fixture-qa-b-\(UUID().uuidString.lowercased())")
+        second.source = .huggingFace(provenance)
+        XCTAssertEqual(first.baseArtifactStorageID, second.baseArtifactStorageID)
         XCTAssertEqual(
-            ModelRegistry.gemma4_e4b.baseArtifactStorageID,
-            ModelRegistry.gemma4_e4b_text.baseArtifactStorageID
+            ModelManagerService.baseModelPath(for: first),
+            ModelManagerService.baseModelPath(for: second)
         )
     }
 
     func testSharedBaseArtifactNotDeletedWhenOneVariantRemoved() throws {
-        let path = ModelManagerService.baseModelPath(for: ModelRegistry.gemma4_e4b_text)
+        let digest = String(repeating: "c", count: 64)
+        let provenance = HuggingFaceProvenance(
+            repositoryID: "test/shared-base",
+            revision: "main",
+            baseFilename: "shared.gguf",
+            baseSHA256: digest,
+            architecture: "llama",
+            projectorFilename: nil,
+            projectorSHA256: nil
+        )
+        var first = TestModelFixtures.text(id: "fixture-qa-c-\(UUID().uuidString.lowercased())")
+        first.source = .huggingFace(provenance)
+        var second = TestModelFixtures.text(id: "fixture-qa-d-\(UUID().uuidString.lowercased())")
+        second.source = .huggingFace(provenance)
+        let path = ModelManagerService.baseModelPath(for: first)
         ModelManagerService.ensureModelsDirectory()
         try Data("shared-base".utf8).write(to: path, options: .atomic)
         defer { try? FileManager.default.removeItem(at: path) }
 
-        ModelManagerService.deleteModel(ModelRegistry.gemma4_e4b_text)
+        ModelManagerService.deleteModel(first, preservingReferences: [second])
 
-        // Base must survive because vision variant also references it.
+        // Base must survive because the sibling variant also references it.
         XCTAssertTrue(
             FileManager.default.fileExists(atPath: path.path),
-            "Shared base artifact must survive text-variant deletion"
+            "Shared base artifact must survive sibling-variant deletion"
         )
     }
 }

@@ -35,8 +35,8 @@ final class RAMDiagnosticTests: XCTestCase {
         XCTAssertNotNil(object["timestamp"])
     }
 
-    func testDefaultDiagnosticTargetIsCalibrationOnlyE4BText() {
-        XCTAssertEqual(MemoryDiagnosticRecorder.defaultTargetModelID, "gemma-4-e4b-q4-text-calibration")
+    func testDefaultDiagnosticTargetIsLlamaText() {
+        XCTAssertEqual(MemoryDiagnosticRecorder.defaultTargetModelID, "llama3.2-3b-q4")
         XCTAssertEqual(ModelRegistry.model(for: MemoryDiagnosticRecorder.defaultTargetModelID)?.modelType, .text)
         XCTAssertEqual(MemoryDiagnosticWorkload.cycleCount, 5)
         XCTAssertEqual(MemoryDiagnosticWorkload.promptCount, 20)

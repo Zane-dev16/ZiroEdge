@@ -10,10 +10,11 @@ final class ModelLifecycleSafetyTests: XCTestCase {
         )
     }
 
-    private func makeBudgeter(available: UInt64 = 4_000_000_000) -> MemoryBudgeter {
+    private func makeBudgeter(available: UInt64 = 4_000_000_000, limit: UInt64 = 0) -> MemoryBudgeter {
         MemoryBudgeter(metrics: FixedMemoryMetricsProvider(
             processAvailable: available,
-            total: 8_054_095_872
+            total: 8_054_095_872,
+            processLimit: limit
         ))
     }
 
@@ -268,15 +269,19 @@ final class ModelLifecycleSafetyTests: XCTestCase {
     }
 
     /// A budget refusal must keep the prior working model resident with no new unload.
-    /// E2B is validated and fits 2.5GB headroom; E4B's estimated floor is far
-    /// above it, so the switch is a wide miss that refuses rather than tearing
-    /// the resident down. (A narrow miss is a different, separately tested path:
+    /// E2B is validated and fits the headroom; Qwen 2B's requirement exceeds
+    /// the process's own limit, so no eviction could ever close the gap and the
+    /// switch refuses structurally rather than tearing the resident down.
+    /// (A narrow miss is a different, separately tested path:
     /// see `shouldAttemptTeardownOnNarrowMiss`.)
     func testP03BudgetRefusalKeepsPriorResident() async throws {
+        let big = ModelRegistry.allModels.first { $0.id == "qwen3.5-2b-q4" }!
+        let required = try MemoryProfileRegistry.profile(for: big)?.estimatedRequiredProcessHeadroomBytes() ?? 0
+        XCTAssertGreaterThan(required, 2_000_000_000, "fixture assumption: Qwen 2B estimate exceeds 2 GB")
         let inference = LifecycleInferenceStub()
         let manager = ModelLifecycleManager(
             inferenceService: inference,
-            memoryBudgeter: makeBudgeter(available: 2_500_000_000),
+            memoryBudgeter: makeBudgeter(available: 3_490_000_000, limit: required - 100_000_000),
             loadSafetyStore: try makeStore(),
             availabilityProvider: { _ in .ready },
             recoveryDelay: .zero
@@ -286,7 +291,7 @@ final class ModelLifecycleSafetyTests: XCTestCase {
         let first = await manager.loadModel(ModelRegistry.gemma4_e2b)
         guard case .loaded = first else { return XCTFail("first load must succeed") }
         let unloadsAfterFirst = await inference.unloadCount
-        let second = await manager.loadModel(ModelRegistry.gemma4_e4b)
+        let second = await manager.loadModel(big)
         guard case .failed(let failure) = second else { return XCTFail("expected budget refusal") }
         XCTAssertEqual(failure.kind, .insufficientMemory)
         XCTAssertEqual(manager.activeModel?.id, ModelRegistry.gemma4_e2b.id, "prior must stay resident")
@@ -402,7 +407,21 @@ final class ModelLifecycleSafetyTests: XCTestCase {
     /// A vision-only row has no text-only runtime to fall back to, so it keeps
     /// the pair and the availability gate refuses it honestly.
     func testVisionOnlyRowWithoutItsProjectorKeepsThePair() {
-        let visionOnly = ModelRegistry.gemma4_e4b
+        let visionOnly = AIModel(
+            id: "fixture-vision-only",
+            displayName: "Fixture Vision",
+            description: "Vision-only fixture without text fallback",
+            modelType: .vision,
+            baseURL: URL(string: "https://example.com/vision.gguf")!,
+            mmprojURL: URL(string: "https://example.com/mmproj.gguf"),
+            baseFileSizeBytes: 1_000_000,
+            mmprojFileSizeBytes: 100_000,
+            baseSHA256: String(repeating: "e", count: 64),
+            mmprojSHA256: String(repeating: "f", count: 64),
+            quantization: "Q4",
+            config: .llama32,
+            license: LicenseInfo(name: "Test", url: URL(string: "https://example.com")!, copyright: "Test")
+        )
         XCTAssertFalse(visionOnly.allowsTextOnlyCapability)
         let resolved = ModelLifecycleManager.runtimeModel(for: visionOnly, projectorOnDisk: false)
         XCTAssertTrue(resolved.requiresMMProj)
@@ -566,7 +585,7 @@ final class ChatSwitchTests: XCTestCase {
             baseFileSizeBytes: Int64(data.count), mmprojFileSizeBytes: nil,
             baseSHA256: sha, mmprojSHA256: nil,
             quantization: "Q4_K_M",
-            config: .imported(promptPath: .raw, contextLength: 512),
+            config: .imported(contextLength: 512),
             license: LicenseInfo(name: "Test", url: URL(string: "https://example.com")!, copyright: "Test"),
             provenance: HuggingFaceProvenance(
                 repositoryID: "acme/prior", revision: String(repeating: "b", count: 40),

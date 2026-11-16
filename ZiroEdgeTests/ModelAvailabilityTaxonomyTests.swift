@@ -62,6 +62,18 @@ final class ModelAvailabilityTaxonomyTests: XCTestCase {
         try TestModelFixtures.install(data, for: model)
         XCTAssertTrue(ModelManagerService.hasArtifactOnDisk(for: model))
 
+        // Damage it the way the app does: same byte count, wrong digest, then
+        // the full verification pass that quarantines the file and writes the
+        // repair marker. Without this precondition the assertions below pass
+        // on a model that was never damaged, so delete could leak the marker
+        // and the test would still be green.
+        try TestModelFixtures.install(
+            TestModelFixtures.gguf(fill: 0x5A, count: data.count),
+            for: model
+        )
+        XCTAssertFalse(ModelManagerService.isArtifactDownloaded(model, artifact: .base))
+        XCTAssertTrue(ModelManagerService.isMarkedDamaged(for: model))
+
         ModelManagerService.deleteModel(model)
 
         XCTAssertFalse(ModelManagerService.hasArtifactOnDisk(for: model))
@@ -240,24 +252,18 @@ final class ModelAvailabilityTaxonomyTests: XCTestCase {
             }
         }
 
-        // The product promise on an 8GB reference iPhone: one row per model,
-        // loadable, except the 5.9GB vision pair that genuinely does not fit.
-        // If the estimator or a profile changes, this table says exactly which
-        // row moved and why.
+        // The product promise on an 8GB reference iPhone: every catalog row
+        // admittable. If the estimator or a profile changes, this table says
+        // exactly which row moved and why.
         let report = "\n" + table.joined(separator: "\n")
-        XCTAssertEqual(
-            refused.keys.sorted(), ["gemma-4-e4b-q4"],
+        XCTAssertTrue(
+            refused.isEmpty,
             "admission table changed:" + report
         )
         XCTAssertEqual(
-            refused["gemma-4-e4b-q4"],
-            MemoryAdmissionFailure.insufficientProcessHeadroom.rawValue,
-            "the refused row must be a headroom miss, not a catalog fault" + report
-        )
-        XCTAssertEqual(
             admitted.count,
-            ModelRegistry.allModels.count - 1,
-            "every other row must load" + report
+            ModelRegistry.allModels.count,
+            "every row must load" + report
         )
     }
 
@@ -306,11 +312,27 @@ final class ModelAvailabilityTaxonomyTests: XCTestCase {
         XCTAssertThrowsError(try profile.estimatedRequiredProcessHeadroomBytes())
     }
 
-    func testCalibrationIdentityCarriesNoEstimate() throws {
-        // It exists to gather the first measurement; an estimate would make the
-        // measurement run pointless and re-open the artifact-size loophole the
-        // admission policy closed.
-        let profile = MemoryProfileRegistry.e4bTextCalibration
+    func testUnbackedProfileCarriesNoEstimate() throws {
+        // A shape with no catalog row has no artifact bytes to size from, so it
+        // must carry no estimate — the same policy the removed calibration
+        // identity existed to enforce.
+        let profile = MemoryProfile(
+            id: "fixture-unbacked",
+            modelID: "does-not-exist",
+            mode: .text,
+            contextLength: 4096,
+            batchSize: 512,
+            microBatchSize: 128,
+            gpuLayers: 0,
+            projectorPolicy: .disabled,
+            evidenceStatus: .unvalidated,
+            policyVersion: 1,
+            measuredFullWorkloadPeakDeltaBytes: nil,
+            measuredLoadDeltaBytes: nil,
+            safetyMultiplier: MemoryProfile.productionSafetyMultiplier,
+            fixedReserveBytes: MemoryProfile.productionReserveBytes,
+            minimumPhysicalRAMBytes: 8_000_000_000
+        )
         XCTAssertNil(profile.estimatedLoadDeltaBytes)
         XCTAssertNil(profile.measuredLoadDeltaBytes)
         XCTAssertNil(try? profile.estimatedRequiredProcessHeadroomBytes())

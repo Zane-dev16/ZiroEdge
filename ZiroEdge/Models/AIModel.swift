@@ -110,10 +110,6 @@ struct AIModel: Identifiable, Hashable, Sendable {
         if case .huggingFace(let provenance) = source {
             return "hf-\(provenance.baseSHA256.prefix(24))"
         }
-        if id == "gemma-4-e4b-q4-text" { return "gemma-4-e4b-q4" }
-#if DEBUG
-        if id == "gemma-4-e4b-q4-text-calibration" { return "gemma-4-e4b-q4" }
-#endif
         return id
     }
 
@@ -300,60 +296,9 @@ enum ModelRegistry {
         )
     )
 
-    static let gemma4_e4b = AIModel(
-        id: "gemma-4-e4b-q4",
-        displayName: "Gemma 4 E4B",
-        description: "Higher-quality vision model. Better accuracy on complex images.",
-        modelType: .vision,
-        baseURL: URL(string: "https://huggingface.co/zanish-labs/gemma-4-e4b-q4km-gguf/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf")!,
-        mmprojURL: URL(string: "https://huggingface.co/zanish-labs/gemma-4-e4b-q4km-gguf/resolve/main/mmproj-gemma-4-E4B-it-Q8_0.gguf")!,
-        baseFileSizeBytes: 5_335_273_056,  // 4.97 GB
-        mmprojFileSizeBytes: 559_874_528,  // 534 MB
-        baseSHA256: "9d23b7b4cd3c6c6c9ffadd7a9b1e16448621005b80a803e85afa3ca2c48714e3",
-        mmprojSHA256: "51d4b7fd825e4569f746b200fccc5332bf914e8ef7cbe447272ce4fec6df3db6",
-        quantization: "Q4_K_M",
-        config: .gemma4E4B,
-        license: LicenseInfo(
-            name: "Gemma Terms of Use",
-            url: URL(string: "https://ai.google.dev/gemma/terms")!,
-            copyright: "Copyright 2024 Google LLC"
-        )
-    )
-
-    static let gemma4_e4b_text = AIModel(
-        id: "gemma-4-e4b-q4-text",
-        displayName: "Gemma 4 E4B Text",
-        description: "Higher-quality text chat using the E4B base model without the vision projector.",
-        modelType: .text,
-        baseURL: gemma4_e4b.baseURL,
-        mmprojURL: nil,
-        baseFileSizeBytes: gemma4_e4b.baseFileSizeBytes,
-        mmprojFileSizeBytes: nil,
-        baseSHA256: gemma4_e4b.baseSHA256,
-        mmprojSHA256: nil,
-        quantization: gemma4_e4b.quantization,
-        config: .gemma4E4BText,
-        license: gemma4_e4b.license
-    )
-
-#if DEBUG
-    /// DEBUG calibration identity. Reuses the registered E4B base artifact and never requests a projector.
-    static let gemma4E4BTextCalibration = AIModel(
-        id: "gemma-4-e4b-q4-text-calibration",
-        displayName: "Gemma 4 E4B Text Calibration",
-        description: "Calibration-only text runtime. Not available for normal conversations.",
-        modelType: .text,
-        baseURL: gemma4_e4b.baseURL,
-        mmprojURL: nil,
-        baseFileSizeBytes: gemma4_e4b.baseFileSizeBytes,
-        mmprojFileSizeBytes: nil,
-        baseSHA256: gemma4_e4b.baseSHA256,
-        mmprojSHA256: nil,
-        quantization: gemma4_e4b.quantization,
-        config: .gemma4E4BText,
-        license: gemma4_e4b.license
-    )
-#endif
+    /* E4B removed 2026-11-15: the 5.34 GB base cannot load on an 8 GB iPhone
+       (vision refused by admission, text kept the base alive for no runtime).
+       Orphaned on-device bases are reclaimed by the storage sweep. */
 
     /* Reference: SmolVLM and Qwen2.5-VL (commented out)
     static let smolVLM_500M = AIModel(
@@ -422,25 +367,19 @@ enum ModelRegistry {
                 copyright: "Copyright 2026 Liquid AI"
             )
         ),
-        AIModel(
-            id: "lfm2.5-2.6b-q4",
-            displayName: "LFM 2.5 2.6B",
-            description: "On-phone agent flagship. Base model: pair with a strong system prompt.",
-            modelType: .text,
-            baseURL: URL(string: "https://huggingface.co/LiquidAI/LFM2.5-2.6B-GGUF/resolve/e7caca5d835a3901a8e0d63e94009429bafafdfc/LFM2.5-2.6B-Q4_K_M.gguf")!,
-            mmprojURL: nil,
-            baseFileSizeBytes: 1_674_455_040,
-            mmprojFileSizeBytes: nil,
-            baseSHA256: "02a8b7e17487d326e46d68ce0ba24211e1b80a14c4cd0597fa73c1cd697f52ed",
-            mmprojSHA256: nil,
-            quantization: "Q4_K_M",
-            config: .curatedText4K,
-            license: LicenseInfo(
-                name: "LFM Open License v1.0",
-                url: URL(string: "https://huggingface.co/LiquidAI/LFM2.5-2.6B-GGUF/resolve/e7caca5d835a3901a8e0d63e94009429bafafdfc/LICENSE")!,
-                copyright: "Copyright 2026 Liquid AI"
-            )
-        ),
+        /* Removed 2026-11-15: LFM 2.5 2.6B is deprecated upstream (use LFM3-1.7B)
+           and fails the usage quality gate (reasoning preamble never closes).
+           The runtime is now llama.cpp b12000, which does support LFM3; this row
+           still must not be re-added. */
+        /* Evaluated 2026-11-16 on llama.cpp b12000 and not admitted: LFM3-1.7B
+           downloads, loads, answers correctly and deletes cleanly, but emits a
+           reasoning preamble on 2 of 3 prompts. Its template defaults
+           `enable_thinking` to true and this runtime has no thinking switch, so
+           the strict admission gate fails (`noReasoningPreamble`). A thinker
+           with no switch is a blocked row, not a catalog row. Unblock only
+           alongside a reasoning-content split / template thinking control.
+           Evidence: verification/runs/20261116-130400 (quality pass) and
+           20261116-133418 (admission fail). */
         AIModel(
             id: "qwen3.5-2b-q4",
             displayName: "Qwen 3.5 2B",
@@ -479,25 +418,13 @@ enum ModelRegistry {
                 copyright: "Copyright 2026 Alibaba Cloud"
             )
         ),
-        AIModel(
-            id: "bonsai-8b-q1",
-            displayName: "Bonsai 8B",
-            description: "Brains-per-GB flagship. End-to-end 1-bit, 1.15 GB on disk.",
-            modelType: .text,
-            baseURL: URL(string: "https://huggingface.co/prism-ml/Bonsai-8B-gguf/resolve/48516770dd04643643e9f9019a2a349cf26c5dbd/Bonsai-8B-Q1_0.gguf")!,
-            mmprojURL: nil,
-            baseFileSizeBytes: 1_158_654_496,
-            mmprojFileSizeBytes: nil,
-            baseSHA256: "284a335aa3fb2ced3b1b01fcb40b08aa783e3b70832767f0dd2e3fdfa134bd54",
-            mmprojSHA256: nil,
-            quantization: "Q1_0",
-            config: .curatedText4K,
-            license: LicenseInfo(
-                name: "Apache 2.0",
-                url: URL(string: "https://www.apache.org/licenses/LICENSE-2.0")!,
-                copyright: "Copyright 2026 Prism ML"
-            )
-        ),
+        /* Removed 2026-11-15, re-tested 2026-11-16: Bonsai 8B answers the three
+           usage prompts correctly but always emits an unclosed reasoning
+           preamble. The official `/no_think` suffix was sent through the chat
+           template and had no effect — `llama_chat_apply_template` is a
+           heuristic formatter, not a Jinja engine, so the switch never reaches
+           the model. Evidence: verification/runs/20261116-120958. Bonsai 4B
+           stays. */
         AIModel(
             id: "bonsai-4b-q1",
             displayName: "Bonsai 4B",
@@ -526,19 +453,13 @@ enum ModelRegistry {
         [
             llama32_3B,
             gemma4_e2b,
-            gemma4_e4b_text,
-            gemma4_e4b,
             // Reference: smolVLM_500M, qwen25VL_3B,
         ] + lineupText
     }
 
     /// Calibration identities are deliberately absent from normal catalog UI and Release builds.
     static var calibrationModels: [AIModel] {
-#if DEBUG
-        [gemma4E4BTextCalibration]
-#else
         []
-#endif
     }
 
     /// Profiles promoted by retained full-workload physical acceptance.

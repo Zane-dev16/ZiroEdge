@@ -21,35 +21,13 @@ final class AutoMetalTierTests: XCTestCase {
         XCTAssertEqual(ModelConfiguration.llama32.gpuLayers, expected)
         XCTAssertEqual(ModelConfiguration.gemma4.gpuLayers, expected)
         XCTAssertEqual(
-            ModelConfiguration.imported(promptPath: .raw, contextLength: 1024).gpuLayers,
+            ModelConfiguration.imported(contextLength: 1024).gpuLayers,
             expected
         )
     }
 
-    func testE4BPresetsAndShapesNeverOffloadToMetal() {
-        // Measured twice on iPhone 16: full Metal offload of the 4.97 GB E4B base
-        // is admitted by the RAM tier and then fails every decode with
-        // `kIOGPUCommandBufferCallbackErrorOutOfMemory` (docs/memory-profiles.md).
-        // Weights allocated in GPU memory are invisible to process-headroom
-        // admission, so the only fail-closed shape is no offload at all.
-        for model in [ModelRegistry.gemma4_e4b, ModelRegistry.gemma4_e4b_text] {
-            XCTAssertEqual(model.config.gpuLayers, 0, "\(model.id) must not offload")
-            XCTAssertEqual(
-                MemoryProfileRegistry.profile(for: model.id, usesGPU: true)?.gpuLayers, 0,
-                "\(model.id) must not serve a Metal shape to an 8 GB+ device"
-            )
-        }
-    }
-
-    func testE4BRegistersNoMetalShapeAtAll() {
-        let e4bIDs: Set<String> = [
-            ModelRegistry.gemma4_e4b.id,
-            ModelRegistry.gemma4_e4b_text.id,
-            ModelRegistry.gemma4E4BTextCalibration.id,
-        ]
-        let metal = MemoryProfileRegistry.all.filter { e4bIDs.contains($0.modelID) && $0.gpuLayers > 0 }
-        XCTAssertTrue(metal.isEmpty, "Metal shapes were re-added for \(metal.map(\.id))")
-    }
+    /* E4B offload tests removed 2026-11-15 with the catalog rows. Metal-safety
+       in general is still covered by testMetalEntriesExistButServeCPUUntilCalibrated. */
 
     func testCPUValidationUntouchedByMetalEntries() {
         let cpu = MemoryProfileRegistry.profile(for: ModelRegistry.gemma4_e2b.id, usesGPU: false)

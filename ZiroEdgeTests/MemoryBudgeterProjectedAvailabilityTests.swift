@@ -264,18 +264,15 @@ final class MemoryBudgeterProjectedAvailabilityTests: XCTestCase {
     }
 
     func testDiskOrderingMatchesRAMEstimateOrderingAtClampedCtx() {
-        // Probe-class disk sizes: smol 550MB < qwen 2.2GB < gemma-e2b 3.99GB < gemma-e4b 5.9GB.
+        // Probe-class disk sizes: smol 550MB < qwen 2.2GB < gemma-e2b 3.99GB.
         let smol = ImportRAMAssessment.estimatedBytes(
             baseBytes: 550_000_000, mmprojBytes: nil, contextLength: 2_048)
         let qwen = ImportRAMAssessment.estimatedBytes(
             baseBytes: 2_000_000_000, mmprojBytes: 200_000_000, contextLength: 32_768)
         let e2b = ImportRAMAssessment.estimatedBytes(
             baseBytes: 3_430_000_000, mmprojBytes: 560_000_000, contextLength: 4_096)
-        let e4b = ImportRAMAssessment.estimatedBytes(
-            baseBytes: 5_300_000_000, mmprojBytes: 600_000_000, contextLength: 4_096)
         XCTAssertLessThan(smol, qwen)
         XCTAssertLessThan(qwen, e2b)
-        XCTAssertLessThan(e2b, e4b)
     }
 
     func testWizardPickerAndImportedProfileConverge() throws {

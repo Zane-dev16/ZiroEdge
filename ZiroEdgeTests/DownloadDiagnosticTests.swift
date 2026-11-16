@@ -25,10 +25,10 @@ final class DownloadDiagnosticTests: XCTestCase {
 
     func testTransferCorrelationIDIsStableAcrossCalls() {
         let id1 = DownloadDiagnosticRecorder.transferCorrelationID(
-            modelID: "gemma-4-e4b-q4", artifact: "base"
+            modelID: "gemma-4-e2b-q4", artifact: "base"
         )
         let id2 = DownloadDiagnosticRecorder.transferCorrelationID(
-            modelID: "gemma-4-e4b-q4", artifact: "base"
+            modelID: "gemma-4-e2b-q4", artifact: "base"
         )
         XCTAssertEqual(id1, id2, "Correlation IDs must be stable for the same model+artifact")
         XCTAssertEqual(id1.count, 32, "Correlation ID should be 32 hex characters (16 bytes)")
@@ -36,17 +36,17 @@ final class DownloadDiagnosticTests: XCTestCase {
 
     func testTransferCorrelationIDDiffersPerArtifact() {
         let base = DownloadDiagnosticRecorder.transferCorrelationID(
-            modelID: "gemma-4-e4b-q4", artifact: "base"
+            modelID: "gemma-4-e2b-q4", artifact: "base"
         )
         let mmproj = DownloadDiagnosticRecorder.transferCorrelationID(
-            modelID: "gemma-4-e4b-q4", artifact: "mmproj"
+            modelID: "gemma-4-e2b-q4", artifact: "mmproj"
         )
         XCTAssertNotEqual(base, mmproj, "Base and mmproj artifacts must have distinct correlation IDs")
     }
 
     func testTransferCorrelationIDDiffersPerModel() {
         let modelA = DownloadDiagnosticRecorder.transferCorrelationID(
-            modelID: "gemma-4-e4b-q4", artifact: "base"
+            modelID: "gemma-4-e2b-q4", artifact: "base"
         )
         let modelB = DownloadDiagnosticRecorder.transferCorrelationID(
             modelID: "llama3.2-3b-q4", artifact: "base"
@@ -64,19 +64,19 @@ final class DownloadDiagnosticTests: XCTestCase {
 
     func testRecordDownloadStartEvent() {
         let correlationID = DownloadDiagnosticRecorder.transferCorrelationID(
-            modelID: "gemma-4-e4b-q4", artifact: "base"
+            modelID: "gemma-4-e2b-q4", artifact: "base"
         )
         let payload = recorder.record(
             event: .downloadStart,
             correlationID: correlationID,
-            modelID: "gemma-4-e4b-q4",
+            modelID: "gemma-4-e2b-q4",
             artifact: "base",
             state: "downloading",
             expectedBytes: 5_335_273_056
         )
         XCTAssertNotNil(payload)
         XCTAssertEqual(payload?.event, .downloadStart)
-        XCTAssertEqual(payload?.modelID, "gemma-4-e4b-q4")
+        XCTAssertEqual(payload?.modelID, "gemma-4-e2b-q4")
         XCTAssertEqual(payload?.artifact, "base")
         XCTAssertEqual(payload?.expectedBytes, 5_335_273_056)
         XCTAssertEqual(payload?.correlationID, correlationID)
@@ -168,10 +168,10 @@ final class DownloadDiagnosticTests: XCTestCase {
     }
 
     func testRedactionPreservesSafeContent() {
-        let safe = "Transfer gemma-4-e4b-q4 base artifact: expected 5335273056 bytes, state downloading"
+        let safe = "Transfer gemma-4-e2b-q4 base artifact: expected 3427861088 bytes, state downloading"
         let clean = DownloadDiagnosticRedactor.sanitize(safe)
-        XCTAssertTrue(clean.contains("gemma-4-e4b-q4"), "Model IDs must survive redaction")
-        XCTAssertTrue(clean.contains("5335273056"), "Byte counts must survive redaction")
+        XCTAssertTrue(clean.contains("gemma-4-e2b-q4"), "Model IDs must survive redaction")
+        XCTAssertTrue(clean.contains("3427861088"), "Byte counts must survive redaction")
         XCTAssertTrue(clean.contains("downloading"), "State labels must survive redaction")
     }
 
@@ -221,13 +221,13 @@ final class DownloadDiagnosticTests: XCTestCase {
     func testExportSummaryContainsAppVersion() {
         // Record some events first
         let cid = DownloadDiagnosticRecorder.transferCorrelationID(
-            modelID: "gemma-4-e4b-q4", artifact: "base"
+            modelID: "gemma-4-e2b-q4", artifact: "base"
         )
         recorder.record(event: .downloadStart, correlationID: cid,
-                        modelID: "gemma-4-e4b-q4", artifact: "base",
+                        modelID: "gemma-4-e2b-q4", artifact: "base",
                         state: "downloading", expectedBytes: 5_335_273_056)
         recorder.record(event: .validationComplete, correlationID: cid,
-                        modelID: "gemma-4-e4b-q4", artifact: "base",
+                        modelID: "gemma-4-e2b-q4", artifact: "base",
                         state: "downloaded", expectedBytes: 5_335_273_056,
                         actualBytes: 5_335_273_056)
 
@@ -239,12 +239,12 @@ final class DownloadDiagnosticTests: XCTestCase {
 
     func testExportSummaryContainsCorrelationIDs() {
         let cid = DownloadDiagnosticRecorder.transferCorrelationID(
-            modelID: "gemma-4-e4b-q4", artifact: "base"
+            modelID: "gemma-4-e2b-q4", artifact: "base"
         )
         recorder.record(event: .downloadStart, correlationID: cid,
-                        modelID: "gemma-4-e4b-q4", artifact: "base")
+                        modelID: "gemma-4-e2b-q4", artifact: "base")
         recorder.record(event: .downloadComplete, correlationID: cid,
-                        modelID: "gemma-4-e4b-q4", artifact: "base")
+                        modelID: "gemma-4-e2b-q4", artifact: "base")
 
         let summary = recorder.exportSummary()
         XCTAssertTrue(summary?.correlationIDs.contains(cid) ?? false,
@@ -274,20 +274,20 @@ final class DownloadDiagnosticTests: XCTestCase {
 
     func testExportSummaryContainsArtifactStates() {
         let cid1 = DownloadDiagnosticRecorder.transferCorrelationID(
-            modelID: "gemma-4-e4b-q4", artifact: "base"
+            modelID: "gemma-4-e2b-q4", artifact: "base"
         )
         recorder.record(event: .downloadStart, correlationID: cid1,
-                        modelID: "gemma-4-e4b-q4", artifact: "base",
+                        modelID: "gemma-4-e2b-q4", artifact: "base",
                         expectedBytes: 5_335_273_056)
         recorder.record(event: .validationComplete, correlationID: cid1,
-                        modelID: "gemma-4-e4b-q4", artifact: "base",
+                        modelID: "gemma-4-e2b-q4", artifact: "base",
                         expectedBytes: 5_335_273_056, actualBytes: 5_335_273_056)
 
         let summary = recorder.exportSummary()
         XCTAssertGreaterThanOrEqual(summary?.artifactStates.count ?? 0, 1,
                                     "Summary must include artifact states")
         if let state = summary?.artifactStates.first {
-            XCTAssertEqual(state.modelID, "gemma-4-e4b-q4")
+            XCTAssertEqual(state.modelID, "gemma-4-e2b-q4")
             XCTAssertEqual(state.artifact, "base")
             XCTAssertTrue(state.verified, "Validation-complete events mark artifact as verified")
         }
@@ -330,13 +330,13 @@ final class DownloadDiagnosticTests: XCTestCase {
 
     func testExportSummaryIsUsefulWithoutCredentials() {
         let cid = DownloadDiagnosticRecorder.transferCorrelationID(
-            modelID: "gemma-4-e4b-q4", artifact: "base"
+            modelID: "gemma-4-e2b-q4", artifact: "base"
         )
         recorder.record(event: .downloadStart, correlationID: cid,
-                        modelID: "gemma-4-e4b-q4", artifact: "base",
+                        modelID: "gemma-4-e2b-q4", artifact: "base",
                         expectedBytes: 5_335_273_056)
         recorder.record(event: .validationComplete, correlationID: cid,
-                        modelID: "gemma-4-e4b-q4", artifact: "base",
+                        modelID: "gemma-4-e2b-q4", artifact: "base",
                         expectedBytes: 5_335_273_056, actualBytes: 5_335_273_056)
 
         guard let summary = recorder.exportSummary(),
@@ -361,10 +361,10 @@ final class DownloadDiagnosticTests: XCTestCase {
 
     func testWriteSummaryCreatesFile() {
         let cid = DownloadDiagnosticRecorder.transferCorrelationID(
-            modelID: "gemma-4-e4b-q4", artifact: "base"
+            modelID: "gemma-4-e2b-q4", artifact: "base"
         )
         recorder.record(event: .downloadStart, correlationID: cid,
-                        modelID: "gemma-4-e4b-q4", artifact: "base")
+                        modelID: "gemma-4-e2b-q4", artifact: "base")
 
         let summaryURL = recorder.writeSummary()
         XCTAssertNotNil(summaryURL, "writeSummary must return a URL")
@@ -387,12 +387,12 @@ extension DownloadDiagnosticTests {
 
     func testRecordedPayloadCarriesCatalogVersion() {
         let correlationID = DownloadDiagnosticRecorder.transferCorrelationID(
-            modelID: "gemma-4-e4b-q4", artifact: "base"
+            modelID: "gemma-4-e2b-q4", artifact: "base"
         )
         let payload = recorder.record(
             event: .downloadStart,
             correlationID: correlationID,
-            modelID: "gemma-4-e4b-q4",
+            modelID: "gemma-4-e2b-q4",
             artifact: "base"
         )
         XCTAssertNotNil(payload?.catalogVersion, "Diagnostic payload must carry a catalog version")
@@ -402,10 +402,10 @@ extension DownloadDiagnosticTests {
 
     func testExportSummaryCarriesCatalogVersion() {
         let cid = DownloadDiagnosticRecorder.transferCorrelationID(
-            modelID: "gemma-4-e4b-q4", artifact: "base"
+            modelID: "gemma-4-e2b-q4", artifact: "base"
         )
         recorder.record(event: .downloadStart, correlationID: cid,
-                        modelID: "gemma-4-e4b-q4", artifact: "base")
+                        modelID: "gemma-4-e2b-q4", artifact: "base")
         let summary = recorder.exportSummary()
         XCTAssertNotNil(summary?.catalogVersion, "Export summary must carry a catalog version")
         XCTAssertFalse(summary?.catalogVersion?.isEmpty ?? true,

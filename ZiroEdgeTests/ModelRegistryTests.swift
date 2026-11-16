@@ -93,20 +93,18 @@ final class ModelRegistryTests: XCTestCase {
     }
 
     func testCatalogIncludesEveryRequiredRuntimeIdentityWhileEligibilityIsGated() {
-        XCTAssertEqual(ModelRegistry.allModels.count, 10)
+        XCTAssertEqual(ModelRegistry.allModels.count, 6)
         XCTAssertEqual(ModelRegistry.productionModels, [ModelRegistry.gemma4_e2b])
         XCTAssertEqual(ModelRegistry.gemma4_e2b.runtimeEligibility, .validated)
         XCTAssertEqual(ModelRegistry.llama32_3B.runtimeEligibility, .estimated)
-        XCTAssertEqual(ModelRegistry.gemma4_e4b_text.runtimeEligibility, .estimated)
-        XCTAssertEqual(ModelRegistry.gemma4_e4b.runtimeEligibility, .estimated)
         // Device-validated import lineup: loadable on the same conservative
         // estimate as imports, with no per-shape calibration run required.
-        for id in ["lfm2.5-1.2b-q4", "lfm2.5-2.6b-q4", "qwen3.5-2b-q4", "qwen3.5-0.8b-q4", "bonsai-8b-q1", "bonsai-4b-q1"] {
+        for id in ["lfm2.5-1.2b-q4", "qwen3.5-2b-q4", "qwen3.5-0.8b-q4", "bonsai-4b-q1"] {
             XCTAssertEqual(ModelRegistry.model(for: id)?.runtimeEligibility, .estimated, id)
         }
         // Only the measured shape is promoted; everything else stays loadable.
         XCTAssertEqual(ModelRegistry.productionModels, [ModelRegistry.gemma4_e2b])
-        XCTAssertEqual(ModelRegistry.availableModels(deviceRAM: 16_000_000_000).count, 10)
+        XCTAssertEqual(ModelRegistry.availableModels(deviceRAM: 16_000_000_000).count, 6)
         XCTAssertTrue(ModelRegistry.availableModels(deviceRAM: 500_000_000).isEmpty)
     }
 
@@ -232,8 +230,8 @@ final class ModelRegistryTests: XCTestCase {
     func testE2BAllowsTextOnlyCapabilityAndOtherModelsDoNot() {
         XCTAssertTrue(ModelRegistry.gemma4_e2b.allowsTextOnlyCapability)
         XCTAssertFalse(ModelRegistry.llama32_3B.allowsTextOnlyCapability)
-        XCTAssertFalse(ModelRegistry.gemma4_e4b.allowsTextOnlyCapability)
-        XCTAssertFalse(ModelRegistry.gemma4_e4b_text.allowsTextOnlyCapability)
+        let lineup = ModelRegistry.allModels.first { $0.id == "qwen3.5-2b-q4" }!
+        XCTAssertFalse(lineup.allowsTextOnlyCapability)
     }
 
     func testE2BTextOnlyVariantDoesNotRequireProjector() {
@@ -266,27 +264,11 @@ final class ModelRegistryTests: XCTestCase {
         XCTAssertTrue(full.isVisionReady, "E2B with projector must be vision-ready")
     }
 
-    func testGemma4E4BTextIsReleaseCatalogIdentitySharingOnlyTheBaseArtifact() {
-        let text = ModelRegistry.gemma4_e4b_text
-        let vision = ModelRegistry.gemma4_e4b
-        XCTAssertEqual(text.modelType, .text)
-        XCTAssertFalse(text.requiresMMProj)
-        XCTAssertEqual(text.baseURL, vision.baseURL)
-        XCTAssertEqual(text.baseSHA256, vision.baseSHA256)
-        XCTAssertEqual(
-            ModelManagerService.baseModelPath(for: text),
-            ModelManagerService.baseModelPath(for: vision)
-        )
-        XCTAssertNotEqual(text.id, vision.id)
-    }
-
-    func testGemma4E4BInRegistry() throws {
-        let model = ModelRegistry.model(for: "gemma-4-e4b-q4")
-        XCTAssertNotNil(model)
-        XCTAssertEqual(model?.displayName, "Gemma 4 E4B")
-        XCTAssertEqual(model?.modelType, .vision)
-        XCTAssertTrue(model?.requiresMMProj ?? false)
-        XCTAssertNotNil(model?.mmprojURL)
+    func testNoTwoCatalogRowsShareABaseArtifact() {
+        // The removed E4B text/vision pair was the only shared-base catalog entry.
+        // Uniqueness keeps delete-local reasoning simple: no sibling can retain a base.
+        let ids = ModelRegistry.allModels.map(\.baseArtifactStorageID)
+        XCTAssertEqual(ids.count, Set(ids).count)
     }
 
     func testGemma4Config() throws {

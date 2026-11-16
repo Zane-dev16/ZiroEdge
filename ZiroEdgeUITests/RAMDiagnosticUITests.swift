@@ -19,24 +19,20 @@ final class RAMDiagnosticUITests: UITestBase {
     private enum Target {
         static let llama = "llama3.2-3b-q4"
         static let e2bVision = "gemma-4-e2b-q4"
-        static let e4bVision = "gemma-4-e4b-q4"
-        static let e4bText = "gemma-4-e4b-q4-text-calibration"
+        static let lfm12b = "lfm2.5-1.2b-q4"
     }
 
     func testObserveLlamaMemoryOutcome() throws { try runDiagnostic(expectation: .observe, modelID: Target.llama) }
     func testObserveE2BVisionMemoryOutcome() throws { try runDiagnostic(expectation: .observe, modelID: Target.e2bVision) }
-    func testObserveE4BVisionMemoryOutcome() throws { try runDiagnostic(expectation: .observe, modelID: Target.e4bVision) }
-    func testObserveE4BTextMemoryOutcome() throws { try runDiagnostic(expectation: .observe, modelID: Target.e4bText) }
+    func testObserveLFM12BMemoryOutcome() throws { try runDiagnostic(expectation: .observe, modelID: Target.lfm12b) }
 
     func testBlockLlamaUnvalidatedProfile() throws { try runDiagnostic(expectation: .block, modelID: Target.llama) }
     func testE2BValidatedProfileLoadsWhenInstalled() throws { try runDiagnostic(expectation: .load, modelID: Target.e2bVision) }
-    func testBlockE4BVisionUnvalidatedProfile() throws { try runDiagnostic(expectation: .block, modelID: Target.e4bVision) }
-    func testBlockE4BTextUnvalidatedProfile() throws { try runDiagnostic(expectation: .block, modelID: Target.e4bText) }
+    func testBlockLFM12BUnvalidatedProfile() throws { try runDiagnostic(expectation: .block, modelID: Target.lfm12b) }
 
     func testControlledLlamaWorkload() throws { try runControlledWorkload(modelID: Target.llama) }
     func testControlledE2BVisionWorkload() throws { try runControlledWorkload(modelID: Target.e2bVision) }
-    func testControlledE4BVisionWorkload() throws { try runControlledWorkload(modelID: Target.e4bVision) }
-    func testControlledE4BTextWorkload() throws { try runControlledWorkload(modelID: Target.e4bText) }
+    func testControlledLFM12BWorkload() throws { try runControlledWorkload(modelID: Target.lfm12b) }
 
     private func runControlledWorkload(modelID: String) throws {
 #if targetEnvironment(simulator)

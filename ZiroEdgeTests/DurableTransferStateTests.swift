@@ -506,7 +506,7 @@ extension DurableTransferStateTests {
     }
 
     func testResolveStorageIDMapsMMProjPrefixToCorrectArtifact() {
-        let model = ModelRegistry.gemma4_e4b
+        let model = ModelRegistry.gemma4_e2b
         let task = DownloadTask(model: model, artifact: .mmproj)
 
         let resolved = DownloadManager.resolveStorageID(task.storageID)

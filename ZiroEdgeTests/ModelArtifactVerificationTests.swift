@@ -317,23 +317,29 @@ final class ModelArtifactVerificationTests: XCTestCase {
 
 extension ModelArtifactVerificationTests {
     func testSharedStorageIdentityModelsHaveConsistentMetadata() {
-        // gemma4_e4b and gemma4_e4b_text share baseArtifactStorageID.
+        // Two imported rows with the same digest share one baseArtifactStorageID.
         // Their base metadata must be byte-for-byte identical.
-        let vision = ModelRegistry.gemma4_e4b
-        let text = ModelRegistry.gemma4_e4b_text
+        let digest = String(repeating: "e", count: 64)
+        let provenance = HuggingFaceProvenance(
+            repositoryID: "test/shared-base",
+            revision: "main",
+            baseFilename: "shared.gguf",
+            baseSHA256: digest,
+            architecture: "llama",
+            projectorFilename: nil,
+            projectorSHA256: nil
+        )
+        var first = TestModelFixtures.text(id: "fixture-av-a-\(UUID().uuidString.lowercased())")
+        first.source = .huggingFace(provenance)
+        var second = TestModelFixtures.text(id: "fixture-av-b-\(UUID().uuidString.lowercased())")
+        second.source = .huggingFace(provenance)
 
         // Verify they share the same storage identity.
-        XCTAssertEqual(vision.baseArtifactStorageID, text.baseArtifactStorageID)
+        XCTAssertEqual(first.baseArtifactStorageID, second.baseArtifactStorageID)
 
         // Verify their base metadata is consistent.
-        XCTAssertEqual(vision.baseURL, text.baseURL)
-        XCTAssertEqual(vision.baseFileSizeBytes, text.baseFileSizeBytes)
-        XCTAssertEqual(vision.baseSHA256, text.baseSHA256)
-
-        // Verify the catalog validator accepts this shared configuration.
-        let models: [AIModel] = [vision, text]
-        XCTAssertNil(ModelCatalogValidator.catalogFailureReason(models: models),
-                      "Models sharing storage ID with consistent metadata must pass validation")
+        XCTAssertEqual(first.baseFileSizeBytes, second.baseFileSizeBytes)
+        XCTAssertEqual(first.baseSHA256, second.baseSHA256)
     }
 
     func testCatalogValidatorRejectsNonCanonicalURLScheme() {

@@ -32,13 +32,31 @@ final class StorageCleanupTests: XCTestCase {
         }
         // Clean installed models
         for model in ModelRegistry.allModels {
-            ModelManagerService.deleteModel(model)
+            ModelManagerService.deleteModel(model, preservingReferences: Array(ModelRegistry.allModels))
         }
-        try? FileManager.default.removeItem(
-            at: ModelManagerService.baseModelPath(for: ModelRegistry.gemma4_e4b)
-        )
         downloadManager = nil
         super.tearDown()
+    }
+
+    /// Two synthetic imported models sharing one base artifact (same digest →
+    /// same storage ID and file path). Replaces the removed E4B catalog pair
+    /// for exercising shared-base behavior without registry involvement.
+    private func sharedBasePair() -> (AIModel, AIModel) {
+        let digest = String(repeating: "a", count: 64)
+        let provenance = HuggingFaceProvenance(
+            repositoryID: "test/shared-base",
+            revision: "main",
+            baseFilename: "shared.gguf",
+            baseSHA256: digest,
+            architecture: "llama",
+            projectorFilename: nil,
+            projectorSHA256: nil
+        )
+        var first = TestModelFixtures.text(id: "fixture-shared-a-\(UUID().uuidString.lowercased())")
+        first.source = .huggingFace(provenance)
+        var second = TestModelFixtures.text(id: "fixture-shared-b-\(UUID().uuidString.lowercased())")
+        second.source = .huggingFace(provenance)
+        return (first, second)
     }
 
     // MARK: - Cancel and Delete Cleanup
@@ -90,31 +108,25 @@ final class StorageCleanupTests: XCTestCase {
     }
 
     func testDeleteRemovesInstalledFilesButPreservesSharedBase() throws {
-        let basePath = ModelManagerService.baseModelPath(for: ModelRegistry.gemma4_e4b)
-        let projectorPath = ModelManagerService.mmprojModelPath(for: ModelRegistry.gemma4_e4b)
+        let (first, second) = sharedBasePair()
+        let basePath = ModelManagerService.baseModelPath(for: first)
+        XCTAssertEqual(basePath, ModelManagerService.baseModelPath(for: second),
+                       "Shared-base pair must resolve to one file")
         ModelManagerService.ensureModelsDirectory()
 
         let baseData = TestModelFixtures.gguf(count: 256)
-        // Install only the base — projector stays absent so only base survival is tested.
         try baseData.write(to: basePath, options: .atomic)
-        defer {
-            try? FileManager.default.removeItem(at: basePath)
-            try? FileManager.default.removeItem(at: projectorPath)
-        }
+        defer { try? FileManager.default.removeItem(at: basePath) }
 
-        // Verify shared-base detection works
-        XCTAssertTrue(ModelManagerService.isBaseArtifactShared(ModelRegistry.gemma4_e4b),
-                      "E4B vision must detect its base is shared with text variant")
-
-        // Direct service-level delete must preserve shared base
-        ModelManagerService.deleteModel(ModelRegistry.gemma4_e4b)
-
-        // Base must survive (shared with text variant)
+        // Direct service-level delete with a live sibling reference must preserve the shared base.
+        ModelManagerService.deleteModel(first, preservingReferences: [second])
         XCTAssertTrue(FileManager.default.fileExists(atPath: basePath.path),
-                      "Shared base artifact must survive vision-model deletion")
-        // Projector must be deleted (only owned by vision variant)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: projectorPath.path),
-                       "Projector owned only by vision variant must be deleted")
+                      "Shared base artifact must survive while a sibling references it")
+
+        // With no sibling reference and no registry entry, the base is removed.
+        ModelManagerService.deleteModel(first)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: basePath.path),
+                       "Unreferenced base artifact must be removed")
     }
 
     func testCancelDiscardAndDeleteAreDistinctOperations() {
@@ -180,7 +192,7 @@ final class StorageCleanupTests: XCTestCase {
     }
 
     func testRequiredDownloadAccountsForPairedArtifacts() {
-        let model = ModelRegistry.gemma4_e4b
+        let model = ModelRegistry.gemma4_e2b
 
         // When both artifacts are missing, required should be base + projector + margin
         let required = downloadManager.requiredDownloadBytes(for: model, includeOptionalProjector: true)
@@ -353,9 +365,8 @@ final class StorageCleanupTests: XCTestCase {
     // MARK: - Deletion Coordination
 
     func testIsSafeToDeleteWhenActiveModelSharesBase() {
-        // Exercise the known shared E4B catalog variants.
-        let vision = ModelRegistry.gemma4_e4b
-        let text = ModelRegistry.gemma4_e4b_text
+        // Exercise shared-base deletion safety with a synthetic imported pair.
+        let (vision, text) = sharedBasePair()
 
         // Text variant should be safe to delete when vision is loaded (they share base)
         XCTAssertFalse(downloadManager.isSafeToDelete(text, activeModel: vision),
@@ -368,8 +379,7 @@ final class StorageCleanupTests: XCTestCase {
     }
 
     func testUnsafeDeletionReasonProvidesUserMessage() {
-        let vision = ModelRegistry.gemma4_e4b
-        let text = ModelRegistry.gemma4_e4b_text
+        let (vision, text) = sharedBasePair()
 
         let reason = downloadManager.unsafeDeletionReason(for: text, activeModel: vision)
         XCTAssertNotNil(reason, "Must provide a reason when deletion is unsafe")

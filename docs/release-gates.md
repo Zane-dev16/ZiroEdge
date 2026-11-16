@@ -180,9 +180,9 @@ expected and correct while the gate is incomplete.
 
 ---
 
-## Gate 7: Offline Operation — E2B/E4B (Issue #07)
+## Gate 7: Offline Operation — E2B (Issue #07)
 
-**Requirement:** Installed E2B and E4B models must remain discoverable, loadable,
+**Requirement:** The installed E2B model must remain discoverable, loadable,
 and usable for advertised capabilities with network access disabled on a
 physical device.
 
@@ -192,12 +192,12 @@ physical device.
 bash Scripts/device-test.sh --layer offline --evidence-dir docs/release-evidence/offline
 ```
 
-**Named E2B/E4B offline tests** (fail, do not skip, when physical-device layer
+**Named E2B offline tests** (fail, do not skip, when physical-device layer
 requires those models):
 
 - Airplane Mode launch shows only models with complete artifacts passing
   current readiness checks.
-- E2B and E4B each load and produce a text response while offline.
+- E2B loads and produces a text response while offline.
 - Vision-ready installs expose correct capability and complete an offline
   image interaction.
 - Invalid model pairs do not appear ready and provide recovery feedback.
@@ -217,8 +217,8 @@ reporting a vacuous pass.
 
 **Fail-closed exit behavior:** `device-test.sh --layer offline` exits nonzero
 until a human records exactly one explicit PASS observation per required
-scenario (`airplane-mode-launch`, `e2b-text-offline`, `e4b-text-offline`,
-`e2b-vision-offline`, `e4b-vision-offline`, `invalid-pair-recovery`,
+scenario (`airplane-mode-launch`, `e2b-text-offline`,
+`e2b-vision-offline`, `invalid-pair-recovery`,
 `conversation-history`). A run without operator observations therefore exits
 nonzero even when all 67 unit tests and the UI stage pass; that nonzero exit is
 expected and correct while the gate is incomplete.

@@ -25,7 +25,10 @@ final class MemoryProfileTests: XCTestCase {
     }
 
     func testUnvalidatedAndUnknownProfilesFailClosed() {
-        XCTAssertThrowsError(try MemoryProfileRegistry.e4bTextCalibration.requiredProcessHeadroomBytes())
+        let lineup = ModelRegistry.allModels.first { $0.id == "qwen3.5-2b-q4" }!
+        let profile = MemoryProfileRegistry.profile(for: lineup)
+        XCTAssertNotNil(profile)
+        XCTAssertThrowsError(try XCTUnwrap(profile).requiredProcessHeadroomBytes())
         XCTAssertNil(MemoryProfileRegistry.profile(for: "does-not-exist"))
     }
 
@@ -104,38 +107,30 @@ final class MemoryProfileTests: XCTestCase {
         )
     }
 
-    func testE4BTextCalibrationHasSpecifiedSafeShapeAndNoProjector() {
-        let profile = MemoryProfileRegistry.e4bTextCalibration
-        XCTAssertEqual(profile.modelID, ModelRegistry.gemma4E4BTextCalibration.id)
-        XCTAssertEqual(profile.mode, .text)
-        XCTAssertEqual(profile.contextLength, 512)
-        XCTAssertEqual(profile.batchSize, 256)
-        XCTAssertEqual(profile.microBatchSize, 64)
-        XCTAssertEqual(profile.projectorPolicy, .disabled)
-        XCTAssertEqual(profile.evidenceStatus, .unvalidated)
-        XCTAssertNil(profile.measuredFullWorkloadPeakDeltaBytes)
-    }
+    /* Calibration-shape test removed 2026-11-15 with the E4B calibration identity. */
 
-    func testE4BVariantsAreNotProductionModelsUntilIndividuallyValidated() {
-        XCTAssertFalse(ModelRegistry.productionModels.contains { $0.id == ModelRegistry.gemma4_e4b.id })
-        XCTAssertFalse(ModelRegistry.productionModels.contains { $0.id == ModelRegistry.gemma4_e4b_text.id })
-        XCTAssertFalse(ModelRegistry.productionModels.contains { $0.id == ModelRegistry.gemma4E4BTextCalibration.id })
-        XCTAssertTrue(ModelRegistry.calibrationModels.contains { $0.id == ModelRegistry.gemma4E4BTextCalibration.id })
-        XCTAssertEqual(
-            ModelManagerService.baseModelPath(for: ModelRegistry.gemma4_e4b),
-            ModelManagerService.baseModelPath(for: ModelRegistry.gemma4_e4b_text)
-        )
-        XCTAssertEqual(MemoryProfileRegistry.e4bText.projectorPolicy, .disabled)
-        XCTAssertEqual(MemoryProfileRegistry.e4bText.mode, .text)
+    func testRemovedFamiliesAreAbsentFromCatalog() {
+        let ids = Set(ModelRegistry.allModels.map(\.id))
+        XCTAssertFalse(ids.contains("gemma-4-e4b-q4"))
+        XCTAssertFalse(ids.contains("gemma-4-e4b-q4-text"))
+        XCTAssertFalse(ids.contains("lfm2.5-2.6b-q4"))
+        XCTAssertFalse(ids.contains("bonsai-8b-q1"))
+        XCTAssertTrue(ModelRegistry.calibrationModels.isEmpty)
+        // Every surviving row resolves to exactly one base file.
+        for model in ModelRegistry.allModels {
+            XCTAssertFalse(ModelManagerService.baseModelPath(for: model).path.isEmpty)
+        }
     }
 
     func testArtifactSizeDoesNotChangeMemoryAdmission() async {
+        let model = ModelRegistry.allModels.first { $0.id == "qwen3.5-2b-q4" }!
         let metrics = FixedMemoryMetricsProvider(processAvailable: 1_800_000_000, total: 8_054_095_872)
         let budgeter = MemoryBudgeter(metrics: metrics)
-        let decision = await budgeter.decision(for: ModelRegistry.gemma4E4BTextCalibration)
+        let profile = MemoryProfileRegistry.profile(for: model)
+        let decision = await budgeter.decision(for: model, allowUnvalidatedCalibration: true)
 
         XCTAssertEqual(decision.recommendation, .insufficientRAM)
-        XCTAssertEqual(decision.profileID, MemoryProfileRegistry.e4bTextCalibration.id)
+        XCTAssertEqual(decision.profileID, profile?.id)
         XCTAssertNil(decision.requiredBytes)
         XCTAssertNil(decision.artifactBytesUsedForAdmission)
     }
