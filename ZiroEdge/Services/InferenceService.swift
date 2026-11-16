@@ -52,6 +52,51 @@ extension InferenceServiceProtocol {
     func releaseGenerationGateForEviction() async {}
 }
 
+// MARK: - Engine Seam
+
+/// The native engine surface the service drives. A protocol seam exists so the
+/// load gates — preflight decode and chat-template availability — are testable
+/// without native construction.
+protocol LoadedEngine: Sendable {
+    func verifyLoad() async throws
+    func hasUsableChatTemplate() async -> Bool
+    func unload() async
+    nonisolated func cancel()
+
+    func streamCompletion(
+        prompt: String,
+        addBos: Bool?,
+        parseSpecial: Bool,
+        stopStrings: [String],
+        sampling: SamplingConfigSwift
+    ) async throws -> AsyncThrowingStream<String, Error>
+
+    func streamChatCompletion(
+        messages: [(role: String, content: String)],
+        addBos: Bool?,
+        stopStrings: [String],
+        sampling: SamplingConfigSwift
+    ) async throws -> AsyncThrowingStream<String, Error>
+
+    func streamVisionCompletion(
+        prompt: String,
+        images: [Data],
+        addBos: Bool?,
+        stopStrings: [String],
+        sampling: SamplingConfigSwift
+    ) async throws -> AsyncThrowingStream<String, Error>
+
+    func streamVisionChatCompletion(
+        messages: [(role: String, content: String)],
+        images: [Data],
+        addBos: Bool?,
+        stopStrings: [String],
+        sampling: SamplingConfigSwift
+    ) async throws -> AsyncThrowingStream<String, Error>
+}
+
+extension LlamaEngine: LoadedEngine {}
+
 // MARK: - Inference Service
 
 private final class MemoryPeakAccumulator: @unchecked Sendable {
@@ -83,8 +128,8 @@ actor InferenceService: InferenceServiceProtocol {
 
     private let logger = Logger(subsystem: "com.zanish-labs.ziroedge", category: "inference")
 
-    /// The underlying LlamaEngine. Nil when no model is loaded.
-    private var engine: LlamaEngine?
+    /// The underlying engine. Nil when no model is loaded.
+    private var engine: (any LoadedEngine)?
 
     /// The currently loaded model ID.
     private var _loadedModelID: String?
@@ -110,12 +155,21 @@ actor InferenceService: InferenceServiceProtocol {
     private let generationGate = GenerationGate()
 
     private let loadSafetyStore: LoadSafetyStore
+    /// Production construction, replaceable in tests so the load gates run
+    /// without a real GGUF behind them.
+    private let makeEngine: @Sendable (LlamaConfigSwift) throws -> any LoadedEngine
     /// Unified stable-settle sampler (system metrics — same source the old
     /// back-to-back resamples read). Logger only; verdict math unchanged.
     private let settleBudgeter = MemoryBudgeter()
 
-    init(loadSafetyStore: LoadSafetyStore) {
+    init(
+        loadSafetyStore: LoadSafetyStore,
+        makeEngine: @escaping @Sendable (LlamaConfigSwift) throws -> any LoadedEngine = {
+            try LlamaEngine(config: $0)
+        }
+    ) {
         self.loadSafetyStore = loadSafetyStore
+        self.makeEngine = makeEngine
     }
 
 #if DEBUG
@@ -129,6 +183,7 @@ actor InferenceService: InferenceServiceProtocol {
         } catch {
             preconditionFailure("Could not create isolated test load-safety storage")
         }
+        self.makeEngine = { try LlamaEngine(config: $0) }
     }
 #endif
 
@@ -200,7 +255,8 @@ actor InferenceService: InferenceServiceProtocol {
             threadCount: config.threadCount,
             useMmap: config.useMmap,
             f16KV: config.f16KV,
-            gpuLayers: profile.gpuLayers
+            gpuLayers: profile.gpuLayers,
+            chatTemplateName: model.chatTemplateName
         )
         do {
             try loadSafetyStore.beginLoad(profileID: profile.id)
@@ -231,9 +287,9 @@ actor InferenceService: InferenceServiceProtocol {
         }
 
         // Native construction is synchronous and cannot be interrupted once entered.
-        let newEngine: LlamaEngine
+        let newEngine: any LoadedEngine
         do {
-            newEngine = try LlamaEngine(config: engineConfig)
+            newEngine = try makeEngine(engineConfig)
         } catch {
             // A returned native error is not an unclean termination. Preserve its
             // category even if committing marker cleanup also fails.
@@ -245,6 +301,61 @@ actor InferenceService: InferenceServiceProtocol {
             }
             throw classified
         }
+
+        try await verifyAndCommit(newEngine, model: model, profile: profile)
+
+        engine = newEngine
+        _loadedModelID = model.id
+        currentConfig = config
+        currentModel = model
+
+        logger.info("Model loaded successfully: \(model.id, privacy: .public)")
+    }
+
+    /// Post-construction gates plus the load-safety commit. The engine is only
+    /// published as loaded when it proved it can decode and can be prompted.
+    private func verifyAndCommit(
+        _ newEngine: any LoadedEngine,
+        model: AIModel,
+        profile: MemoryProfile
+    ) async throws {
+        // A constructed engine is not proof the model can decode. The preflight
+        // runs before the load is committed so a dead-on-arrival model fails here,
+        // where refusal copy lives, instead of failing every later request.
+        do {
+            try await newEngine.verifyLoad()
+        } catch {
+            let classified = Self.classifyNativeFailure(error)
+                .addingSanitizedDiagnostic("load-warmup")
+            await newEngine.unload()
+            do {
+                try loadSafetyStore.clearAfterNativeConstruction(profileID: profile.id)
+            } catch {
+                throw classified.addingSanitizedDiagnostic("load-safety-clear-failed")
+            }
+            logger.error("Preflight decode failed for \(model.id, privacy: .public)")
+            throw classified
+        }
+
+        // Every turn goes through the embedded template; a model whose template
+        // cannot be rendered has no supported prompt path and must not load.
+        guard await newEngine.hasUsableChatTemplate() else {
+            await newEngine.unload()
+            logger.error("No usable chat template for \(model.id, privacy: .public)")
+            do {
+                try loadSafetyStore.clearAfterNativeConstruction(profileID: profile.id)
+            } catch {
+                throw InferenceError.nativeFailure(
+                    kind: .suspectedJetsam,
+                    diagnostic: "load-safety-clear-failed"
+                )
+            }
+            throw InferenceError.nativeFailure(
+                kind: .contextCreation,
+                diagnostic: "chat-template-missing"
+            )
+        }
+
         do {
             try loadSafetyStore.clearAfterNativeConstruction(profileID: profile.id)
         } catch {
@@ -254,12 +365,6 @@ actor InferenceService: InferenceServiceProtocol {
                 diagnostic: "load-safety-clear-failed"
             )
         }
-        engine = newEngine
-        _loadedModelID = model.id
-        currentConfig = config
-        currentModel = model
-
-        logger.info("Model loaded successfully: \(model.id, privacy: .public)")
     }
 
     func unloadModel() async {
@@ -361,6 +466,7 @@ extension InferenceService {
         return try await eng.streamCompletion(
             prompt: prompt,
             addBos: addBos,
+            parseSpecial: false,
             stopStrings: stopStrings,
             sampling: engineSampling
         )
@@ -400,30 +506,12 @@ extension InferenceService {
 
         let prefillStarted = ContinuousClock.now
         let stream = try await gatedGenerationStream {
-            switch config.promptPath {
-            case .chatTemplate:
-                return try await eng.streamChatCompletion(
-                    messages: chatTemplateMessages(messages: messages, systemPrompt: systemPrompt),
-                    addBos: config.addBos,
-                    stopStrings: config.stopStrings,
-                    sampling: engineSampling
-                )
-            case .gemma:
-                return try await eng.streamCompletion(
-                    prompt: Self.formatGemmaPrompt(messages: messages, systemPrompt: systemPrompt),
-                    addBos: config.addBos,
-                    parseSpecial: true,
-                    stopStrings: config.stopStrings,
-                    sampling: engineSampling
-                )
-            case .raw:
-                return try await eng.streamCompletion(
-                    prompt: formatRawPrompt(messages: messages, systemPrompt: systemPrompt),
-                    addBos: config.addBos,
-                    stopStrings: config.stopStrings,
-                    sampling: engineSampling
-                )
-            }
+            return try await eng.streamChatCompletion(
+                messages: chatTemplateMessages(messages: messages, systemPrompt: systemPrompt),
+                addBos: config.addBos,
+                stopStrings: config.stopStrings,
+                sampling: engineSampling
+            )
         }
         return instrumentGenerationPeak(
             stream,
@@ -497,36 +585,13 @@ extension InferenceService {
 
         let imageEvaluationStarted = ContinuousClock.now
         let stream = try await gatedGenerationStream {
-            switch config.promptPath {
-            case .chatTemplate:
-                return try await eng.streamVisionChatCompletion(
-                    messages: templateMessages,
-                    images: images,
-                    addBos: config.addBos,
-                    stopStrings: config.stopStrings,
-                    sampling: engineSampling
-                )
-            case .gemma:
-                return try await eng.streamVisionCompletion(
-                    prompt: Self.formatGemmaPrompt(
-                        messages: messages,
-                        systemPrompt: systemPrompt,
-                        imageMarkers: imageMarkers
-                    ),
-                    images: images,
-                    addBos: config.addBos,
-                    stopStrings: config.stopStrings,
-                    sampling: engineSampling
-                )
-            case .raw:
-                return try await eng.streamVisionCompletion(
-                    prompt: formatRawPrompt(messages: messages, systemPrompt: systemPrompt),
-                    images: images,
-                    addBos: config.addBos,
-                    stopStrings: config.stopStrings,
-                    sampling: engineSampling
-                )
-            }
+            return try await eng.streamVisionChatCompletion(
+                messages: templateMessages,
+                images: images,
+                addBos: config.addBos,
+                stopStrings: config.stopStrings,
+                sampling: engineSampling
+            )
         }
         return instrumentGenerationPeak(
             stream,
@@ -848,66 +913,6 @@ extension InferenceService {
         }
         result.append(contentsOf: messages.map { (role: $0.role.rawValue, content: $0.content) })
         return result
-    }
-
-    static func formatGemmaPrompt(
-        messages: [ChatMessagePayload],
-        systemPrompt: String?,
-        imageMarkers: String = ""
-    ) -> String {
-        var rendered = ""
-        var pendingSystem = systemPrompt?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        var pendingImages = imageMarkers
-
-        for message in messages {
-            let role: String
-            var content = message.content
-            switch message.role {
-            case .system:
-                pendingSystem = [pendingSystem, content]
-                    .filter { !$0.isEmpty }
-                    .joined(separator: "\n")
-                continue
-            case .user:
-                role = "user"
-                content = [pendingSystem, pendingImages, content]
-                    .filter { !$0.isEmpty }
-                    .joined(separator: "\n")
-                pendingSystem = ""
-                pendingImages = ""
-            case .assistant:
-                role = "model"
-            }
-            rendered += "<start_of_turn>\(role)\n\(content)<end_of_turn>\n"
-        }
-        if !pendingSystem.isEmpty || !pendingImages.isEmpty {
-            rendered += "<start_of_turn>user\n"
-                + [pendingSystem, pendingImages].filter { !$0.isEmpty }.joined(separator: "\n")
-                + "<end_of_turn>\n"
-        }
-        rendered += "<start_of_turn>model\n"
-        return rendered
-    }
-
-    private func formatRawPrompt(
-        messages: [ChatMessagePayload],
-        systemPrompt: String?
-    ) -> String {
-        var parts: [String] = []
-        if let systemPrompt, !systemPrompt.isEmpty {
-            parts.append("System: \(systemPrompt)")
-        }
-        for message in messages {
-            let rolePrefix: String
-            switch message.role {
-            case .user: rolePrefix = "User"
-            case .assistant: rolePrefix = "Assistant"
-            case .system: rolePrefix = "System"
-            }
-            parts.append("\(rolePrefix): \(message.content)")
-        }
-        parts.append("Assistant:")
-        return parts.joined(separator: "\n")
     }
 }
 

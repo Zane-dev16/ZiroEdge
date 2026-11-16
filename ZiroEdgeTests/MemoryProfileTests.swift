@@ -58,7 +58,7 @@ final class MemoryProfileTests: XCTestCase {
 
     func testExtremeImportedContextEstimateSaturatesWithoutTrapping() {
         let config = ModelConfiguration(
-            promptPath: .raw,
+            promptPath: .chatTemplate,
             addBos: nil,
             stopStrings: [],
             defaultSampling: .default,
@@ -211,7 +211,7 @@ final class MemoryProfileTests: XCTestCase {
             baseSHA256: provenance.baseSHA256,
             mmprojSHA256: provenance.projectorSHA256,
             quantization: "Q4_K_M",
-            config: .imported(promptPath: .raw, contextLength: contextLength),
+            config: .imported(contextLength: contextLength),
             license: LicenseInfo(name: "MIT", url: URL(string: "https://example.com")!, copyright: ""),
             source: .huggingFace(provenance)
         )

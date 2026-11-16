@@ -457,7 +457,7 @@ final class ImportedModelUpdateTests: XCTestCase {
             baseSHA256: String(repeating: "1", count: 64),
             mmprojSHA256: nil,
             quantization: "Q4_K_M",
-            config: .imported(promptPath: .raw, contextLength: 512),
+            config: .imported(contextLength: 512),
             license: LicenseInfo(name: "Test", url: URL(string: "https://example.com")!, copyright: "Test"),
             source: .huggingFace(provenance)
         )

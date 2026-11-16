@@ -94,6 +94,10 @@ struct AIModel: Identifiable, Hashable, Sendable {
     let mmprojSHA256: String?       // Expected SHA-256 of mmproj.gguf (nil for text-only)
     let quantization: String        // e.g. "Q4_K_M"
     let config: ModelConfiguration  // Per-model presets (prompt format, sampling, etc.)
+    /// Built-in template name (`apply_template` list) for a GGUF that carries no
+    /// `tokenizer.chat_template`. The runtime still renders the turns; this only
+    /// declares which family template to use. Nil means "use the embedded one".
+    var chatTemplateName: String?
     let license: LicenseInfo
     /// Curated entries remain static; imported entries carry immutable Hugging Face provenance.
     var source: ModelSource = .curated
@@ -136,6 +140,7 @@ struct AIModel: Identifiable, Hashable, Sendable {
             mmprojSHA256: nil,
             quantization: quantization,
             config: config,
+            chatTemplateName: chatTemplateName,
             license: license
         )
     }
@@ -289,6 +294,7 @@ enum ModelRegistry {
         mmprojSHA256: "8a82e0fd831bb7cb5c8898b86393eb14042986b950a60e1034bf21d061aac8a8",
         quantization: "Q4_K_M",
         config: .gemma4,
+        chatTemplateName: "gemma",
         license: LicenseInfo(
             name: "Gemma Terms of Use",
             url: URL(string: "https://ai.google.dev/gemma/terms")!,

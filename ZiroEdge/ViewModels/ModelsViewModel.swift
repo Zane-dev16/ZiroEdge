@@ -367,7 +367,6 @@ final class ModelsViewModel: ObservableObject {
         do {
             try importedModelStore.update(id: model.id) { record in
                 record.config = .imported(
-                    promptPath: record.config.promptPath,
                     contextLength: contextLength,
                     sampling: sampling,
                     addBos: record.config.addBos,

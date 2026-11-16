@@ -76,7 +76,7 @@ final class HuggingFaceImportTests: XCTestCase {
 
     func testInspectionAcceptsLFM2AndQwen35Architectures() async throws {
         // LFM2.5-1.2B-Instruct (lfm2) + Qwen3.5-2B/0.8B (qwen35) + Qwen3 dense (qwen3):
-        // all backed by stock b9821 kernels (lfm2 #14620, qwen35 qwen35.cpp,
+        // all backed by stock b12000 kernels (lfm2 #14620, qwen35 qwen35.cpp,
         // qwen3/Q1_0 upstream #21273 — verified via nm on the pinned xcframework).
         for architecture in ["lfm2", "qwen3", "qwen35"] {
             let data = try payload(architecture: architecture, siblings: [artifact("model-Q4_K_M.gguf")])
@@ -234,7 +234,6 @@ final class HuggingFaceImportTests: XCTestCase {
 
     func testImportedConfigurationBoundsSafeControlsAndLocksUnsafePolicy() {
         let config = ModelConfiguration.imported(
-            promptPath: .chatTemplate,
             contextLength: 100_000,
             sampling: SamplingConfig(temperature: 9, topP: -1, topK: 900, maxTokens: 99_999, repeatPenalty: 5)
         )

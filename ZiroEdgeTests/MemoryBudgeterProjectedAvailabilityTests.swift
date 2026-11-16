@@ -44,7 +44,7 @@ final class MemoryBudgeterProjectedAvailabilityTests: XCTestCase {
             baseSHA256: provenance.baseSHA256,
             mmprojSHA256: provenance.projectorSHA256,
             quantization: "Q4_K_M",
-            config: .imported(promptPath: .chatTemplate, contextLength: rawContext),
+            config: .imported(contextLength: rawContext),
             license: LicenseInfo(name: "MIT", url: URL(string: "https://example.com")!, copyright: ""),
             source: .huggingFace(provenance)
         )

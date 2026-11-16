@@ -425,7 +425,6 @@ final class ChatUXTests: XCTestCase {
         XCTAssertEqual(def.frequencyPenalty, 0.0)
         XCTAssertEqual(def.presencePenalty, 0.0)
         let bounded = ModelConfiguration.imported(
-            promptPath: .chatTemplate,
             contextLength: 4096,
             sampling: SamplingConfig(
                 temperature: 9, topP: -1, topK: 900, maxTokens: 99_999,

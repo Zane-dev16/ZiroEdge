@@ -98,7 +98,7 @@ final class ImportedModelLoadFailureTests: XCTestCase {
         try store.upsert(record)
 
         try store.update(id: record.id) { rec in
-            rec.config = .imported(promptPath: .chatTemplate, contextLength: 2048)
+            rec.config = .imported(contextLength: 2048)
             if case .loadFailed = rec.loadStatus {
                 rec.loadStatus = .configurationChanged
             }
@@ -123,7 +123,7 @@ final class ImportedModelLoadFailureTests: XCTestCase {
             baseFileSizeBytes: Int64(data.count), mmprojFileSizeBytes: nil,
             baseSHA256: sha, mmprojSHA256: nil,
             quantization: "Q4_K_M",
-            config: .imported(promptPath: .raw, contextLength: 512),
+            config: .imported(contextLength: 512),
             license: LicenseInfo(name: "Test", url: URL(string: "https://example.com")!, copyright: "Test"),
             provenance: HuggingFaceProvenance(
                 repositoryID: "acme/model", revision: String(repeating: "a", count: 40),
@@ -209,7 +209,7 @@ final class ImportedModelLoadFailureTests: XCTestCase {
             baseFileSizeBytes: Int64(data.count), mmprojFileSizeBytes: nil,
             baseSHA256: sha, mmprojSHA256: nil,
             quantization: "Q4_K_M",
-            config: .imported(promptPath: .raw, contextLength: 512),
+            config: .imported(contextLength: 512),
             license: LicenseInfo(name: "Test", url: URL(string: "https://example.com")!, copyright: "Test"),
             provenance: HuggingFaceProvenance(
                 repositoryID: "acme/model", revision: String(repeating: "a", count: 40),

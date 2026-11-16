@@ -226,6 +226,13 @@ enum ModelLoadCopy {
             + "Try again, or use a text-only model."
     }
 
+    /// The model's chat format cannot be rendered by this runtime. The app has no
+    /// hand-built fallback, so the honest action is to choose another model.
+    static func unsupportedChatFormat(modelName: String) -> String {
+        "\(modelName) writes its replies in a format this version of ZiroEdge can't read. "
+            + "Choose a different model."
+    }
+
     /// A conversation referenced a model that no longer exists.
     static func modelNoLongerAvailable() -> String {
         "The model this conversation used isn't on this iPhone anymore. Choose a "

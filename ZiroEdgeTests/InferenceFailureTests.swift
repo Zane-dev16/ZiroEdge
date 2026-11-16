@@ -1,5 +1,6 @@
 import XCTest
 @testable import ZiroEdge
+import SwiftLlama
 
 final class InferenceFailureTests: XCTestCase {
     func testMissingArtifactDescriptionDoesNotExposeSensitivePath() {
@@ -10,24 +11,38 @@ final class InferenceFailureTests: XCTestCase {
         XCTAssertEqual(error.sanitizedDiagnostic, "model-artifact-missing")
     }
 
-    func testGemmaPromptUsesDeterministicTurnsAndPlacesImagesInFirstUserTurn() {
-        let prompt = InferenceService.formatGemmaPrompt(
-            messages: [
-                ChatMessagePayload(role: .user, content: "Describe it."),
-                ChatMessagePayload(role: .assistant, content: "It is red."),
-                ChatMessagePayload(role: .user, content: "One word?")
-            ],
-            systemPrompt: "Be concise.",
-            imageMarkers: "<__media__>"
-        )
+    func testLegacyPromptPathsDecodeToTheEmbeddedTemplateRoute() throws {
+        // Conversations and imported records persisted `.gemma` / `.raw` before
+        // the hand formatters were removed. Decoding must migrate them, not fail.
+        for legacy in ["gemma", "raw", "chatTemplate"] {
+            let decoded = try JSONDecoder().decode(
+                PromptPath.self,
+                from: Data("\"\(legacy)\"".utf8)
+            )
+            XCTAssertEqual(decoded, .chatTemplate, "legacy value \(legacy)")
+        }
+    }
 
-        XCTAssertEqual(
-            prompt,
-            "<start_of_turn>user\nBe concise.\n<__media__>\nDescribe it.<end_of_turn>\n"
-                + "<start_of_turn>model\nIt is red.<end_of_turn>\n"
-                + "<start_of_turn>user\nOne word?<end_of_turn>\n"
-                + "<start_of_turn>model\n"
-        )
+    func testGemmaPresetRoutesThroughTheEmbeddedTemplate() {
+        // Gemma keeps BOS and its end-of-turn stop string; only the hand-built
+        // turn renderer is gone. The runtime's template emits the same turns.
+        XCTAssertEqual(ModelConfiguration.gemma4.promptPath, .chatTemplate)
+        XCTAssertEqual(ModelConfiguration.gemma4.addBos, true)
+        XCTAssertEqual(ModelConfiguration.gemma4.stopStrings, ["<end_of_turn>"])
+    }
+
+    func testGemmaDeclaresTheBuiltInTemplateBecauseItsGGUFCarriesNone() throws {
+        // The Gemma 4 E2B GGUF has no `tokenizer.chat_template`. The catalog row
+        // declares the runtime's built-in `gemma` template instead; the runtime
+        // still renders every turn. Other rows keep the embedded template.
+        let gemma = try XCTUnwrap(ModelRegistry.model(for: "gemma-4-e2b-q4"))
+        XCTAssertEqual(gemma.chatTemplateName, "gemma")
+        XCTAssertEqual(gemma.textOnlyRuntimeVariant.chatTemplateName, "gemma")
+        for model in ModelRegistry.allModels where model.id != gemma.id {
+            XCTAssertNil(model.chatTemplateName, model.id)
+        }
+        let config = LlamaConfigSwift(modelPath: "/tmp/model.gguf", chatTemplateName: "gemma")
+        XCTAssertEqual(config.cpuFallback.chatTemplateName, "gemma")
     }
 
     func testNativeFailuresRetainDistinctSanitizedCategories() {

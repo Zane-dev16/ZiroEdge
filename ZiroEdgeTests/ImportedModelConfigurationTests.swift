@@ -12,19 +12,18 @@ final class ImportedModelConfigurationTests: XCTestCase {
     // MARK: - Configuration bounds
 
     func testImportedConfigurationClampsContextLengthToSafeRange() {
-        let tooLow = ModelConfiguration.imported(promptPath: .chatTemplate, contextLength: 64)
+        let tooLow = ModelConfiguration.imported(contextLength: 64)
         XCTAssertEqual(tooLow.contextLength, 512)
 
-        let tooHigh = ModelConfiguration.imported(promptPath: .chatTemplate, contextLength: 100_000)
+        let tooHigh = ModelConfiguration.imported(contextLength: 100_000)
         XCTAssertEqual(tooHigh.contextLength, 4096)
 
-        let normal = ModelConfiguration.imported(promptPath: .chatTemplate, contextLength: 2048)
+        let normal = ModelConfiguration.imported(contextLength: 2048)
         XCTAssertEqual(normal.contextLength, 2048)
     }
 
     func testImportedConfigurationClampsSamplingToSafeBounds() {
         let extreme = ModelConfiguration.imported(
-            promptPath: .chatTemplate,
             contextLength: 2048,
             sampling: SamplingConfig(
                 temperature: 9, topP: -1, topK: 900,
@@ -39,7 +38,7 @@ final class ImportedModelConfigurationTests: XCTestCase {
     }
 
     func testImportedConfigurationHasAppOwnedUnsafeParameters() {
-        let config = ModelConfiguration.imported(promptPath: .raw, contextLength: 1024)
+        let config = ModelConfiguration.imported(contextLength: 1024)
         // These parameters are locked — they must not be user-adjustable.
         XCTAssertEqual(config.batchSize, 256)
         XCTAssertEqual(config.microBatchSize, 64)
@@ -51,7 +50,6 @@ final class ImportedModelConfigurationTests: XCTestCase {
 
     func testNormalSamplingValuesPassThroughUnchanged() {
         let config = ModelConfiguration.imported(
-            promptPath: .chatTemplate,
             contextLength: 2048,
             sampling: SamplingConfig(
                 temperature: 0.7, topP: 0.9, topK: 40,
@@ -83,7 +81,10 @@ final class ImportedModelConfigurationTests: XCTestCase {
         XCTAssertEqual(record.config.promptPath, .chatTemplate)
     }
 
-    func testFactoryFallsBackToRawWhenChatTemplateIsEmpty() {
+    // No prompt path falls back to hand-formatted text any more. A model whose
+    // metadata omits a template is routed through the runtime's template
+    // resolution; the load gate refuses it when no template can be applied.
+    func testFactoryRoutesEmptyTemplateThroughEmbeddedTemplate() {
         let base = HFArtifact(
             filename: "model-Q4_K_M.gguf", size: 16,
             sha256: String(repeating: "a", count: 64),
@@ -97,10 +98,10 @@ final class ImportedModelConfigurationTests: XCTestCase {
         )
         let review = makeReview(artifacts: [base])
         let record = ImportedModelFactory.makeRecord(review: review, base: base)
-        XCTAssertEqual(record.config.promptPath, .raw)
+        XCTAssertEqual(record.config.promptPath, .chatTemplate)
     }
 
-    func testFactoryFallsBackToRawWhenChatTemplateIsNil() {
+    func testFactoryRoutesNilTemplateThroughEmbeddedTemplate() {
         let base = HFArtifact(
             filename: "model-Q4_K_M.gguf", size: 16,
             sha256: String(repeating: "a", count: 64),
@@ -114,7 +115,7 @@ final class ImportedModelConfigurationTests: XCTestCase {
         )
         let review = makeReview(artifacts: [base])
         let record = ImportedModelFactory.makeRecord(review: review, base: base)
-        XCTAssertEqual(record.config.promptPath, .raw)
+        XCTAssertEqual(record.config.promptPath, .chatTemplate)
     }
 
     func testFactoryDerivesContextLengthFromMetadata() {

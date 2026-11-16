@@ -165,7 +165,6 @@ final class ImportedChatCompositionTests: XCTestCase {
             review: review, base: base, projector: projector, stableID: id
         )
         record.config = .imported(
-            promptPath: record.config.promptPath,
             contextLength: 3072,
             sampling: sampling,
             addBos: record.config.addBos,

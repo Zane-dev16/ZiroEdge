@@ -529,10 +529,10 @@ struct HFRepositoryInspector: Sendable {
     private let loader: Loader
     private static let supportedArchitectures: Set<String> = [
         "llama", "gemma", "gemma2", "gemma3", "qwen2", "qwen2vl", "phi3", "mistral", "clip",
-        // Metal-aware lineup (b9821 kernels verified): lfm2 via #14620/#14705,
+        // Metal-aware lineup (b12000 kernels verified): lfm2 via #14620/#14705,
         // qwen35 via qwen35.cpp (merged 2026-02 #19435/#19468), qwen3 dense for
         // Bonsai-class Qwen3 derivatives. Q1_0 1-bit is upstream (merged Apr 2026
-        // #21273 CPU + Metal/CUDA/Vulkan per docs.prismml.com; b9821 iOS binary
+        // #21273 CPU + Metal/CUDA/Vulkan per docs.prismml.com; b12000 iOS binary
         // exports dequantize/vec_dot/quantize Q1_0 symbols + FTYPE_MOSTLY_Q1_0).
         // Ternary TQ1_0/TQ2_0 still needs the PrismML fork per docs — excluded.
         "lfm2", "qwen3", "qwen35",
@@ -873,9 +873,7 @@ struct ImportedModelFactory {
         let revision = review.revision
         let baseURL = resolveURL(repo: review.repositoryID, revision: revision, filename: base.filename)
         let projectorURL = projector.map { resolveURL(repo: review.repositoryID, revision: revision, filename: $0.filename) }
-        let promptPath: PromptPath = base.metadata.chatTemplate?.isEmpty == false ? .chatTemplate : .raw
         let config = ModelConfiguration.imported(
-            promptPath: promptPath,
             contextLength: base.metadata.contextLength ?? 2048
         )
         let provenance = HuggingFaceProvenance(

@@ -9,17 +9,26 @@ import Foundation
 // MARK: - Prompt Path
 
 /// How the model expects to receive input.
+///
+/// One path only: the GGUF's embedded chat template, applied by the runtime.
+/// Hand-built prompt strings were removed because wrong control tokens degrade
+/// output measurably — a model family's syntax is not the app's to guess.
 enum PromptPath: String, Codable, Sendable {
-    case chatTemplate       // Uses the model's built-in chat template (e.g. Llama 3.2, Qwen)
-    case gemma              // Deterministic Gemma turn formatting with special-token parsing
-    case raw                // Bypasses chat template, sends raw text (e.g. translation-specific models)
+    case chatTemplate
+
+    // Legacy artifacts persisted `.gemma` / `.raw`. Both now route through the
+    // embedded template; decoding must not fail on the old raw values.
+    init(from decoder: Decoder) throws {
+        _ = try decoder.singleValueContainer().decode(String.self)
+        self = .chatTemplate
+    }
 }
 
 // MARK: - Sampling Configuration
 
 /// Tunable sampling parameters. Stored per-conversation, overridable at runtime.
 struct SamplingConfig: Codable, Sendable, Hashable {
-    var temperature: Float     // 0.0 = greedy, higher = more random. Default 0.7.
+    var temperature: Float     // 0.0 selects the greedy sampler in the chain; higher = more random. Default 0.7.
     var topP: Float            // Nucleus sampling. Default 0.9.
     var topK: Int              // Top-K sampling. Default 40.
     var maxTokens: Int         // Maximum tokens to generate. Default 2048.
@@ -146,7 +155,6 @@ struct ModelConfiguration: Codable, Sendable, Hashable {
     /// Imported models expose only these bounded controls. Unsafe runtime knobs
     /// remain app-owned constants.
     static func imported(
-        promptPath: PromptPath,
         contextLength: Int,
         sampling: SamplingConfig = .default,
         addBos: Bool? = nil,
@@ -163,7 +171,7 @@ struct ModelConfiguration: Codable, Sendable, Hashable {
             presencePenalty: min(max(sampling.presencePenalty, 0), 2)
         )
         return ModelConfiguration(
-            promptPath: promptPath,
+            promptPath: .chatTemplate,
             addBos: addBos,
             stopStrings: stopStrings,
             defaultSampling: boundedSampling,
@@ -226,9 +234,9 @@ struct ModelConfiguration: Codable, Sendable, Hashable {
         gpuLayers: autoGpuLayers()
     )
 
-    /// Gemma 4 — vision model, chat template. Requires BOS token.
+    /// Gemma 4 — vision model, embedded template. Requires BOS token.
     static let gemma4 = ModelConfiguration(
-        promptPath: .gemma,
+        promptPath: .chatTemplate,
         addBos: true,  // Gemma requires BOS
         stopStrings: ["<end_of_turn>"],
         defaultSampling: .default,

@@ -243,36 +243,6 @@ final class ModelLifecycleManager: ObservableObject {
         ))
     }
 
-    private static func userMessage(for error: InferenceError?, modelName: String) -> String {
-        guard let error else { return ModelLoadCopy.engineCouldNotStart(modelName: modelName) }
-        switch error {
-        case .modelFileNotFound:
-            return ModelLoadCopy.missingModelFile(modelName: modelName)
-        case .mmprojFileNotFound:
-            return ModelLoadCopy.missingImageFile(modelName: modelName)
-        case .nativeFailure(let kind, _):
-            switch kind {
-            case .modelMapping:
-                return ModelLoadCopy.unreadableModelFile(modelName: modelName)
-            case .contextCreation:
-                return ModelLoadCopy.couldNotReserveWorkingMemory(modelName: modelName)
-            case .projectorInitialization:
-                return ModelLoadCopy.couldNotStartImageSupport(modelName: modelName)
-            case .memoryPressure:
-                return ModelLoadCopy.notEnoughMemory(
-                    modelName: modelName, requiredBytes: nil,
-                    availableBytes: UInt64(max(os_proc_available_memory(), 0))
-                )
-            case .suspectedJetsam:
-                return ModelLoadCopy.pausedAfterRepeatedStops(modelName: modelName)
-            case .inference:
-                return ModelLoadCopy.engineCouldNotStart(modelName: modelName)
-            }
-        case .modelNotLoaded, .visionNotSupported, .generationBusy:
-            return error.localizedDescription
-        }
-    }
-
     /// Unload the current model, freeing memory. Persistence failures are surfaced.
     /// Pass `userInitiated: true` only for explicit user actions (Settings →
     /// Unload Model); those record `isUserUnloaded` so the deferred auto-loader
@@ -948,4 +918,38 @@ extension ModelLifecycleManager {
         logger.info("Safety eviction completed epoch=\(expectedEpoch, privacy: .public) warning=\(showWarning, privacy: .public)")
     }
 
+    private static func userMessage(for error: InferenceError?, modelName: String) -> String {
+        guard let error else { return ModelLoadCopy.engineCouldNotStart(modelName: modelName) }
+        switch error {
+        case .modelFileNotFound:
+            return ModelLoadCopy.missingModelFile(modelName: modelName)
+        case .mmprojFileNotFound:
+            return ModelLoadCopy.missingImageFile(modelName: modelName)
+        case .nativeFailure(let kind, _):
+            // The load-template gate is a shape refusal, not a memory problem:
+            // name it before the generic context-creation sentence.
+            if error.sanitizedDiagnostic.contains("chat-template-missing") {
+                return ModelLoadCopy.unsupportedChatFormat(modelName: modelName)
+            }
+            switch kind {
+            case .modelMapping:
+                return ModelLoadCopy.unreadableModelFile(modelName: modelName)
+            case .contextCreation:
+                return ModelLoadCopy.couldNotReserveWorkingMemory(modelName: modelName)
+            case .projectorInitialization:
+                return ModelLoadCopy.couldNotStartImageSupport(modelName: modelName)
+            case .memoryPressure:
+                return ModelLoadCopy.notEnoughMemory(
+                    modelName: modelName, requiredBytes: nil,
+                    availableBytes: UInt64(max(os_proc_available_memory(), 0))
+                )
+            case .suspectedJetsam:
+                return ModelLoadCopy.pausedAfterRepeatedStops(modelName: modelName)
+            case .inference:
+                return ModelLoadCopy.engineCouldNotStart(modelName: modelName)
+            }
+        case .modelNotLoaded, .visionNotSupported, .generationBusy:
+            return error.localizedDescription
+        }
+    }
 }

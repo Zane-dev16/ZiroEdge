@@ -170,6 +170,7 @@ final class ModelStatusCopyTests: XCTestCase {
         let distinct = [
             ModelLoadCopy.couldNotReserveWorkingMemory(modelName: modelName),
             ModelLoadCopy.couldNotStartImageSupport(modelName: modelName),
+            ModelLoadCopy.unsupportedChatFormat(modelName: modelName),
             ModelLoadCopy.unreadableModelFile(modelName: modelName),
             ModelLoadCopy.memoryCheckUnavailable(modelName: modelName),
             ModelLoadCopy.tooLargeForDevice(modelName: modelName),
