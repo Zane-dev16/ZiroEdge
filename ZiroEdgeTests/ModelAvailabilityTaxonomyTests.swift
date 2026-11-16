@@ -71,7 +71,7 @@ final class ModelAvailabilityTaxonomyTests: XCTestCase {
             TestModelFixtures.gguf(fill: 0x5A, count: data.count),
             for: model
         )
-        XCTAssertFalse(ModelManagerService.isArtifactDownloaded(model, artifact: .base))
+        XCTAssertFalse(ModelManagerService.isArtifactVerified(model, artifact: .base, depth: .full))
         XCTAssertTrue(ModelManagerService.isMarkedDamaged(for: model))
 
         ModelManagerService.deleteModel(model)
