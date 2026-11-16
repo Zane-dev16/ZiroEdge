@@ -4,6 +4,10 @@ import os
 // Storage accounting for managed directories: orphaned-byte reclamation,
 // the cached storage breakdown published to UI, and user-facing
 // insufficient-space messaging.
+//
+// Reclamation is the one place that decides what "orphaned" means: a file in
+// Staging, Resume, Quarantine or Installed whose owning identity is gone. Delete
+// is the other half of that rule and lives in ModelManagerService.deleteModel.
 extension DownloadManager {
     // MARK: - Orphan Reclamation
 

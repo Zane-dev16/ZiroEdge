@@ -142,6 +142,7 @@ and writes the row's `.repair-needed-<id>` marker. The row then presents as
 marker for every identity sharing that base.
 
 **`ModelDownloadStatus.needsRedownload(for:)`:**
+
 - `true` when the row's repair marker exists
 - `true` when an artifact file exists but the pair is not ready
 - `false` when no files exist (clean `notDownloaded` state) or the model is ready
