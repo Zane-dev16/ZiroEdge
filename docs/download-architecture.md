@@ -7,18 +7,43 @@ Every mechanism described here is implemented and verified by named regression t
 
 ## 1. Directory Layout
 
-```
+All managed model state lives under one backup-excluded root. Directories are
+capitalized; the paths are on-device state, not a suggestion.
+
+```text
 Application Support/ZiroEdge/Models/
-├── staging/              # In-progress downloads (partial files)
-├── resume/               # Resume data + durable metadata
-├── quarantine/           # Files that failed validation (preserved for diagnosis)
-├── <model-id>.gguf       # Installed base model
-├── <model-id>-mmproj.gguf # Installed multimodal projector
-└── .repair-needed-<id>   # Repair marker (set when validation fails)
+├── Installed/                    # <storageID>.gguf, <model-id>-mmproj.gguf
+├── Staging/                      # <artifactStorageID>.partial (bytes in flight)
+├── Resume/                       # <artifactStorageID>.resume + .json (durable state)
+├── Quarantine/                   # <id>-<uuid>.quarantined (kept for diagnosis)
+├── .model-storage-migration      # one-shot legacy-migration marker
+└── .repair-needed-<id>           # this row's artifacts failed validation
 ```
+
+`storageID` is `base-<baseArtifactStorageID>` for a base artifact and
+`mmproj-<model.id>` (digest-addressed for imports) for a projector. Catalog
+storage identities are unique, so no shipped row shares another row's base.
 
 **Legacy migration:** `ModelMigrationService` moves artifacts from `Documents/Models/`
 to the managed layout above. See `ModelMigrationTests` for coverage.
+
+### 1.1 Reclamation (one launch-time rule)
+
+`DownloadManager.reclaimOrphanedStorage()` runs after first frame and is the only
+place that decides what "orphaned" means. It removes:
+
+- files in `Staging/` and `Resume/` whose path belongs to no known model identity;
+- files in `Quarantine/` with the same condition after a 24 h grace period;
+- `.gguf` / `.promotion-backup` files in `Installed/` that no live row references,
+  also after 24 h so an in-flight promotion is never raced;
+- `.repair-needed-<id>` markers whose row has left the catalog.
+
+It never removes a live row's state: an in-flight transfer, a resumable transfer, a
+row's repair marker, or a base another identity still references. Delete is the
+other half of the rule — `ModelManagerService.deleteModel` removes everything the
+row owns, including its repair marker, so a deleted row cannot keep advertising
+damage. Reclamation is skipped entirely while imported registries are unavailable,
+because "no known identity" would then mean "the registry failed to load".
 
 ---
 

@@ -129,23 +129,28 @@ on the delegate callback (already off-main from URLSession).
 
 ## 6. Repair
 
-Models that have partial or corrupted artifacts enter a repair-needed state.
+Models whose artifacts exist but fail validation enter a damaged state.
 
-**Detection:** `ModelManagerService.availability(for:)` returns `.repairNeeded(issues:)`
-when any artifact exists on disk but fails validation.
+**Detection:** `ModelManagerService.availability(for:)` returns `.damaged(issues:)`
+when any artifact exists on disk but fails validation. Absence is not damage: a
+model with nothing on disk is `.notDownloaded`, never `.damaged`.
 
-**Auto-cleanup:** `isBaseDownloaded` and `isMMProjDownloaded` automatically delete
-files that fail GGUF header validation or size checks. This prevents corrupted
-artifacts from accumulating.
+**Auto-cleanup:** the full verification pass (`isArtifactVerified(_:artifact:depth:)`
+at `.full`) moves a file that fails the digest or structure check into `Quarantine/`
+and writes the row's `.repair-needed-<id>` marker. The row then presents as
+"Download again" instead of "Download", and a later successful promotion clears the
+marker for every identity sharing that base.
 
-**`ModelDownloadStatus.isRepairNeeded`:**
-- `true` when any artifact file exists but `isReady` is `false`
-- `true` when `availability(for:)` returns `.repairNeeded`
-- `false` when no files exist (clean `notDownloaded` state) or all artifacts pass
+**`ModelDownloadStatus.needsRedownload(for:)`:**
+- `true` when the row's repair marker exists
+- `true` when an artifact file exists but the pair is not ready
+- `false` when no files exist (clean `notDownloaded` state) or the model is ready
 
-**Repair action:** `DownloadManager.startDownload(for:)` treats `repairNeeded`
-models like `notDownloaded` — it initiates a fresh download which, after successful
-verification and promotion, calls `ModelManagerService.clearRepairNeeded(for:)`.
+**Repair action:** `DownloadManager.startDownload(for:)` treats a damaged model
+like `notDownloaded` — it initiates a fresh download which, after successful
+verification and promotion, removes the repair marker via
+`ModelManagerService.clearDamaged(for:)` (and its shared-base siblings through
+`clearRepairMarkersForSharedBase`). Deleting the row clears its marker too.
 
 **Regression tests:** `ValidLengthWithWrongSHA256NeedsRepair`,
 `CorrectSHA256WithWrongByteCountNeedsRepair`,
@@ -161,9 +166,14 @@ verification and promotion, calls `ModelManagerService.clearRepairNeeded(for:)`.
 **Cancel (user-initiated):** See Section 3. Removes all state.
 
 **Delete model:** `DownloadManager.deleteModel(_:)` cancels active downloads, deletes
-installed model files via `ModelManagerService.deleteModel`, removes resume data,
-and refreshes disk status. Shared base artifacts (E2B text and vision share one base
-GGUF) are preserved when another model identity still references them.
+installed model files via `ModelManagerService.deleteModel`, removes resume data and
+the row's repair marker, and refreshes disk status. Delete removes everything the
+row owns, so a deleted model reads as an ordinary download, never as damaged.
+
+No shipped catalog rows share a base artifact: storage identities are unique, so the
+user-visible delete is always a complete clear. Shared bases still matter for
+imported rows that carry the same digest; a base another live identity references
+is preserved.
 
 **Deinit:** The `DownloadManager.deinit` cancels chunk sessions and invalidates the
 stuck-timer watchdog. In tests, the background URLSession is invalidated.
@@ -179,7 +189,8 @@ current destination is valid. If valid, the backup is discarded. If the destinat
 is invalid but the backup is valid, the backup is restored.
 
 **Regression tests:** `InjectedPromotionFailurePreservesVerifiedInstallationByteForByte`,
-`DeleteModelClearsStatus`, `testDeletingSharedBaseSiblingPreservesBase`,
+`DeleteModelClearsStatus`, `testDeletingAModelReturnsItToAPlainDownloadState`,
+`testDeletingSharedBaseSiblingPreservesBase`,
 `testDeletingUnsharedVisionRemovesBaseAndProjector`, `testSharedBaseSiblingsCannotClaimTwoBaseWriters`
 
 ---

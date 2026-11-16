@@ -37,7 +37,7 @@ creating a remote ticket or inventing a URL.
 | 9 | Out-of-space (ENOSPC) — existing models preserved | PENDING | <!-- REQUIRED if FAIL --> | |
 | 10 | Storage freed after low-space → download resumes | PENDING | <!-- REQUIRED if FAIL --> | |
 | 11 | Repeated E2B transfer — no orphaned artifacts | PENDING | <!-- REQUIRED if FAIL --> | |
-| 12 | Repeated E2B transfer — no orphaned artifacts | PENDING | <!-- REQUIRED if FAIL --> | |
+| 12 | Repeated E4B transfer — REMOVED (E4B deleted from catalog 2026-11-15) | REMOVED | <!-- REQUIRED if FAIL --> | |
 | 13 | Reboot recovery — all installed models verified | PENDING | <!-- REQUIRED if FAIL --> | |
 | 14 | Force-quit during download → state reconciled | PENDING | <!-- REQUIRED if FAIL --> | |
 | 15 | Background→foreground cycle — download survives | PENDING | <!-- REQUIRED if FAIL --> | |
