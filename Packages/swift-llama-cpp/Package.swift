@@ -16,7 +16,7 @@ let package = Package(
         )
     ],
     targets: [
-        // Binary target from upstream ggml-org/llama.cpp release b9821.
+        // Binary target from upstream ggml-org/llama.cpp release b12000.
         // The xcframework contains pre-built static libraries for ios-arm64 and ios-arm64-simulator.
         .binaryTarget(
             name: "llama",

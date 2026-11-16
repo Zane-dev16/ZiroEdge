@@ -71,7 +71,7 @@ final class HuggingFaceLineupTests: XCTestCase {
     }
 
     func testBonsaiImportSliceEndToEndLabelsQ10AndMakesExperimentalRecords() async throws {
-        // Bonsai import slice (prism-ml, qwen3, Q1_0 1-bit): stock b9821
+        // Bonsai import slice (prism-ml, qwen3, Q1_0 1-bit): stock b12000
         // supports Q1_0 (upstream #21273, verified via nm on the pinned
         // ios-arm64 binary) — no fork, no exclusion. Only ternary
         // TQ1_0/TQ2_0 needs the fork and is not in this lineup.
@@ -106,7 +106,7 @@ final class HuggingFaceLineupTests: XCTestCase {
 
     func testLFM25AndQwen35FactoryRecordsAreExperimentalWithDigestStorage() {
         // Live discovery 2026-09-22 (x-linked-etag = SHA-256, HEAD 200).
-        // Bonsai Q1_0 1-bit runs on stock b9821 (upstream #21273; binary exports
+        // Bonsai Q1_0 1-bit runs on stock b12000 (upstream #21273; binary exports
         // Q1_0 kernels — verified via nm on the pinned xcframework). Ternary only
         // needs the fork, and is not in this lineup.
         struct Fixture { let repo: String; let file: String; let bytes: Int64; let sha: String; let arch: String; let quant: String }

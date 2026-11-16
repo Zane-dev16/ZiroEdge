@@ -209,3 +209,32 @@ construction. Failures are classified as model mapping, context creation,
 projector initialization, inference, memory pressure, or suspected interrupted
 load. User-facing errors omit local paths while bounded sanitized diagnostics
 retain the underlying category.
+
+## Runtime upgrade re-verification (2026-11-16)
+
+llama.cpp moved from b9821 to b12000. The sampler chain and the per-turn KV
+clear are unchanged; the C-API deltas and the rebuild recipe are in
+`docs/llama-runtime.md`. Loads now also run a one-token preflight decode before
+the load is committed (`LlamaEngine.verifyLoad`), so a dead-on-arrival
+model fails at load instead of failing every request.
+
+Device sweeps `20261116-122706` (full catalog, 10.2 GB) and `20261116-130400`
+(Gemma E2B + LFM3 + both Qwen rows, 6.9 GB) re-verified every surviving row on
+the new runtime. Every row deleted cleanly and left the library empty.
+
+| Row | Verdict | Note |
+| --- | --- | --- |
+| llama3.2-3b-q4 | pass | 189 s end to end |
+| gemma-4-e2b-q4 | pass | declares the built-in `gemma` template; the GGUF has none |
+| lfm2.5-1.2b-q4 | pass | |
+| qwen3.5-2b-q4 | pass | reasoning preamble closes inside the cap |
+| qwen3.5-0.8b-q4 | pass | reasoning preamble closes inside the cap |
+| bonsai-4b-q1 | pass | |
+
+Two rows were re-tested and stay out. **Bonsai 8B** (`20261116-120958`): the
+official `/no_think` suffix reached the prompt but the runtime's heuristic
+`apply_template` has no kwargs, so the model still reasoned; the row stays cut.
+**LFM3-1.7B** (`20261116-130400` quality pass, `20261116-133418` admission
+fail): it downloads, loads, answers and deletes correctly, but emits a reasoning
+preamble on 2 of 3 prompts and this runtime has no thinking switch. A thinker
+with no switch is a blocked row, not a catalog row.

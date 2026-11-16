@@ -1,9 +1,11 @@
 #!/bin/bash
 # setup.sh — ZiroEdge project setup
-# Downloads the llama.cpp xcframework binary for the swift-llama-cpp package.
+#
+# The llama.cpp XCFramework is built from the pinned upstream tag by the
+# in-repo recipe. Nothing is hand-assembled: see Scripts/build-llama-xcframework.sh
+# and docs/llama-runtime.md for the tag, the slices, and the upgrade checklist.
 set -euo pipefail
 
-XCFRAMEWORK_URL="https://github.com/ggml-org/llama.cpp/releases/download/b9821/llama-b9821-xcframework.zip"
 TARGET_DIR="Packages/swift-llama-cpp"
 XCFRAMEWORK_DIR="$TARGET_DIR/llama.xcframework"
 
@@ -12,16 +14,7 @@ if [ -d "$XCFRAMEWORK_DIR" ]; then
     exit 0
 fi
 
-echo "Downloading llama.cpp xcframework (b9821)..."
-TMPFILE=$(mktemp /tmp/llama-xcframework.XXXXXX.zip)
-curl -L --connect-timeout 30 -o "$TMPFILE" "$XCFRAMEWORK_URL"
+bash Scripts/build-llama-xcframework.sh
 
-echo "Extracting to $TARGET_DIR..."
-unzip -o "$TMPFILE" -d /tmp/llama-xcextract > /dev/null
-cp -R /tmp/llama-xcextract/build-apple/llama.xcframework "$XCFRAMEWORK_DIR"
-rm -f "$TMPFILE"
-rm -rf /tmp/llama-xcextract
-
-echo "✓ llama.xcframework installed at $XCFRAMEWORK_DIR"
 echo ""
 echo "Open ZiroEdge.xcodeproj in Xcode and build."

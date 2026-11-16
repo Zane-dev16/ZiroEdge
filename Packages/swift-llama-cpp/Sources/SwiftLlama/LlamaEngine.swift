@@ -1,9 +1,9 @@
 // LlamaEngine.swift
-// SwiftLlama — Swift wrapper for llama.cpp b9821
+// SwiftLlama — Swift wrapper for llama.cpp b12000
 //
 // Actor-isolated engine wrapping the llama.cpp C API.
 // All C API calls are isolated to this actor for thread safety.
-// Targets upstream release b9821 — sampler chain API, memory API.
+// Targets upstream release b12000 — sampler chain API, memory API.
 
 import Foundation
 import llama
@@ -72,7 +72,7 @@ public actor LlamaEngine {
 
         // Load model.
         var modelParams = llama_model_default_params()
-        modelParams.use_mmap = config.useMmap
+        modelParams.load_mode = config.useMmap ? LLAMA_LOAD_MODE_MMAP : LLAMA_LOAD_MODE_NONE
         modelParams.n_gpu_layers = Int32(config.gpuLayers)
 
         guard let loadedModel = llama_model_load_from_file(config.modelPath, modelParams) else {
@@ -146,6 +146,68 @@ public actor LlamaEngine {
         )
     }
 
+    // MARK: - Load Verification
+
+    /// One-token preflight decode. Native construction can succeed while the first
+    /// decode fails — the known upstream class is a fatal Metal OOM that still
+    /// reports "model loaded", after which every request fails. Running this before
+    /// the service commits the load makes a dead-on-arrival model fail where refusal
+    /// copy lives. The KV state is cleared afterwards so the first real turn starts
+    /// from the same empty state as before.
+    public func verifyLoad() throws {
+        guard let ctx = context, let vocab = vocabulary else {
+            throw LlamaError.modelNotLoaded
+        }
+
+        let tokens = try tokenize(
+            prompt: Self.preflightPrompt,
+            addBos: true,
+            parseSpecial: false,
+            vocab: vocab
+        )
+        guard !tokens.isEmpty else { throw LlamaError.tokenizationFailed }
+
+        let memory = llama_get_memory(ctx)
+        llama_memory_clear(memory, true)
+
+        var batch = llama_batch_init(Int32(tokens.count), 0, 1)
+        defer { llama_batch_free(batch) }
+        for (index, token) in tokens.enumerated() {
+            batch.token[index] = token
+            batch.pos[index] = Int32(index)
+            batch.n_seq_id[index] = 1
+            batch.seq_id[index]![0] = 0
+            batch.logits[index] = index == tokens.count - 1 ? 1 : 0
+        }
+        batch.n_tokens = Int32(tokens.count)
+        guard llama_decode(ctx, batch) == 0 else { throw LlamaError.decodeFailed }
+
+        // Sample one token so the output path runs too. The token is discarded.
+        guard let sampler = llama_sampler_init_greedy() else {
+            throw LlamaError.samplerCreationFailed
+        }
+        defer { llama_sampler_free(sampler) }
+        _ = llama_sampler_sample(sampler, ctx, -1)
+
+        llama_memory_clear(memory, true)
+    }
+
+    /// Whether this model can be prompted at all without hand-built syntax.
+    /// An empty render means the GGUF carries no template the runtime can apply;
+    /// the app has no fallback formatter by design.
+    public func hasUsableChatTemplate() -> Bool {
+        guard let model else { return false }
+        let rendered = applyChatTemplate(
+            messages: [(role: "user", content: Self.preflightPrompt)],
+            model: model,
+            templateName: config.chatTemplateName
+        )
+        return !rendered.isEmpty
+    }
+
+    /// Short, ASCII-only, no special tokens: tokenizes under every tokenizer.
+    private static let preflightPrompt = "ok"
+
     // MARK: - Unload
 
     public func unload() {
@@ -192,72 +254,6 @@ public actor LlamaEngine {
 }
 
 extension LlamaEngine {
-    // MARK: - Chat Template Formatting
-
-    /// Apply the model's built-in chat template to format messages.
-    /// Uses llama_chat_apply_template which auto-detects the template from the model.
-    /// Pass nil as tmpl to use the model's own template.
-    public func applyChatTemplate(
-        messages: [(role: String, content: String)],
-        model: OpaquePointer?,
-        addAssistant: Bool = true
-    ) -> String {
-        guard let model, let template = llama_model_chat_template(model, nil) else {
-            return ""
-        }
-
-        // Own every C string for the complete native call. Passing Swift String
-        // conversions directly would leave dangling pointers in this array.
-        let roles = messages.map { strdup($0.role) }
-        let contents = messages.map { strdup($0.content) }
-        defer {
-            roles.forEach { free($0) }
-            contents.forEach { free($0) }
-        }
-        guard !roles.contains(where: { $0 == nil }),
-              !contents.contains(where: { $0 == nil }) else { return "" }
-        let chatMessages = messages.indices.map { index in
-            llama_chat_message(role: roles[index], content: contents[index])
-        }
-
-        // Calculate buffer size: 2x total characters of all messages.
-        let totalChars = messages.reduce(0) { $0 + $1.content.count + $1.role.count + 10 }
-        let bufferSize = max(totalChars * 2, 1024)
-
-        let formatted = chatMessages.withUnsafeBufferPointer { ptr -> String in
-            var buffer = [CChar](repeating: 0, count: bufferSize)
-            let nBytes = llama_chat_apply_template(
-                template, ptr.baseAddress, chatMessages.count,
-                addAssistant, &buffer, Int32(bufferSize)
-            )
-            if nBytes > 0 && nBytes <= Int32(bufferSize) {
-                return String(
-                    decoding: buffer.prefix(Int(nBytes)).map { UInt8(bitPattern: $0) },
-                    as: UTF8.self
-                )
-            }
-            // If buffer too small, retry with larger buffer.
-            if nBytes > Int32(bufferSize) {
-                let largerSize = Int(nBytes) + 1
-                var largerBuffer = [CChar](repeating: 0, count: largerSize)
-                let nBytes2 = llama_chat_apply_template(
-                    template, ptr.baseAddress, chatMessages.count,
-                    addAssistant, &largerBuffer, Int32(largerSize)
-                )
-                if nBytes2 > 0 && nBytes2 <= Int32(largerSize) {
-                    return String(
-                        decoding: largerBuffer.prefix(Int(nBytes2)).map { UInt8(bitPattern: $0) },
-                        as: UTF8.self
-                    )
-                }
-            }
-            // Fallback: empty string (will cause tokenization to fail).
-            return ""
-        }
-
-        return formatted
-    }
-
     // MARK: - Streaming Chat Completion (with template)
 
     /// Stream a chat completion, applying the model's built-in chat template.
@@ -269,7 +265,12 @@ extension LlamaEngine {
         sampling: SamplingConfigSwift
     ) throws -> AsyncThrowingStream<String, Error> {
         // Apply the model's chat template to format the prompt.
-        let prompt = applyChatTemplate(messages: messages, model: model, addAssistant: true)
+        let prompt = applyChatTemplate(
+            messages: messages,
+            model: model,
+            addAssistant: true,
+            templateName: config.chatTemplateName
+        )
         guard !prompt.isEmpty else {
             throw LlamaError.tokenizationFailed
         }
@@ -385,7 +386,12 @@ extension LlamaEngine {
         stopStrings: [String],
         sampling: SamplingConfigSwift
     ) throws -> AsyncThrowingStream<String, Error> {
-        let prompt = applyChatTemplate(messages: messages, model: model, addAssistant: true)
+        let prompt = applyChatTemplate(
+            messages: messages,
+            model: model,
+            addAssistant: true,
+            templateName: config.chatTemplateName
+        )
         guard !prompt.isEmpty else {
             throw LlamaError.tokenizationFailed
         }
@@ -439,7 +445,8 @@ extension LlamaEngine {
                                     mCtx,
                                     addr.assumingMemoryBound(to: UInt8.self),
                                     imageData.count,
-                                    false
+                                    false,
+                                    mtmd_helper_init_opt_default()
                                 )
                             }
                         }
@@ -452,6 +459,7 @@ extension LlamaEngine {
                     // Build input text struct.
                     var inputText = mtmd_input_text(
                         text: nil,
+                        text_len: 0,
                         add_special: addBos ?? true,
                         parse_special: true
                     )
@@ -466,6 +474,7 @@ extension LlamaEngine {
                     var bitmapPtrs = bitmaps
                     let tokenizeResult = prompt.withCString { cstr in
                         inputText.text = cstr
+                        inputText.text_len = prompt.utf8.count
                         return bitmapPtrs.withUnsafeMutableBufferPointer { bufPtr in
                             mtmd_tokenize(mCtx, chunks, &inputText, bufPtr.baseAddress, images.count)
                         }
@@ -580,6 +589,7 @@ private extension LlamaEngine {
         func appendPenaltiesIfNeeded() {
             guard let params = Self.penaltyChainParameters(for: sampling) else { return }
             let penalty = llama_sampler_init_penalties(
+                llama_vocab_n_tokens(vocab),
                 params.lastN,
                 params.repeatPenalty,
                 params.frequencyPenalty,
@@ -962,125 +972,5 @@ private extension LlamaEngine {
             logger.fault("Generation hit context window nPos=\(nPos, privacy: .public) ctx=\(self.config.contextLength, privacy: .public)")
         }
         return termination
-    }
-}
-
-// MARK: - Configuration (Public)
-
-public struct LlamaConfigSwift: Sendable {
-    public let modelPath: String
-    public let mmprojPath: String?
-    public let contextLength: Int
-    public let batchSize: Int
-    public let microBatchSize: Int
-    public let threadCount: Int
-    public let useMmap: Bool
-    public let f16KV: Bool
-    public let gpuLayers: Int
-
-    /// True when any layer is offloaded to Metal.
-    public var usesGPU: Bool { gpuLayers > 0 }
-
-    /// CPU-only copy of this config: the Metal-fail retry target.
-    public var cpuFallback: LlamaConfigSwift {
-        LlamaConfigSwift(
-            modelPath: modelPath,
-            mmprojPath: mmprojPath,
-            contextLength: contextLength,
-            batchSize: batchSize,
-            microBatchSize: microBatchSize,
-            threadCount: threadCount,
-            useMmap: useMmap,
-            f16KV: f16KV,
-            gpuLayers: 0
-        )
-    }
-
-    public init(
-        modelPath: String,
-        mmprojPath: String? = nil,
-        contextLength: Int = 4096,
-        batchSize: Int = 512,
-        microBatchSize: Int = 128,
-        threadCount: Int = 2,
-        useMmap: Bool = true,
-        f16KV: Bool = true,
-        gpuLayers: Int = 0
-    ) {
-        self.modelPath = modelPath
-        self.mmprojPath = mmprojPath
-        precondition(contextLength > 0)
-        precondition(batchSize > 0)
-        precondition(microBatchSize > 0 && microBatchSize <= batchSize)
-        self.contextLength = contextLength
-        self.batchSize = batchSize
-        self.microBatchSize = microBatchSize
-        self.threadCount = threadCount
-        self.useMmap = useMmap
-        self.f16KV = f16KV
-        self.gpuLayers = gpuLayers
-    }
-}
-
-public struct SamplingConfigSwift: Sendable {
-    public let temperature: Float
-    public let topP: Float
-    public let topK: Int
-    public let maxTokens: Int
-    public let repeatPenalty: Float
-    public let penaltyLastN: Int
-    public let frequencyPenalty: Float
-    public let presencePenalty: Float
-
-    public init(
-        temperature: Float = 0.7,
-        topP: Float = 0.9,
-        topK: Int = 40,
-        maxTokens: Int = 2048,
-        repeatPenalty: Float = 1.1,
-        penaltyLastN: Int = 64,
-        frequencyPenalty: Float = 0.0,
-        presencePenalty: Float = 0.0
-    ) {
-        self.temperature = temperature
-        self.topP = topP
-        self.topK = topK
-        self.maxTokens = maxTokens
-        self.repeatPenalty = repeatPenalty
-        self.penaltyLastN = penaltyLastN
-        self.frequencyPenalty = frequencyPenalty
-        self.presencePenalty = presencePenalty
-    }
-}
-
-// MARK: - Errors
-
-public enum LlamaError: Error, LocalizedError {
-    case modelLoadFailed(path: String)
-    case contextCreationFailed
-    case projectorInitializationFailed
-    case invalidConfiguration
-    case modelNotLoaded
-    case tokenizationFailed
-    case decodeFailed
-    case samplerCreationFailed
-    case visionNotSupported
-    case visionImageLoadFailed
-    case contextWindowExceeded
-
-    public var errorDescription: String? {
-        switch self {
-        case .modelLoadFailed: return "Failed to map the model artifact."
-        case .contextCreationFailed: return "Failed to create inference context."
-        case .projectorInitializationFailed: return "Failed to initialize the vision projector."
-        case .invalidConfiguration: return "The inference runtime configuration is invalid."
-        case .modelNotLoaded: return "No model is loaded."
-        case .tokenizationFailed: return "Failed to tokenize input text."
-        case .decodeFailed: return "Token decoding failed."
-        case .samplerCreationFailed: return "Failed to create sampler chain."
-        case .visionNotSupported: return "Vision inference is not supported. No multimodal projector loaded."
-        case .visionImageLoadFailed: return "Failed to load image for vision inference."
-        case .contextWindowExceeded: return "The conversation is too long for the context window."
-        }
     }
 }
