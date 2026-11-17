@@ -121,7 +121,13 @@ extension LlamaEngine {
             }
             let prompt = session.prompt
             guard !prompt.isEmpty else { throw LlamaError.tokenizationFailed }
-            logger.info("Jinja template applied prompt=\(prompt.count, privacy: .public) format=\(session.format, privacy: .public) thinking=\(self.config.thinking.rawValue, privacy: .public)")
+            // One interpolated value: OSLogMessage cannot be built by
+            // concatenation, and a long multi-part literal defeats the
+            // type-checker.
+            let detail = "prompt=\(prompt.count) format=\(session.format) "
+                + "thinking=\(self.config.thinking.rawValue) "
+                + "supportsThinking=\(chatTemplates.supportsThinking)"
+            logger.info("Jinja template applied \(detail, privacy: .public)")
             // The template's own stops are part of its contract: without them a
             // turn can run past the point the model meant to stop.
             return try streamCompletion(
@@ -185,6 +191,16 @@ extension LlamaEngine {
         chatTemplateGate() == .ready
     }
 
+    /// Whether this row's template reads `enable_thinking` at all.
+    ///
+    /// Distinct from the gate: the gate answers "can this row load with the
+    /// policy it declared", this answers "could the policy be declared at all".
+    /// A row that reasons and reports false here can never be switched, which is
+    /// what makes it a blocked row rather than a catalog row.
+    public func supportsThinkingControl() -> Bool {
+        chatTemplates?.supportsThinking ?? false
+    }
+
     /// The gate's decision, parameterised so the tests can drive every policy
     /// against one loaded engine.
     func templateGate(thinking: ChatThinkingPolicy) -> ChatTemplateGate {
@@ -217,7 +233,8 @@ extension LlamaEngine {
     // MARK: - Split evidence
 
     /// One line of evidence that the split happened. The console capture in the
-    /// verification lane reads it; reply text is never logged.
+    /// verification lane reads it, so it is a notice rather than info: info-level
+    /// os_log does not reach the device console stream.
     static func logReasoning(
         _ splitter: ReplySplitter?,
         termination: String,
@@ -226,6 +243,9 @@ extension LlamaEngine {
         guard let splitter else { return }
         let reasoning = splitter.reasoningCharacters
         guard reasoning > 0 else { return }
-        logger.info("Reply split reasoningCharacters=\(reasoning, privacy: .public) termination=\(termination, privacy: .public)")
+        let surfaced = splitter.surfacedReasoningAsReply ? "yes" : "no"
+        let detail = "reasoningCharacters=\(reasoning) "
+            + "reasoningAsReply=\(surfaced) termination=\(termination)"
+        logger.notice("Reply split \(detail, privacy: .public)")
     }
 }

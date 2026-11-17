@@ -45,6 +45,8 @@ private final class StubEngine: LoadedEngine, @unchecked Sendable {
         return gate
     }
 
+    func supportsThinkingControl() async -> Bool { gate == .ready }
+
     func unload() async {
         lock.withLock { unloadCount += 1 }
     }

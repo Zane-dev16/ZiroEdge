@@ -63,6 +63,10 @@ protocol LoadedEngine: Sendable {
     /// policy is honorable. A boolean would collapse two refusals the UI words
     /// differently.
     func chatTemplateGate() async -> ChatTemplateGate
+    /// Whether the template reads `enable_thinking` at all. Distinct from the
+    /// gate: the gate says "can this row load with the policy it declared",
+    /// this says "could a policy be declared at all".
+    func supportsThinkingControl() async -> Bool
     func unload() async
     nonisolated func cancel()
 
@@ -354,6 +358,13 @@ actor InferenceService: InferenceServiceProtocol {
         // Every turn goes through the embedded template; a model whose template
         // cannot be rendered has no supported prompt path and must not load.
         let gate = await newEngine.chatTemplateGate()
+        // One line per load: the device sweep is the only place a template's real
+        // capability shows up, and this is what it reads.
+        let supportsThinking = await newEngine.supportsThinkingControl()
+        let gateDetail = "gate=\(String(describing: gate)) "
+            + "supportsThinking=\(supportsThinking) "
+            + "policy=\(model.thinking.rawValue) model=\(model.id)"
+        logger.notice("Chat template \(gateDetail, privacy: .public)")
         guard gate == .ready else {
             await newEngine.unload()
             logger.error("Chat template gate refused \(model.id, privacy: .public): \(String(describing: gate), privacy: .public)")
