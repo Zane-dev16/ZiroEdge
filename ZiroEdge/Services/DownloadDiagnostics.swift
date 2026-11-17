@@ -248,6 +248,9 @@ final class DownloadDiagnosticRecorder: @unchecked Sendable {
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
     private let logger = Logger(subsystem: "com.zanish-labs.ziroedge", category: "download-diagnostics")
+    /// Whether the "recording is off" notice has been emitted. One line per
+    /// process: the notice exists to explain a stale log file, not to flood.
+    private let disabledNoticeSent = OSAllocatedUnfairLock(initialState: false)
 
     private var appVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
@@ -312,7 +315,10 @@ final class DownloadDiagnosticRecorder: @unchecked Sendable {
         requiredStorageBytes: Int64? = nil,
         durationMs: UInt64? = nil
     ) -> DownloadDiagnosticPayload? {
-        guard isEnabled else { return nil }
+        guard isEnabled else {
+            logDisabledOnce()
+            return nil
+        }
 
         let sanitizedSummary = failureSummary.map { DownloadDiagnosticRedactor.sanitize($0) }
         let payload = DownloadDiagnosticPayload(
@@ -337,6 +343,22 @@ final class DownloadDiagnosticRecorder: @unchecked Sendable {
         )
         persist(payload)
         return payload
+    }
+
+    /// Say once that recording is off.
+    ///
+    /// A Debug build writes diagnostics only when launched with
+    /// `--download-diagnostic`; Release always records. Without this line a run
+    /// that skipped the flag leaves a stale `download-diagnostics.jsonl`, which
+    /// reads exactly like a recorder that stopped working. The gate is
+    /// deliberate; the silence was the defect.
+    private func logDisabledOnce() {
+        let alreadySent = disabledNoticeSent.withLock { sent -> Bool in
+            defer { sent = true }
+            return sent
+        }
+        guard !alreadySent else { return }
+        logger.notice("download diagnostics are off; launch with --download-diagnostic in Debug to record")
     }
 
     /// Generate a new transfer correlation ID that survives retry/relaunch

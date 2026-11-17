@@ -196,3 +196,35 @@ Before any physical-device download test, the test environment must:
 - `CatalogValidatorRejectsSignedAndIncompleteEntries` — incomplete entries rejected
 - `MissingCatalogMetadataIsUnavailableWithoutCrashing` — graceful degradation
 - `MissingIntegrityMetadataFailsClosed` — fail-closed on missing metadata
+
+## 5. Recording Diagnostics on Device
+
+`DownloadDiagnosticRecorder` writes `Documents/download-diagnostics.jsonl`.
+Release always records; a **Debug** build records only when launched with
+`--download-diagnostic`.
+
+That gate is deliberate — it keeps test runs from filling the container — but it
+has one consequence worth knowing before diagnosing a download:
+
+> A Debug run that skipped the flag leaves the **previous** file in place. A
+> stale `download-diagnostics.jsonl` therefore means "this run did not record",
+> not "the recorder is broken".
+
+The app now logs one line when recording is off:
+
+```text
+download diagnostics are off; launch with --download-diagnostic in Debug to record
+```
+
+Pull the file and the console together, and read the console first:
+
+```bash
+scripts/verify.sh pull Documents/download-diagnostics.jsonl
+scripts/verify.sh status
+```
+
+`Scripts/download-quick-diagnose.sh` is the lane that always passes the flag.
+
+`Nullable fields carry over from the payload` — a `downloadStart` without a
+matching terminal event is an interrupted transfer, not a silent failure: the
+stuck watchdog records `stuck_watchdog_fired` before it retries.
