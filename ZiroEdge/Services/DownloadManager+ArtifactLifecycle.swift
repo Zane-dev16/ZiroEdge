@@ -127,4 +127,45 @@ extension DownloadManager {
         stopStuckWatchdogIfIdle()
         logger.info("Cancelled download: \(key, privacy: .public) discardStaging=\(discardStaging)")
     }
+
+    // MARK: - CDN Resolution
+
+    /// Resolve the signed catalogue URL to the CDN URL it redirects to.
+    ///
+    /// The completion is the only exit: it fires exactly once, on the main queue,
+    /// with the redirect target or nil. The caller's closure is responsible for
+    /// clearing `resolutionTask` whether or not it goes on to transfer — a handle
+    /// that outlives its request makes a finished transfer look like it is still
+    /// resolving.
+    @discardableResult
+    func resolveCDNURL(
+        _ url: URL,
+        modelID: String,
+        artifact: String,
+        completion: @escaping (URL?) -> Void
+    ) -> URLSessionDataTask {
+        var request = URLRequest(url: url)
+        request.httpMethod = "HEAD"
+        request.timeoutInterval = 15
+        let resolutionTask = URLSession.shared.dataTask(with: request) { _, response, _ in
+            if let httpResponse = response as? HTTPURLResponse,
+               let location = httpResponse.value(forHTTPHeaderField: "Location"),
+               let cdnURL = URL(string: location) {
+                DownloadDiagnosticRecorder.shared.record(
+                    event: .cdnRedirect,
+                    correlationID: DownloadDiagnosticRecorder.transferCorrelationID(
+                        modelID: modelID,
+                        artifact: artifact
+                    ),
+                    modelID: modelID,
+                    artifact: artifact
+                )
+                DispatchQueue.main.async { completion(cdnURL) }
+            } else {
+                DispatchQueue.main.async { completion(nil) }
+            }
+        }
+        resolutionTask.resume()
+        return resolutionTask
+    }
 }

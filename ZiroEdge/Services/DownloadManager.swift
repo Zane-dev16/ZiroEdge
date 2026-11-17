@@ -898,13 +898,38 @@ extension DownloadManager {
             modelID: model.id,
             artifact: artifact.label
         ) { [weak self, weak task] resolvedURL in
-            guard let self, let task,
-                  self.activeTasks[key] === task,
-                  !task.isCancelled,
-                  !task.isPaused else { return }
-            task.resolutionTask = nil
-            self.transfer(task: task, key: key, downloadURL: resolvedURL ?? canonicalURL)
+            guard let self, let task else { return }
+            self.finishCDNResolution(
+                task: task,
+                key: key,
+                resolvedURL: resolvedURL,
+                canonicalURL: canonicalURL
+            )
         }
+    }
+
+    /// The single exit from CDN resolution, for every outcome.
+    ///
+    /// The handle is cleared first: a finished resolution that left
+    /// `resolutionTask` attached made the task look like it was still resolving,
+    /// which pinned the stuck watchdog for the rest of the process and left a
+    /// later pause taking the resolution branch.
+    func finishCDNResolution(
+        task: DownloadTask,
+        key: String,
+        resolvedURL: URL?,
+        canonicalURL: URL
+    ) {
+        task.resolutionTask = nil
+        // Superseded, cancelled, or paused while resolving: whichever path did
+        // that already recorded where this task stands. Nothing to transfer.
+        guard activeTasks[key] === task,
+              !task.isCancelled,
+              !task.isPaused else {
+            stopStuckWatchdogIfIdle()
+            return
+        }
+        transfer(task: task, key: key, downloadURL: resolvedURL ?? canonicalURL)
     }
 
     /// Starts the actual byte transfer after CDN resolution (if any).
@@ -958,37 +983,5 @@ extension DownloadManager {
     }
     func shouldUseChunkedTransfer(for task: DownloadTask) -> Bool {
         task.expectedBytes > Self.chunkedDownloadThreshold
-    }
-
-    @discardableResult
-    func resolveCDNURL(
-        _ url: URL,
-        modelID: String,
-        artifact: String,
-        completion: @escaping (URL?) -> Void
-    ) -> URLSessionDataTask {
-        var request = URLRequest(url: url)
-        request.httpMethod = "HEAD"
-        request.timeoutInterval = 15
-        let resolutionTask = URLSession.shared.dataTask(with: request) { _, response, _ in
-            if let httpResponse = response as? HTTPURLResponse,
-               let location = httpResponse.value(forHTTPHeaderField: "Location"),
-               let cdnURL = URL(string: location) {
-                DownloadDiagnosticRecorder.shared.record(
-                    event: .cdnRedirect,
-                    correlationID: DownloadDiagnosticRecorder.transferCorrelationID(
-                        modelID: modelID,
-                        artifact: artifact
-                    ),
-                    modelID: modelID,
-                    artifact: artifact
-                )
-                DispatchQueue.main.async { completion(cdnURL) }
-            } else {
-                DispatchQueue.main.async { completion(nil) }
-            }
-        }
-        resolutionTask.resume()
-        return resolutionTask
     }
 }
