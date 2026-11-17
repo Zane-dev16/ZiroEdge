@@ -46,11 +46,6 @@ final class LlamaChatTemplates {
     var cameFromArtefact: Bool {
         ziro_chat_templates_was_explicit(handle) != 0
     }
-
-    /// The template source, for diagnostics only.
-    var source: String {
-        String(cString: ziro_chat_templates_source(handle))
-    }
 }
 
 // MARK: - Session

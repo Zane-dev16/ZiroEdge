@@ -186,11 +186,6 @@ extension LlamaEngine {
         templateGate(thinking: config.thinking)
     }
 
-    /// Boolean shape of the gate, kept for callers that only need yes/no.
-    public func hasUsableChatTemplate() -> Bool {
-        chatTemplateGate() == .ready
-    }
-
     /// Whether this row's template reads `enable_thinking` at all.
     ///
     /// Distinct from the gate: the gate answers "can this row load with the
