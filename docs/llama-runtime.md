@@ -140,12 +140,29 @@ never renders a thinking block: while the model reasons the visible delta is
 legitimately empty, which the existing "still thinking" indicator already
 reads correctly.
 
-Evidence the split happened is one console line per turn —
-`Reply split reasoningCharacters=… termination=…` — which the device
-verification lane captures. Reply text is never logged.
-
 If the parser throws, the splitter degrades to raw text: a broken parser must
 not swallow an answer.
+
+### A lost reply is worse than an unsplit one
+
+A think-block model can spend its whole budget inside the block and stop before
+closing it. The parser then reports no content at all, and a splitter that emits
+only content answers the user with an empty bubble. That happened on device:
+both Qwen rows returned `chars=0, firstToken=-1.0` on the prompts where they
+reason longest (run `20261117-112220`).
+
+`ReplySplitter.finish()` therefore surfaces the reasoning as the reply when no
+content was ever emitted. The same prompts then returned 1,091 and 1,018
+characters (run `20261117-140738`). The rule is: the parser may reorganise a
+reply, never discard it.
+
+Evidence on device is the reply text itself, not a log line. The `reply=` field
+in the usage sweep is what proves the split: `Paris` with `chars=5` on a row that
+used to emit a closed think block first means the block was removed, and a
+1,000-character `Thinking Process:` reply means the fallback fired. The
+`Reply split …` and `Chat template …` lines are `os_log` notices for Console.app;
+`devicectl`'s console stream does not carry them, so do not expect them in a run
+directory.
 
 A template's own stop strings (`additional_stops`) are merged into the caller's
 stops when the prompt is rendered. Without them a turn can run past the point

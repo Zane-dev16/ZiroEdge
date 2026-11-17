@@ -249,3 +249,53 @@ official `/no_think` suffix reached the prompt but the runtime's heuristic
 fail): it downloads, loads, answers and deletes correctly, but emits a reasoning
 preamble on 2 of 3 prompts and this runtime has no thinking switch. A thinker
 with no switch is a blocked row, not a catalog row.
+
+## Jinja prompt path re-verification (2026-11-17)
+
+Every row's prompt now renders through the runtime's jinja engine instead of the
+heuristic formatter, and its reply is split into content and reasoning by the
+template's own parser. That changes the prompt text for five of the six rows, so
+the whole catalogue was re-swept on hardware. The change and its refusals are in
+`docs/llama-runtime.md`.
+
+| Row | Verdict | Note |
+| --- | --- | --- |
+| llama3.2-3b-q4 | pass | 3/3; jinja renders the template's knowledge-date line, which the heuristic formatter omitted |
+| gemma-4-e2b-q4 | pass | declares the built-in `gemma` template, so it stays on the heuristic path; 3/3 |
+| lfm2.5-1.2b-q4 | pass | 3/3 |
+| bonsai-4b-q1 | pass | 3/3, first token 0.2 s |
+| qwen3.5-2b-q4 | pass | 3/3 after the reasoning fallback fix below |
+| qwen3.5-0.8b-q4 | pass | 3/3 after the same fix |
+
+Runs: `20261117-095515` (llama3.2, gemma, lfm2.5), `20261117-112220` (bonsai;
+both Qwen rows exposed the defect), `20261117-140738` (both Qwen rows after the
+fix). Every row downloaded, loaded, answered, deleted cleanly, and left
+`stray=0`.
+
+### What the sweep caught
+
+Both Qwen rows answered `chars=0` on the prompts where the model reasons longest
+(`firstToken=-1.0`: no visible content at all). The split was working correctly
+and the reply was being thrown away: a think-block model can spend its whole
+token budget inside the block and stop before closing it, leaving `content`
+empty while all the text sat in `reasoning_content`.
+
+The fix is in `ReplySplitter.finish()`: when no content was ever emitted and the
+reply carries reasoning, the reasoning is the reply and is surfaced. The same
+prompts then returned 1,091 and 1,018 characters instead of nothing. A blank
+answer is worse than an unsplit one, so the parser is no longer allowed to
+produce a blank answer.
+
+### Open follow-up: think-off for the Qwen rows
+
+The Qwen rows reason by default. That costs 4-14 s to first token and, on the
+two prompts above, surfaces *scratchpad* text rather than an answer. The runtime
+now has the switch for it: a row can declare `thinking: .disabled`, and the load
+gate refuses the row with `chat-template-thinking-unsupported` if its template
+ignores `enable_thinking`.
+
+Neither Qwen row declares it yet, because that declaration is only safe once a
+device run proves those templates honor the switch — a wrong declaration makes
+the row unloadable, which is worse than a slow one. One sweep of
+`--model-usage-only qwen3.5-2b-q4,qwen3.5-0.8b-q4` with the declaration in
+place settles it.
