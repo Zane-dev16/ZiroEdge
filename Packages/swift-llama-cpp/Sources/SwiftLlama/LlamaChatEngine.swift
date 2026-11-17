@@ -178,6 +178,10 @@ final class ReplySplitter {
     /// Reasoning the parser attributed to the model. Read after `finish()`.
     private(set) var reasoningCharacters = 0
 
+    /// Whether the reply had to fall back to the reasoning text because the
+    /// parser produced no content at all. Evidence for the device lane.
+    private(set) var surfacedReasoningAsReply = false
+
     init(session: LlamaChatSession) {
         self.session = session
     }
@@ -196,8 +200,20 @@ final class ReplySplitter {
     func finish() -> String? {
         guard !parserFailed else { return nil }
         _ = session.finish()
-        reasoningCharacters = session.reasoning.count
-        return drain()
+        let reasoning = session.reasoning
+        reasoningCharacters = reasoning.count
+        let trailing = drain()
+        // A think-block model can spend its whole budget inside the block and
+        // stop before closing it. The parser then has no content at all, and
+        // emitting that would answer the user with an empty bubble — worse than
+        // the raw text this split replaced. The reasoning is the entire reply, so
+        // surface it instead of losing it.
+        if emittedBytes == 0, !reasoning.isEmpty, (trailing ?? "").isEmpty {
+            emittedBytes = reasoning.utf8.count
+            surfacedReasoningAsReply = true
+            return reasoning
+        }
+        return trailing
     }
 
     /// New bytes of `content` since the last call. The parser's output is
