@@ -59,7 +59,10 @@ extension InferenceServiceProtocol {
 /// without native construction.
 protocol LoadedEngine: Sendable {
     func verifyLoad() async throws
-    func hasUsableChatTemplate() async -> Bool
+    /// Whether this row can be prompted at all, and whether its declared thinking
+    /// policy is honorable. A boolean would collapse two refusals the UI words
+    /// differently.
+    func chatTemplateGate() async -> ChatTemplateGate
     func unload() async
     nonisolated func cancel()
 
@@ -256,7 +259,8 @@ actor InferenceService: InferenceServiceProtocol {
             useMmap: config.useMmap,
             f16KV: config.f16KV,
             gpuLayers: profile.gpuLayers,
-            chatTemplateName: model.chatTemplateName
+            chatTemplateName: model.chatTemplateName,
+            thinking: model.thinking
         )
         do {
             try loadSafetyStore.beginLoad(profileID: profile.id)
@@ -312,6 +316,16 @@ actor InferenceService: InferenceServiceProtocol {
         logger.info("Model loaded successfully: \(model.id, privacy: .public)")
     }
 
+    /// The gate's refusal as a diagnostic token. The lifecycle copy keys on
+    /// these strings, so they are part of the refusal contract.
+    static func diagnostic(for gate: ChatTemplateGate) -> String {
+        switch gate {
+        case .ready: return "chat-template-ready"
+        case .missing: return "chat-template-missing"
+        case .thinkingUnsupported: return "chat-template-thinking-unsupported"
+        }
+    }
+
     /// Post-construction gates plus the load-safety commit. The engine is only
     /// published as loaded when it proved it can decode and can be prompted.
     private func verifyAndCommit(
@@ -339,9 +353,10 @@ actor InferenceService: InferenceServiceProtocol {
 
         // Every turn goes through the embedded template; a model whose template
         // cannot be rendered has no supported prompt path and must not load.
-        guard await newEngine.hasUsableChatTemplate() else {
+        let gate = await newEngine.chatTemplateGate()
+        guard gate == .ready else {
             await newEngine.unload()
-            logger.error("No usable chat template for \(model.id, privacy: .public)")
+            logger.error("Chat template gate refused \(model.id, privacy: .public): \(String(describing: gate), privacy: .public)")
             do {
                 try loadSafetyStore.clearAfterNativeConstruction(profileID: profile.id)
             } catch {
@@ -352,7 +367,7 @@ actor InferenceService: InferenceServiceProtocol {
             }
             throw InferenceError.nativeFailure(
                 kind: .contextCreation,
-                diagnostic: "chat-template-missing"
+                diagnostic: Self.diagnostic(for: gate)
             )
         }
 
@@ -826,6 +841,11 @@ extension InferenceService {
         case .contextWindowExceeded:
             kind = .inference
         case .invalidConfiguration: kind = .contextCreation
+        // Prompt-path shape failures: the model is readable, its template is not
+        // usable for this row. Same bucket as a context-creation refusal because
+        // the load is abandoned before any generation is attempted.
+        case .chatTemplateUnrenderable, .chatTemplateCannotControlThinking:
+            kind = .contextCreation
         }
         return .nativeFailure(kind: kind, diagnostic: sanitize(llamaError.localizedDescription))
     }

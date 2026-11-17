@@ -233,6 +233,14 @@ enum ModelLoadCopy {
             + "Choose a different model."
     }
 
+    /// The model reasons and its template has no switch to stop it. Loading it
+    /// would either burn the answer inside an unclosed preamble or make every
+    /// request wait for reasoning the user did not ask for, so it is refused.
+    static func reasoningCannotBeDisabled(modelName: String) -> String {
+        "\(modelName) can't be told to skip its thinking step, so ZiroEdge can't run it. "
+            + "Choose a different model."
+    }
+
     /// A conversation referenced a model that no longer exists.
     static func modelNoLongerAvailable() -> String {
         "The model this conversation used isn't on this iPhone anymore. Choose a "

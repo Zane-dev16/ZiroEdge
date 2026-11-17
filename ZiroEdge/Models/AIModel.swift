@@ -5,6 +5,9 @@
 // Each model carries paired artifact metadata (base .gguf + optional mmproj.gguf).
 
 import Foundation
+// The row's thinking policy is the runtime's own type: it must map to the
+// template input with no translation table to drift.
+import SwiftLlama
 
 #if DEBUG
 /// Deterministic hermetic runtime for UI tests and review launches. Seeded by
@@ -98,6 +101,11 @@ struct AIModel: Identifiable, Hashable, Sendable {
     /// `tokenizer.chat_template`. The runtime still renders the turns; this only
     /// declares which family template to use. Nil means "use the embedded one".
     var chatTemplateName: String?
+    /// What this row wants done with the model's own reasoning. A row that reasons
+    /// but cannot be switched would answer through an unclosed preamble, so a
+    /// non-default policy is refused at load when the template ignores it.
+    /// Declaration permits the switch; it does not name a row.
+    var thinking: ChatThinkingPolicy = .templateDefault
     let license: LicenseInfo
     /// Curated entries remain static; imported entries carry immutable Hugging Face provenance.
     var source: ModelSource = .curated
@@ -141,6 +149,7 @@ struct AIModel: Identifiable, Hashable, Sendable {
             quantization: quantization,
             config: config,
             chatTemplateName: chatTemplateName,
+            thinking: thinking,
             license: license
         )
     }

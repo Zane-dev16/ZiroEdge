@@ -14,15 +14,15 @@ private final class StubEngine: LoadedEngine, @unchecked Sendable {
 
     private let lock = NSLock()
     private let warmupError: Error?
-    private let templateUsable: Bool
+    private let gate: ChatTemplateGate
 
     private var verifyCount = 0
     private var templateCheckCount = 0
     private var unloadCount = 0
 
-    init(warmupError: Error? = nil, templateUsable: Bool = true) {
+    init(warmupError: Error? = nil, gate: ChatTemplateGate = .ready) {
         self.warmupError = warmupError
-        self.templateUsable = templateUsable
+        self.gate = gate
     }
 
     var verifyCalls: Int { locked { verifyCount } }
@@ -40,9 +40,9 @@ private final class StubEngine: LoadedEngine, @unchecked Sendable {
         if let warmupError { throw warmupError }
     }
 
-    func hasUsableChatTemplate() async -> Bool {
+    func chatTemplateGate() async -> ChatTemplateGate {
         lock.withLock { templateCheckCount += 1 }
-        return templateUsable
+        return gate
     }
 
     func unload() async {
@@ -107,7 +107,7 @@ final class LoadGateTests: XCTestCase {
 
     private func makeHarness(
         warmupError: Error? = nil,
-        templateUsable: Bool = true
+        gate: ChatTemplateGate = .ready
     ) throws -> Harness {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("LoadGateTests-\(UUID().uuidString)")
@@ -116,7 +116,7 @@ final class LoadGateTests: XCTestCase {
         let model = try XCTUnwrap(ModelRegistry.model(for: "bonsai-4b-q1"))
         let modelURL = directory.appendingPathComponent("model.gguf")
         try Data(repeating: 0, count: 16).write(to: modelURL)
-        let engine = StubEngine(warmupError: warmupError, templateUsable: templateUsable)
+        let engine = StubEngine(warmupError: warmupError, gate: gate)
         let service = InferenceService(loadSafetyStore: store) { _ in engine }
         return Harness(
             service: service,
@@ -175,7 +175,7 @@ final class LoadGateTests: XCTestCase {
     }
 
     func testModelWithoutAUsableTemplateIsRefusedAtLoad() async throws {
-        let harness = try makeHarness(templateUsable: false)
+        let harness = try makeHarness(gate: .missing)
         defer { try? FileManager.default.removeItem(at: harness.directory) }
 
         do {
@@ -191,6 +191,32 @@ final class LoadGateTests: XCTestCase {
             }
             XCTAssertEqual(kind, .contextCreation)
             XCTAssertEqual(diagnostic, "chat-template-missing")
+        }
+
+        let loaded = await harness.service.isModelLoaded
+        XCTAssertFalse(loaded)
+        XCTAssertEqual(harness.engine.unloadCalls, 1)
+    }
+
+    /// A row that reasons with no way to switch it off is refused at load, with
+    /// copy that names the reason instead of the generic memory sentence.
+    func testModelThatCannotStopThinkingIsRefusedAtLoad() async throws {
+        let harness = try makeHarness(gate: .thinkingUnsupported)
+        defer { try? FileManager.default.removeItem(at: harness.directory) }
+
+        do {
+            try await harness.service.loadModel(
+                harness.model,
+                baseURL: harness.modelURL,
+                mmprojURL: nil
+            )
+            XCTFail("A row whose thinking policy cannot be honored must not load")
+        } catch let error as InferenceError {
+            guard case .nativeFailure(let kind, let diagnostic) = error else {
+                return XCTFail("Expected nativeFailure, got \(error)")
+            }
+            XCTAssertEqual(kind, .contextCreation)
+            XCTAssertEqual(diagnostic, "chat-template-thinking-unsupported")
         }
 
         let loaded = await harness.service.isModelLoaded

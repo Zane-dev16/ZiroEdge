@@ -2,6 +2,7 @@
 // SwiftLlama — public configuration and error types.
 
 import Foundation
+import llama
 
 // MARK: - Configuration (Public)
 
@@ -18,6 +19,10 @@ public struct LlamaConfigSwift: Sendable {
     /// Declared built-in template name for a GGUF with no embedded template.
     /// Nil means the model's own template wins.
     public let chatTemplateName: String?
+    /// What the row wants done with the model's own reasoning. Only meaningful
+    /// on the embedded-template path, which is the only path that can pass
+    /// template kwargs.
+    public let thinking: ChatThinkingPolicy
 
     /// True when any layer is offloaded to Metal.
     public var usesGPU: Bool { gpuLayers > 0 }
@@ -34,7 +39,8 @@ public struct LlamaConfigSwift: Sendable {
             useMmap: useMmap,
             f16KV: f16KV,
             gpuLayers: 0,
-            chatTemplateName: chatTemplateName
+            chatTemplateName: chatTemplateName,
+            thinking: thinking
         )
     }
 
@@ -48,7 +54,8 @@ public struct LlamaConfigSwift: Sendable {
         useMmap: Bool = true,
         f16KV: Bool = true,
         gpuLayers: Int = 0,
-        chatTemplateName: String? = nil
+        chatTemplateName: String? = nil,
+        thinking: ChatThinkingPolicy = .templateDefault
     ) {
         self.modelPath = modelPath
         self.mmprojPath = mmprojPath
@@ -63,7 +70,51 @@ public struct LlamaConfigSwift: Sendable {
         self.f16KV = f16KV
         self.gpuLayers = gpuLayers
         self.chatTemplateName = chatTemplateName
+        self.thinking = thinking
     }
+}
+
+// MARK: - Thinking Policy
+
+/// How a row wants the model's own reasoning handled.
+///
+/// The heuristic formatter has no template kwargs, so this only has meaning on
+/// the embedded-template path. A row that asks for one of the explicit policies
+/// on a template that ignores the switch must not load: a thinker with no
+/// switch is a blocked row, not a catalog row.
+public enum ChatThinkingPolicy: String, Sendable, Hashable, Codable, CaseIterable {
+    /// Leave the template's own default in place. Rows that predate the switch
+    /// use this and keep their previously verified output.
+    case templateDefault
+    /// Ask the template to suppress the reasoning block (`enable_thinking` false).
+    case disabled
+    /// Ask the template to reason before answering (`enable_thinking` true).
+    case enabled
+
+    /// Tri-state handed to the native session; `-1` means "template default".
+    var nativeValue: Int32 {
+        switch self {
+        case .templateDefault: return ZIRO_CHAT_THINKING_DEFAULT
+        case .disabled: return 0
+        case .enabled: return 1
+        }
+    }
+
+    /// Whether this policy needs a template that reads `enable_thinking`.
+    public var requiresTemplateSupport: Bool {
+        self != .templateDefault
+    }
+}
+
+/// Load-time verdict on whether this row can be prompted at all.
+public enum ChatTemplateGate: Sendable, Equatable {
+    /// The row's declared policy is honorable: prompt it.
+    case ready
+    /// No template the runtime can render. There is no fallback syntax by design.
+    case missing
+    /// The row asks for a thinking policy on a template that ignores the switch.
+    /// Loading it would produce a row that reasons forever with no way to stop it.
+    case thinkingUnsupported
 }
 
 public struct SamplingConfigSwift: Sendable {
@@ -111,6 +162,10 @@ public enum LlamaError: Error, LocalizedError {
     case visionNotSupported
     case visionImageLoadFailed
     case contextWindowExceeded
+    /// The embedded template could not be rendered for this conversation.
+    case chatTemplateUnrenderable
+    /// The row asked for a thinking policy this template cannot honor.
+    case chatTemplateCannotControlThinking
 
     public var errorDescription: String? {
         switch self {
@@ -125,6 +180,8 @@ public enum LlamaError: Error, LocalizedError {
         case .visionNotSupported: return "Vision inference is not supported. No multimodal projector loaded."
         case .visionImageLoadFailed: return "Failed to load image for vision inference."
         case .contextWindowExceeded: return "The conversation is too long for the context window."
+        case .chatTemplateUnrenderable: return "This model's chat template could not be rendered."
+        case .chatTemplateCannotControlThinking: return "This model cannot turn its reasoning off."
         }
     }
 }

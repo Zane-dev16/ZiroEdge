@@ -16,13 +16,18 @@ public actor LlamaEngine {
 
     // MARK: - Properties
 
-    private let logger = Logger(subsystem: "com.zanish-labs.ziroedge", category: "llama-engine")
+    let logger = Logger(subsystem: "com.zanish-labs.ziroedge", category: "llama-engine")
 
-    private var model: OpaquePointer?
+    var model: OpaquePointer?
     private var context: OpaquePointer?
     private var vocabulary: OpaquePointer?
     private var mtmdCtx: OpaquePointer?
-    private let config: LlamaConfigSwift
+    /// Jinja template set for an artefact-declared template. Nil when the row
+    /// declares a built-in family name instead (the heuristic formatter owns
+    /// that case, because those families exist only as C++ builders).
+    /// Engine-owned; the prompt-path decisions live in LlamaEngineChatTemplate.
+    var chatTemplates: LlamaChatTemplates?
+    let config: LlamaConfigSwift
     /// Lock-protected cancel flag: the sync decode loop monopolizes the actor,
     /// so cancellation must land nonisolated at the next token boundary.
     private let cancelFlag = OSAllocatedUnfairLock<Bool>(initialState: false)
@@ -57,6 +62,11 @@ public actor LlamaEngine {
         self.mtmdCtx = handles.mtmdCtx
         self.eosTokenID = handles.eosTokenID
         self.isBackendInitialized = true
+        // Parse the artefact's own template once per load: it owns prompt
+        // rendering and the reply parser for every turn.
+        if effective.chatTemplateName == nil {
+            self.chatTemplates = LlamaChatTemplates(model: handles.model)
+        }
         if let firstError {
             logger.error("Metal GPU init failed, running CPU-only: \(firstError.localizedDescription, privacy: .public)")
         }
@@ -192,21 +202,8 @@ public actor LlamaEngine {
         llama_memory_clear(memory, true)
     }
 
-    /// Whether this model can be prompted at all without hand-built syntax.
-    /// An empty render means the GGUF carries no template the runtime can apply;
-    /// the app has no fallback formatter by design.
-    public func hasUsableChatTemplate() -> Bool {
-        guard let model else { return false }
-        let rendered = applyChatTemplate(
-            messages: [(role: "user", content: Self.preflightPrompt)],
-            model: model,
-            templateName: config.chatTemplateName
-        )
-        return !rendered.isEmpty
-    }
-
     /// Short, ASCII-only, no special tokens: tokenizes under every tokenizer.
-    private static let preflightPrompt = "ok"
+    static let preflightPrompt = "ok"
 
     // MARK: - Unload
 
@@ -215,6 +212,8 @@ public actor LlamaEngine {
     }
 
     private func unloadSync() {
+        // The template set is only valid for the model that produced it.
+        chatTemplates = nil
         Self.releaseNativeResources(
             mtmdCtx: &mtmdCtx,
             context: &context,
@@ -254,42 +253,32 @@ public actor LlamaEngine {
 }
 
 extension LlamaEngine {
-    // MARK: - Streaming Chat Completion (with template)
-
-    /// Stream a chat completion, applying the model's built-in chat template.
-    /// Takes raw messages (role + content) instead of a pre-formatted prompt.
-    public func streamChatCompletion(
-        messages: [(role: String, content: String)],
-        addBos: Bool?,
-        stopStrings: [String],
-        sampling: SamplingConfigSwift
-    ) throws -> AsyncThrowingStream<String, Error> {
-        // Apply the model's chat template to format the prompt.
-        let prompt = applyChatTemplate(
-            messages: messages,
-            model: model,
-            addAssistant: true,
-            templateName: config.chatTemplateName
-        )
-        guard !prompt.isEmpty else {
-            throw LlamaError.tokenizationFailed
-        }
-        logger.info("Chat template applied, prompt length: \(prompt.count, privacy: .public)")
-        return try streamCompletion(
-            prompt: prompt,
-            addBos: addBos,
-            parseSpecial: true,
-            stopStrings: stopStrings,
-            sampling: sampling
-        )
-    }
-
     // MARK: - Streaming Completion
 
     public func streamCompletion(
         prompt: String,
         addBos: Bool?,
         parseSpecial: Bool = false,
+        stopStrings: [String],
+        sampling: SamplingConfigSwift
+    ) throws -> AsyncThrowingStream<String, Error> {
+        try streamCompletion(
+            prompt: prompt,
+            splitter: nil,
+            addBos: addBos,
+            parseSpecial: parseSpecial,
+            stopStrings: stopStrings,
+            sampling: sampling
+        )
+    }
+
+    /// Shared body: `splitter` decides whether raw text becomes visible content
+    /// through the runtime's reply parser or is emitted verbatim.
+    func streamCompletion(
+        prompt: String,
+        splitter: ReplySplitter?,
+        addBos: Bool?,
+        parseSpecial: Bool,
         stopStrings: [String],
         sampling: SamplingConfigSwift
     ) throws -> AsyncThrowingStream<String, Error> {
@@ -363,10 +352,12 @@ extension LlamaEngine {
                     defer { llama_sampler_free(sampler) }
 
                     // Generate tokens using shared generation loop.
-                    _ = try await generateTokens(
+                    let termination = try await generateTokens(
                         startPos: Int32(promptTokens.count), sampler: sampler, vocab: vocab,
-                        stopStrings: stopStrings, sampling: sampling, continuation: continuation
+                        stopStrings: stopStrings, sampling: sampling,
+                        splitter: splitter, continuation: continuation
                     )
+                    Self.logReasoning(splitter, termination: String(describing: termination), logger: logger)
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)
@@ -531,7 +522,8 @@ extension LlamaEngine {
                     // Generate tokens using shared generation loop.
                     _ = try await generateTokens(
                         startPos: newNPast, sampler: sampler, vocab: vocab,
-                        stopStrings: stopStrings, sampling: sampling, continuation: continuation
+                        stopStrings: stopStrings, sampling: sampling,
+                        splitter: nil, continuation: continuation
                     )
                     continuation.finish()
                 } catch {
@@ -876,12 +868,17 @@ private extension LlamaEngine {
     }
 
     /// Shared autoregressive generation loop used by both text and vision streaming.
+    ///
+    /// `splitter` (present only on the jinja chat path) turns raw decoded text into
+    /// visible content using the template's reply parser: reasoning is separated by
+    /// the runtime, never by slicing markup out of the reply here.
     private func generateTokens(
         startPos: llama_pos,
         sampler: UnsafeMutablePointer<llama_sampler>,
         vocab: OpaquePointer,
         stopStrings: [String],
         sampling: SamplingConfigSwift,
+        splitter: ReplySplitter?,
         continuation: AsyncThrowingStream<String, Error>.Continuation
     ) async throws -> GenerationTermination {
         guard let ctx = context else { throw LlamaError.modelNotLoaded }
@@ -927,7 +924,7 @@ private extension LlamaEngine {
             for stop in stopStrings where !stop.isEmpty {
                 if pendingBuffer.hasSuffix(stop) {
                     let clean = String(pendingBuffer.dropLast(stop.count))
-                    if !clean.isEmpty { continuation.yield(clean) }
+                    emit(clean, splitter: splitter, continuation: continuation)
                     pendingBuffer = ""
                     shouldStop = true
                     break
@@ -941,7 +938,7 @@ private extension LlamaEngine {
             // Withhold buffers that could still grow into a stop string
             // (suffix-prefix overlap, not just full-buffer prefix).
             if !Self.isPotentialStopPrefix(pendingBuffer, stopStrings: stopStrings) {
-                continuation.yield(pendingBuffer)
+                emit(pendingBuffer, splitter: splitter, continuation: continuation)
                 pendingBuffer = ""
             }
 
@@ -966,11 +963,34 @@ private extension LlamaEngine {
         // P3: never flush a partial-stop prefix on maxTokens/n_ctx/cancel —
         // it is an artifact of withholding, not user-visible text.
         if Self.shouldFlushTail(pendingBuffer, stopStrings: stopStrings) {
-            continuation.yield(pendingBuffer)
+            emit(pendingBuffer, splitter: splitter, continuation: continuation)
+        }
+        // Close the reply so a trailing open block resolves: the parser withholds
+        // partial content until it knows the block ended.
+        if let trailing = splitter?.finish(), !trailing.isEmpty {
+            continuation.yield(trailing)
         }
         if termination == .contextFull {
             logger.fault("Generation hit context window nPos=\(nPos, privacy: .public) ctx=\(self.config.contextLength, privacy: .public)")
         }
         return termination
     }
+
+    /// Route one decoded piece to the consumer. Without a splitter the text is
+    /// the answer; with one, only the parser's content is.
+    private func emit(
+        _ text: String,
+        splitter: ReplySplitter?,
+        continuation: AsyncThrowingStream<String, Error>.Continuation
+    ) {
+        guard !text.isEmpty else { return }
+        guard let splitter else {
+            continuation.yield(text)
+            return
+        }
+        if let visible = splitter.append(text), !visible.isEmpty {
+            continuation.yield(visible)
+        }
+    }
+
 }

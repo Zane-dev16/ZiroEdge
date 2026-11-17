@@ -926,8 +926,11 @@ extension ModelLifecycleManager {
         case .mmprojFileNotFound:
             return ModelLoadCopy.missingImageFile(modelName: modelName)
         case .nativeFailure(let kind, _):
-            // The load-template gate is a shape refusal, not a memory problem:
-            // name it before the generic context-creation sentence.
+            // The load-template gates are shape refusals, not memory problems:
+            // name them before the generic context-creation sentence.
+            if error.sanitizedDiagnostic.contains("chat-template-thinking-unsupported") {
+                return ModelLoadCopy.reasoningCannotBeDisabled(modelName: modelName)
+            }
             if error.sanitizedDiagnostic.contains("chat-template-missing") {
                 return ModelLoadCopy.unsupportedChatFormat(modelName: modelName)
             }
