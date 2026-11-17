@@ -833,12 +833,6 @@ struct ImportRAMAssessment: Equatable, Sendable {
         return SaturatedArithmetic.add(SaturatedArithmetic.add(base, projector), context)
     }
 
-    // TODO: remove once all call sites migrate to base/mmproj split — the
-    // combined path folds both GGUFs at the same 1/3 mmap weight.
-    @available(*, deprecated, message: "Use estimatedBytes(baseBytes:mmprojBytes:contextLength:) so vision projectors are weighted separately from base weights.")
-    static func estimatedBytes(artifactBytes: Int64, contextLength: Int) -> UInt64 {
-        estimatedBytes(baseBytes: artifactBytes, mmprojBytes: 0, contextLength: contextLength)
-    }
 
     /// Physical-RAM floor for an artifact pair sized by `residentBytes`.
     /// Absolute 4GB minimum plus the estimate and reserve, so a huge import
