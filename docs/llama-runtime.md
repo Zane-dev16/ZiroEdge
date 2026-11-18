@@ -116,9 +116,9 @@ A row declares what it wants done with the model's own reasoning
 
 | Policy | Template input | Meaning |
 | --- | --- | --- |
-| `.templateDefault` | `-1` (absent) | Keep the template's own default. Every shipped row. |
-| `.disabled` | `enable_thinking = false` | Suppress the reasoning block. |
-| `.enabled` | `enable_thinking = true` | Reason before answering. |
+| `.templateDefault` | `-1` (absent) | Keep the template's own default. Every shipped row that does not reason. |
+| `.disabled` | `enable_thinking = false` | Suppress the reasoning block. The two Qwen rows. |
+| `.enabled` | `enable_thinking = true` | Reason before answering. No shipped row yet. |
 
 `ChatThinkingPolicy.requiresTemplateSupport` is what the load gate checks: an
 explicit policy needs a template that reads the variable

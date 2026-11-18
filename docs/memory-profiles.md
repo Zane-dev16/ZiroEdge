@@ -264,8 +264,8 @@ the whole catalogue was re-swept on hardware. The change and its refusals are in
 | gemma-4-e2b-q4 | pass | declares the built-in `gemma` template, so it stays on the heuristic path; 3/3 |
 | lfm2.5-1.2b-q4 | pass | 3/3 |
 | bonsai-4b-q1 | pass | 3/3, first token 0.2 s |
-| qwen3.5-2b-q4 | pass | 3/3 after the reasoning fallback fix below |
-| qwen3.5-0.8b-q4 | pass | 3/3 after the same fix |
+| qwen3.5-2b-q4 | pass | 3/3 after the reasoning fallback fix; think-off since 2026-11-18 (see below) |
+| qwen3.5-0.8b-q4 | pass | 3/3 after the same fix; think-off since 2026-11-18 (see below) |
 
 Runs: `20261117-095515` (llama3.2, gemma, lfm2.5), `20261117-112220` (bonsai;
 both Qwen rows exposed the defect), `20261117-140738` (both Qwen rows after the
@@ -286,16 +286,26 @@ prompts then returned 1,091 and 1,018 characters instead of nothing. A blank
 answer is worse than an unsplit one, so the parser is no longer allowed to
 produce a blank answer.
 
-### Open follow-up: think-off for the Qwen rows
+### Think-off for the Qwen rows (settled 2026-11-18)
 
-The Qwen rows reason by default. That costs 4-14 s to first token and, on the
-two prompts above, surfaces *scratchpad* text rather than an answer. The runtime
-now has the switch for it: a row can declare `thinking: .disabled`, and the load
-gate refuses the row with `chat-template-thinking-unsupported` if its template
-ignores `enable_thinking`.
+The Qwen rows reason by default. That cost 4-14 s to first token and, on the
+prompts where the block never closes, surfaced *scratchpad* text rather than an
+answer. The runtime's switch was the fix: a row declares
+`thinking: .disabled`, and the load gate refuses the row with
+`chat-template-thinking-unsupported` if its template ignores `enable_thinking`.
 
-Neither Qwen row declares it yet, because that declaration is only safe once a
-device run proves those templates honor the switch — a wrong declaration makes
-the row unloadable, which is worse than a slow one. One sweep of
-`--model-usage-only qwen3.5-2b-q4,qwen3.5-0.8b-q4` with the declaration in
-place settles it.
+Both Qwen rows now declare it, and the device run that had to precede the
+declaration exists (run `20261118-090638`, usage id `1794992812`):
+
+- The gate accepted both rows — their templates read `enable_thinking`, so the
+  policy rides the prompt, not the reply.
+- Every prompt answered in 0.1 s to first token, against 4-14 s with reasoning
+  on. Usage seconds per row: 1.4 and 0.8.
+- The replies are the answers, not scratchpad: `Paris`, `42`, and 160/153-char
+  blue-sky explanations with no reasoning prefix, where the same prompts under
+  the template default returned 1,091/1,018 characters of `Thinking Process:`
+  text.
+- Both rows deleted cleanly (`stray=0`).
+
+The rule the declaration enforces on itself: a thinking policy a template has
+not been proven to honor is refused at load, never shipped silent.

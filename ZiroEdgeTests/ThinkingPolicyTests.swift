@@ -59,6 +59,31 @@ final class ThinkingPolicyTests: XCTestCase {
         XCTAssertEqual(variant.thinking, model.thinking)
     }
 
+    /// Both Qwen rows reason by default, which costs 4-14 s to first token and,
+    /// on the prompts where the block never closes, surfaces scratchpad as the
+    /// answer. They declare `thinking: .disabled`, which the load gate accepts
+    /// only because their templates read `enable_thinking` — a template that
+    /// ignored the switch would refuse the row instead of silently reasoning,
+    /// which is the failure the device sweep exists to catch.
+    func testQwenRowsDeclareThinkingOff() {
+        XCTAssertEqual(ModelRegistry.model(for: "qwen3.5-2b-q4")?.thinking, .disabled)
+        XCTAssertEqual(ModelRegistry.model(for: "qwen3.5-0.8b-q4")?.thinking, .disabled)
+    }
+
+    /// Every other row keeps the template default: its device verification ran
+    /// the default prompt path, and a row that does not reason has nothing to
+    /// gain from forcing the switch one way or the other.
+    func testRowsThatDoNotReasonKeepTheTemplateDefault() {
+        let reasoningRows = Set(["qwen3.5-2b-q4", "qwen3.5-0.8b-q4"])
+        for model in ModelRegistry.allModels where !reasoningRows.contains(model.id) {
+            XCTAssertEqual(
+                model.thinking,
+                .templateDefault,
+                "\(model.id) has no reason to force thinking"
+            )
+        }
+    }
+
     // MARK: - Stops
 
     func testTemplateStopsAreAddedWithoutDuplicatingCallerStops() {

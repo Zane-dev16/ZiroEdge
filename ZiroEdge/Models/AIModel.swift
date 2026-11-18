@@ -408,6 +408,7 @@ enum ModelRegistry {
             mmprojSHA256: nil,
             quantization: "Q4_K_M",
             config: .curatedText4K,
+            thinking: .disabled,
             license: LicenseInfo(
                 name: "Apache 2.0",
                 url: URL(string: "https://www.apache.org/licenses/LICENSE-2.0")!,
@@ -427,6 +428,7 @@ enum ModelRegistry {
             mmprojSHA256: nil,
             quantization: "Q4_K_M",
             config: .curatedText4K,
+            thinking: .disabled,
             license: LicenseInfo(
                 name: "Apache 2.0",
                 url: URL(string: "https://www.apache.org/licenses/LICENSE-2.0")!,
