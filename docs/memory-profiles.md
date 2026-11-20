@@ -272,6 +272,16 @@ both Qwen rows exposed the defect), `20261117-140738` (both Qwen rows after the
 fix). Every row downloaded, loaded, answered, deleted cleanly, and left
 `stray=0`.
 
+The final tree got its own confirmation sweep after the think-off commit
+(`77177d0`): run `20261120-121953`, usage id `1795177210`, covering the four
+rows that had not run since the last code change — llama3.2-3b, gemma-4-e2b,
+lfm2.5-1.2b, bonsai-4b. All four passed 3/3 with direct answers (`Paris`, `42`,
+full Rayleigh explanations), first token 0.1-0.7 s, and clean deletes. Bonsai's
+download stage read `already-ready` (the row's file was still on device from an
+earlier session); the sweep used it, deleted it, and the audit still returned
+clean. Together with the same-day Qwen sweep (`20261118-090638`), every text row
+of the catalogue has now run on the exact shipped tree.
+
 ### What the sweep caught
 
 Both Qwen rows answered `chars=0` on the prompts where the model reasons longest
